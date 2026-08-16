@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 import types
 from dataclasses import replace
@@ -266,3 +267,26 @@ def test_exchange_rejection_is_known_and_never_retried(tmp_path: Path, monkeypat
     with pytest.raises(PlanError, match="rejected"):
         cli._execute(args(path, digest))
     assert len(FakeExchange.sends) == 1
+    record = json.loads((tmp_path / "state" / f"{digest}.json").read_text())
+    assert record["stage"] == "rejected"
+
+
+def test_exchange_exception_is_unknown_and_blocks_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeExchange.sends.clear()
+    path = tmp_path / "p.json"
+    digest = make_plan(path)
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
+    install_sdk(monkeypatch)
+    monkeypatch.setattr(cli, "_info", lambda base, kind, **kw: live_info(kind, **kw))
+
+    def timeout(*args, **kwargs):
+        raise TimeoutError("transport stopped")
+
+    monkeypatch.setattr(FakeExchange, "order", timeout)
+    with pytest.raises(RuntimeError, match="Do not retry"):
+        cli._execute(args(path, digest))
+    record = json.loads((tmp_path / "state" / f"{digest}.json").read_text())
+    assert record["stage"] == "unknown"
+    with pytest.raises(RuntimeError, match="already has"):
+        cli._execute(args(path, digest))

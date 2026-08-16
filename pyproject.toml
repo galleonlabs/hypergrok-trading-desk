@@ -28,7 +28,7 @@ Repository = "https://github.com/galleonlabs/hypergrok-trading-desk"
 Issues = "https://github.com/galleonlabs/hypergrok-trading-desk/issues"
 
 [project.optional-dependencies]
-dev = ["build>=1,<2", "pytest>=8,<9", "pytest-cov>=6,<8", "ruff>=0.12,<1", "mypy>=1.17,<2"]
+dev = ["build>=1,<2", "pytest>=9.0.3,<10", "pytest-cov>=6,<8", "ruff>=0.12,<1", "mypy>=1.17,<2"]
 
 [project.scripts]
 hypergrok = "hypergrok.cli:main"

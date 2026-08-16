@@ -1,7 +1,7 @@
 ---
 name: defillama-research
 description: Research DeFi protocols and flows through DefiLlama.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -32,4 +32,4 @@ TVL is not revenue, deposits are not net inflows, and free endpoints do not expo
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner.

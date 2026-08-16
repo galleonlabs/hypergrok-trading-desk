@@ -1,7 +1,7 @@
 ---
 name: hyperliquid-intelligence
 description: Read Hyperliquid markets and accounts with live data.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -21,10 +21,11 @@ Use for market structure, funding, positions, orders and margin.
 
 ## Procedure
 
-1. Run `hypergrok market <COIN>` and record the source and observation time.
-2. Run `hypergrok account <ADDRESS>` when account context is authorised.
-3. Separate returned facts from interpretation.
-4. Hand exact evidence to the desk lead.
+1. Select `HYPERGROK_NETWORK=testnet` or `mainnet`; mainnet also requires `HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND`.
+2. Run `hypergrok market <COIN>` and record network, source and observation time.
+3. Run `hypergrok account <ADDRESS>` when account context is authorised.
+4. Separate returned facts from interpretation.
+5. Hand exact evidence to the desk lead.
 
 ## Pitfalls
 
@@ -32,4 +33,4 @@ An L2 or account response is a snapshot. Never infer strategy intent from positi
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner.

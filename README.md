@@ -1,114 +1,120 @@
 # HyperGrok
 
-**Create your Hyperliquid trading desk on Grok Bot.**
+[![CI](https://github.com/galleonlabs/hypergrok-trading-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/galleonlabs/hypergrok-trading-desk/actions/workflows/ci.yml)
+[![MIT licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-HyperGrok is an original Agent Plugin from Galleon Labs. It gives Grok Bot a
-small trading team rather than one prompt wearing seven hats: market and
-onchain research, thesis construction, deterministic risk, disclosed execution,
-portfolio control and post-trade review.
+**Create a risk-bounded Hyperliquid trading desk with Grok Build, Cursor or a manually configured Grok Bot.**
 
-Private v0.1 is the foundation. It is testnet-first, source-led and deliberately
-rather difficult to make trade by accident.
+HyperGrok packages seven specialist agents, eleven original skills and a guarded Python execution gateway. It covers Hyperliquid market and account intelligence, DefiLlama and CoinGecko research, thesis construction, deterministic risk, portfolio control, execution and post-trade review.
 
-## What ships
+Both Hyperliquid **testnet and mainnet** are supported. Testnet is the safe default; mainnet requires an explicit acknowledgement and passes through the same plan, risk, builder, API-wallet and duplicate-order gates.
 
-+ 7 specialist agents with explicit handoffs
-+ 10 workflow skills for Hyperliquid, DefiLlama and CoinGecko
-+ A Python CLI for live read-only research, sizing and hashed order plans
-+ Two-phase execution with exact confirmation, expiry, caps, cloid duplicate
-  checks and live builder approval gates
-+ No deposits, withdrawals, transfers, bridges or unattended scheduler
+## The desk
 
-## Quick start
+| Role | Responsibility |
+| --- | --- |
+| Desk lead | Routes evidence and approvals between specialists |
+| Market analyst | Hyperliquid structure, liquidity, open interest and funding |
+| Onchain analyst | Protocol, token, governance and dependency research |
+| Portfolio manager | Whole-book exposure, margin and protection state |
+| Risk officer | Independent sizing and deterministic rejection gates |
+| Execution trader | The sole guarded order path |
+| Trade reviewer | Plan-versus-effect and execution-quality review |
+
+The Cursor plugin manifest discovers `agents/`, `skills/` and the persistent team rule. Start with [BOOTSTRAP.md](BOOTSTRAP.md). Grok Bot documents collaboration between named Bots but not a public API for silently creating them, so `crew-bootstrap` verifies the installed product and falls back to plugin agents or role-separated passes rather than inventing a one-click claim.
+
+## Install
 
 ```bash
+git clone https://github.com/galleonlabs/hypergrok-trading-desk.git
+cd hypergrok-trading-desk
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e '.[dev]'
-cp .env.example .env
-hypergrok health
+python -m pip install -e .
+hypergrok doctor
+```
+
+For development:
+
+```bash
+python -m pip install -e '.[dev]'
+ruff check .
+mypy src
+pytest -q --cov=hypergrok --cov-fail-under=75
+python -m build
+```
+
+## Install on the right surface
+
+**Grok Build and Cursor:** import this repository as an Agent Plugin. Both surfaces discover `rules/`, `agents/` and `skills/`; run `crew-bootstrap` after enabling it.
+
+**Grok Bot:** its public Plugins screen installs service connectors, not repository Agent Plugins. Grok Bot does not currently document arbitrary GitHub-repository installation, a shell/tool bridge for this CLI or programmatic creation of sibling Bots. [docs/GROK_BOT.md](docs/GROK_BOT.md) describes a manual, instruction-only team for research and review. It cannot use the guarded execution gateway unless a future documented integration exposes the installed CLI. [BOOTSTRAP.md](BOOTSTRAP.md) contains the exact owning-Bot prompt. Do not claim the repo URL installed anything unless the runtime confirms each role and skill.
+
+## Read both networks
+
+```bash
+# Testnet, the default
+hypergrok doctor
 hypergrok market BTC
-hypergrok size --equity 10000 --entry 100 --stop 95 --risk-pct 0.5 --max-notional 1000
+
+# Mainnet read-only and execution configuration
+HYPERGROK_NETWORK=mainnet \
+HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND \
+hypergrok doctor
+
+HYPERGROK_NETWORK=mainnet \
+HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND \
+hypergrok market BTC
+
+# All public data-source smoke checks, no key or signing
+python scripts/live_smoke.py
 ```
 
-Grok Bot does not document a native “install this arbitrary GitHub URL” command.
-The supported private distribution route is inferred from the Cursor plugin
-infrastructure used by Grok Bot:
+`doctor --user 0x...` separates endpoint health, builder balance, account-abstraction mode and that user's fee approval. It reports `execution-ready` only when every builder gate passes.
 
-1. A Cursor team administrator opens **Dashboard -> Plugins**.
-2. Under **Team Marketplaces**, choose **Add Marketplace -> Import from Repo**.
-3. Import this GitHub repository and grant the Cursor GitHub App read access.
-4. In Grok Bot, enable HyperGrok under **Settings -> Plugins -> Yours** for the
-   intended Bot.
+## Research and sizing
 
-This repository now carries the portable Agent Plugins manifest, the observed
-`.grok-plugin` manifest and the official Cursor `.cursor-plugin` manifest. The
-managed installation still needs an end-to-end receipt from the live private
-product before launch. Cloning the repository into the shared cloud computer is
-ordinary computer use, not a durable installation contract. For other
-SKILL-compatible agents, clone the repository or use
-`npx skills add galleonlabs/hypergrok-trading-desk` once it is public.
-
-Grok Bots belonging to one user share a cloud computer, files and sign-ins. Bot
-identity is not a credential boundary. Use a narrowly authorised API wallet and
-assume every Bot on that user account can reach any credential placed there.
-
-## Order flow
-
-1. Research and risk skills produce cited evidence and a bounded size.
-2. `hypergrok plan-order` writes an immutable, expiring JSON plan and SHA-256.
-3. The user reviews the side, size, price, account, network and disclosed fee.
-4. `hypergrok execute-order --plan ... --confirm <sha256> --execute` rechecks
-   every gate immediately before the one send.
-5. A timeout is an unknown result, never permission to retry. Reconcile by
-   cloid first.
-
-## Builder fee disclosure
-
-Hyperliquid builder codes are not text referral codes. Each supported order
-contains:
-
-```json
-{"b": "0xC141Cbe4f4a9CAbc3cc78159a9268a4e008922CD", "f": 10}
+```bash
+hypergrok account 0xYourTradingAccount
+hypergrok defillama hyperliquid
+hypergrok coingecko hyperliquid
+hypergrok size \
+  --equity 10000 \
+  --entry 100 \
+  --stop 95 \
+  --risk-pct 0.5 \
+  --max-notional 1000
 ```
 
-`f=10` is **1 basis point** of filled notional, paid to the Galleon builder.
-The user's main wallet must approve a maximum fee for this address first and
-may revoke it at any time. HyperGrok does not automate that approval.
+Outputs are JSON. Hyperliquid reads include their network, source and observation time. Missing or stale data must remain unknown rather than becoming a trading opinion.
 
-The candidate Galleon Treasury address had **0 USDC** Hyperliquid perps account
-value when checked on 16 August 2026. Hyperliquid requires at least 100 USDC and
-standard account abstraction, so monetisation is currently inactive. The
-`health` and `builder-status` commands check live state rather than trusting
-this dated receipt. Execution fails closed whilst the builder is ineligible.
+## Guarded order flow
 
-## Data sources
+1. Specialists produce cited research and deterministic risk inputs.
+2. `hypergrok plan-order` writes a short-lived plan and exact SHA-256.
+3. The user reviews account, network, side, size, limit, expiry, cloid and fee.
+4. `hypergrok execute-order --plan ... --confirm <sha256> --execute` rechecks every live gate.
+5. The official Hyperliquid SDK performs the sole send using a narrowly authorised API wallet.
+6. A private local journal atomically reserves the plan before the send. Any exception or timeout is an unknown result. Never retry; reconcile the cloid first.
 
-+ Hyperliquid official `/info` and `/exchange` APIs
-+ DefiLlama documented free protocol endpoint, with paid MCP/API left optional
-+ CoinGecko keyless, Demo or Pro REST API
+Supported fills include a **1 bp Galleon builder fee** (`f=10`) bound to the configured builder address. Hyperliquid requires the user's main wallet to approve that maximum for the address, and the user can revoke it. HyperGrok never automates approval. The builder must also hold at least 100 USDC perps account value and use standard account-abstraction mode; `doctor` checks live state before any send.
 
-Source lineage and licences are recorded in [docs/PROVENANCE.md](docs/PROVENANCE.md).
+## Safety boundaries
 
-## Safety model
++ Never provide a seed phrase or main-wallet key. Use a scoped Hyperliquid API wallet.
++ All Grok Bots belonging to one user share a cloud computer and sign-ins. Bot names are not credential boundaries.
++ Mainnet requires `HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND`.
++ Plans are network-bound, hash-bound, capped and valid for at most 30 minutes.
++ Strict address, cloid, decimal, slippage and expiry validation runs before signing.
++ The API wallet's live `userRole` must point to the planned trading account.
++ No deposits, withdrawals, transfers, bridging, reward claims or unattended execution.
++ No automatic retry after the only send.
 
-Private keys are read only at execution time and never persisted or printed.
-The signer should be a narrowly authorised API wallet; the separately declared
-account address is bound into the approved plan and passed to the official SDK.
-Mainnet is disabled unless explicitly enabled. Every plan expires, contains its
-builder attribution and cloid, and is covered by an exact hash. The sole send
-path revalidates the signing account, live price drift, notional cap, builder
-balance, user approval and duplicate cloid. Tests assert zero sends when a gate
-fails.
+See [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-Perpetual futures can liquidate an account. This is software, not financial
-advice, and no strategy or return claim is made.
+## Status
 
-## Roadmap to public launch
+Version 1.0.0 is the first public release of the guarded command surface. Read-only data, sizing, planning and fail-closed execution logic are verified. Live funded submission has not been exercised and remains unavailable until the fixed builder is eligible and the user approval passes. No strategy, profitability or autonomous 24/7 trading claim is made.
 
-+ Verify private installation in Grok Bot
-+ Fund and verify a dedicated eligible Galleon builder account
-+ Run testnet execution and incident drills
-+ Independent funds-path and security review
-+ Add websocket monitoring and strategy packages only after the control plane
-  earns it
+Perpetual futures can liquidate an account. This software is not financial advice.

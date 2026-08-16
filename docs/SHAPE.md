@@ -8,8 +8,8 @@ a funds-moving action.
 public skill suites show demand, but commonly depend on a proprietary runtime
 or merge analysis and execution.
 
-**Appetite:** one private v0.1 foundation. More scope requires testnet receipts
-and a verified Grok Bot install.
+**Appetite:** a production-quality v1.0 command surface for public release.
+Expansion still requires testnet receipts and a verified Grok Bot install.
 
 **Core flow:** install -> configure read access -> research -> thesis -> risk
 sign-off -> hashed plan -> exact user approval -> one send -> reconcile -> review.
@@ -22,12 +22,12 @@ approval, hidden fees, return claims or unattended live trading.
 
 **Success signal:** a fresh install produces a cited brief and testnet plan;
 every failed execution gate proves zero sends; the one allowed send includes the
-disclosed builder object and a unique cloid.
+fixed builder object and a unique cloid.
 
 ## Earned expansion
 
-The comparative survey found recurring gaps worth adding only after the private
-install and testnet execution receipts exist:
+The comparative survey found recurring gaps worth adding only after a live
+Grok install and testnet execution receipts exist:
 
 + source ledger and asset identity resolution
 + protocol governance, oracle, bridge and upgrade underwriting
@@ -38,4 +38,4 @@ install and testnet execution receipts exist:
 
 These are original capability targets, not a plan to import upstream skill prose
 or code. Hosted runtimes, strategy catalogues and unattended execution remain
-outside v0.1.
+outside HyperGrok.

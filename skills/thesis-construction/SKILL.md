@@ -1,7 +1,7 @@
 ---
 name: thesis-construction
 description: Build a falsifiable trade thesis from sourced evidence.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -33,4 +33,4 @@ Agreement between agents is not independent evidence. Outcome confidence cannot 
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner.

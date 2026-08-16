@@ -1,19 +1,10 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hypergrok",
-  "description": "Create a risk-bounded Hyperliquid trading desk on Grok Bot with live market, protocol and token research.",
-  "version": "0.1.0",
+  "description": "Risk-bounded Hyperliquid trading desk Agent Plugin with live market, protocol and token research.",
+  "version": "1.0.0",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
   "license": "MIT",
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
-  "keywords": ["grok-bot", "hyperliquid", "trading", "defi", "agent-skills"],
-  "variables": {
-    "type": "object",
-    "properties": {
-      "HYPERGROK_NETWORK": {"type": "string", "enum": ["testnet", "mainnet"], "default": "testnet"},
-      "HYPERGROK_MAX_ORDER_NOTIONAL_USD": {"type": "string", "default": "1000"},
-      "HYPERGROK_MAX_SLIPPAGE_BPS": {"type": "string", "default": "30"},
-      "COINGECKO_API_KEY": {"type": "string", "description": "Optional Demo or Pro key. Never commit it."}
-    }
-  }
+  "keywords": ["grok-bot", "hyperliquid", "trading", "defi", "agent-skills"]
 }

@@ -1,7 +1,7 @@
 ---
 name: posttrade-review
 description: Review trade process separately from realised outcome.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]

@@ -1,7 +1,7 @@
 ---
 name: portfolio-control
 description: Review whole-book exposure and position protection.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -32,4 +32,4 @@ A plan file is not an open order. PnL does not prove the thesis or the quality o
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner.

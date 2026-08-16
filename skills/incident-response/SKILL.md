@@ -1,7 +1,7 @@
 ---
 name: incident-response
 description: Contain Hyperliquid trading incidents without widening harm.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -29,8 +29,8 @@ Use for suspected key compromise, duplicate orders, stale plans or broken protec
 
 ## Pitfalls
 
-V0.1 provides guidance, not an automated cancel-all command. Never withdraw or transfer funds as an improvised incident response.
+HyperGrok provides guidance, not an automated cancel-all command. Never withdraw or transfer funds as an improvised incident response.
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the incident scope, cloid reconciliation, known effects, unknowns, containment and one next owner.

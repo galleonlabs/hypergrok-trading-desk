@@ -4,12 +4,12 @@ In Grok Build or Cursor, install or enable the Agent Plugin. In Grok Bot, first 
 
 Then send this to the owning Bot or agent:
 
-> Run the `crew-bootstrap` skill. Form the seven-role HyperGrok desk from the bundled agent definitions: desk lead, market analyst, onchain analyst, risk officer, execution trader, portfolio manager and trade reviewer. Create persistent named Bots only if the product exposes that capability and verify them by reading the resulting Bot list. Otherwise use plugin agents or explicit role-separated passes and tell me which fallback is active. Run read-only doctor and BTC market checks against both Hyperliquid testnet and mainnet. Do not request a key, approve a fee, fund an account or submit an order.
+> Run the `crew-bootstrap` skill. Form the seven-role HyperGrok desk from the bundled agent definitions: desk lead, market analyst, onchain analyst, risk officer, execution trader, portfolio manager and trade reviewer. Verify the actual runtime mode. Run read-only doctor and BTC market checks against both Hyperliquid testnet and mainnet only if the installed `hypergrok` CLI is genuinely available. Otherwise report an instruction-only Grok Bot team and do not pretend the CLI or execution gateway is installed. Do not request a key, approve a fee, fund an account or submit an order.
 
 Expected receipt:
 
 + seven roles listed with their actual runtime mode
-+ testnet and mainnet endpoint checks
++ testnet and mainnet endpoint checks, or an explicit `CLI unavailable` receipt in instruction-only Grok Bot mode
 + one market-analyst to risk-officer handoff
 + zero signing requests and zero order submissions
 

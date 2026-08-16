@@ -37,7 +37,7 @@ The call carries the plan cloid and `{b: <Galleon address>, f: 10}`. There is no
 
 ## Grok team model
 
-Grok Build and Cursor Agent Plugin discovery loads `rules/`, `agents/` and `skills/`. The persistent rule makes the desk lead route work across six specialist roles. Grok Bot is a different surface: its Plugins screen provides service connectors and its public documentation does not provide arbitrary repository installation or programmatic sibling-Bot creation. `crew-bootstrap` therefore verifies native plugin agents where supported; Grok Bot users create named Bots and teach skills manually.
+Grok Build and Cursor Agent Plugin discovery loads `rules/`, `agents/` and `skills/`. The persistent rule makes the desk lead route work across six specialist roles. Grok Bot is a different surface: its Plugins screen provides service connectors and its public documentation does not provide arbitrary repository installation, this CLI as a tool, or programmatic sibling-Bot creation. `crew-bootstrap` therefore verifies native plugin agents where supported. A manually taught Grok Bot crew is instruction-only and cannot reach the execution gateway.
 
 All Bots for one Grok user share one cloud computer. Credentials are scoped by the Hyperliquid API-wallet permission, not by Bot identity.
 

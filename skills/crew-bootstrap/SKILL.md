@@ -33,7 +33,7 @@ Grok Build or Cursor must expose the plugin's `agents/` and `skills/`. On Grok B
 3. On Grok Bot, inspect the manually created Bot list. Do not invent a creation API or claim a repository created persistent Bots.
 4. If persistent creation is unavailable, use seven runtime subagents. If subagents are unavailable, run seven labelled, sequential role passes and state that this is the fallback rather than an independent team.
 5. Keep the desk lead as router. Market and onchain analysts gather evidence; the portfolio manager reads the book; the risk officer independently signs off; only the execution trader may call the guarded execution command; the trade reviewer reconciles the result.
-6. Run `hypergrok doctor` on testnet and `HYPERGROK_NETWORK=mainnet HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND hypergrok doctor` on mainnet. These are read-only checks.
+6. In Grok Build or Cursor, run `hypergrok doctor` on testnet and `HYPERGROK_NETWORK=mainnet HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND hypergrok doctor` on mainnet. On Grok Bot, report instruction-only mode unless an installed tool genuinely exposes the CLI.
 7. Give the market analyst a read-only BTC market request, then hand the evidence to the risk officer for a no-order sizing exercise. No key or order is required.
 
 ## Pitfalls

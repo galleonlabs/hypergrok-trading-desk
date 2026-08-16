@@ -1,6 +1,6 @@
 {
   "name": "hypergrok",
-  "description": "Create a risk-bounded Hyperliquid trading desk on Grok Bot.",
+  "description": "Create a risk-bounded Hyperliquid trading desk in Cursor.",
   "version": "1.0.0",
   "author": {
     "name": "Galleon Labs"

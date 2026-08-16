@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hypergrok",
-  "description": "Create a risk-bounded Hyperliquid trading desk on Grok Bot with live market, protocol and token research.",
+  "description": "Risk-bounded Hyperliquid trading desk Agent Plugin with live market, protocol and token research.",
   "version": "1.0.0",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
   "license": "MIT",

@@ -4,7 +4,7 @@
 [![MIT licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-**Create your Hyperliquid trading desk on Grok Bot.**
+**Create a risk-bounded Hyperliquid trading desk with Grok Build, Cursor or a manually configured Grok Bot.**
 
 HyperGrok packages seven specialist agents, eleven original skills and a guarded Python execution gateway. It covers Hyperliquid market and account intelligence, DefiLlama and CoinGecko research, thesis construction, deterministic risk, portfolio control, execution and post-trade review.
 
@@ -49,7 +49,7 @@ python -m build
 
 **Grok Build and Cursor:** import this repository as an Agent Plugin. Both surfaces discover `rules/`, `agents/` and `skills/`; run `crew-bootstrap` after enabling it.
 
-**Grok Bot:** its public Plugins screen installs service connectors, not repository Agent Plugins. Grok Bot does not currently document arbitrary GitHub-repository installation or programmatic creation of sibling Bots. Follow [docs/GROK_BOT.md](docs/GROK_BOT.md) to create the seven named Bots manually and teach or upload the relevant skills. [BOOTSTRAP.md](BOOTSTRAP.md) contains the exact owning-Bot prompt. Do not claim the repo URL installed anything unless the runtime confirms each role and skill.
+**Grok Bot:** its public Plugins screen installs service connectors, not repository Agent Plugins. Grok Bot does not currently document arbitrary GitHub-repository installation, a shell/tool bridge for this CLI or programmatic creation of sibling Bots. [docs/GROK_BOT.md](docs/GROK_BOT.md) describes a manual, instruction-only team for research and review. It cannot use the guarded execution gateway unless a future documented integration exposes the installed CLI. [BOOTSTRAP.md](BOOTSTRAP.md) contains the exact owning-Bot prompt. Do not claim the repo URL installed anything unless the runtime confirms each role and skill.
 
 ## Read both networks
 

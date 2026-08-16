@@ -7,8 +7,12 @@ ROOT = Path(__file__).parents[1]
 def test_manifests_agree() -> None:
     root = json.loads((ROOT / "plugin.json").read_text())
     grok = json.loads((ROOT / ".grok-plugin/plugin.json").read_text())
+    cursor = json.loads((ROOT / ".cursor-plugin/plugin.json").read_text())
     for field in ("name", "version", "repository", "license"):
         assert root[field] == grok[field]
+    for field in ("name", "version"):
+        assert root[field] == cursor[field]
+    assert cursor["author"]["name"] == "Galleon Labs"
 
 
 def test_every_skill_has_valid_frontmatter() -> None:

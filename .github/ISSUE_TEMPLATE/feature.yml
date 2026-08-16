@@ -1,5 +1,5 @@
-name: Feature request
-description: Propose a bounded improvement
+name: Improvement
+description: Propose a bounded improvement to a role or skill
 title: "feature: "
 labels: [enhancement]
 body:
@@ -7,19 +7,19 @@ body:
     id: problem
     attributes:
       label: Problem
-      description: Describe the user problem, not only the proposed implementation.
+      description: What a desk user or Bot cannot do well today.
     validations:
       required: true
   - type: textarea
     id: boundary
     attributes:
       label: Safety boundary
-      description: Explain whether this touches signing, sending, credentials, retries or builder attribution.
+      description: Does this touch the write path, keys, approvals, transfers or unattended behaviour? Say how it stays inside the ticket protocol.
     validations:
       required: true
   - type: textarea
     id: outcome
     attributes:
-      label: Proposed outcome
+      label: Proposed change
     validations:
       required: true

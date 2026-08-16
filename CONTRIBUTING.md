@@ -1,15 +1,25 @@
 # Contributing
 
-Keep changes original, source-led and testable. Do not copy third-party skill prose, prompts, fixtures or code without compatible provenance.
+HyperGrok is instructions and resources for a user's Grok Bot, not software the repository runs. Contributions are prose, prompts and snippets; the bar is accuracy against the live Hyperliquid API and the live Grok Bot product.
 
-Any funds-moving change must trace the public command to its only signer/send, prove retries cannot submit twice, preserve required send metadata, and add zero-send assertions for every new failure gate.
+## Ground rules
+
++ Original text only. Do not copy third-party skill prose, prompts, fixtures or code. Cite sources in `docs/PROVENANCE.md`.
++ No strategies, signals, alpha or return claims anywhere in the repository. The Strategist teaches method; users bring ideas.
++ Every write path stays behind the ticket protocol: Risk PASS, user approval by id, single send, reconciliation. A change that weakens that is a rejected change.
++ Never widen the key model: API wallet only, through the secret store, never in chat or under `/workspace`.
++ Verify snippets against the current SDK versions named in `docs/PROVENANCE.md` before changing them, and update the version there if you bump it.
+
+## Layout
+
++ `agents/<role>.md` - frontmatter (`name`, `title`, `description`, `seat`, `skills`, `writes_to_exchange`), a **Bot profile** section (Name, Job, Description) and a **System prompt** section.
++ `skills/<name>/SKILL.md` - frontmatter (`name` equal to the directory, `description` under 1024 characters, `license`, `metadata`), body under 300 lines.
++ `SETUP.md` - the single entry point a Grok Bot follows. Keep it linear and honest about what Grok Bot can and cannot do.
+
+## Checks
 
 ```bash
-python -m pip install -e '.[dev]'
-ruff check .
-mypy src
-pytest -q --cov=hypergrok --cov-fail-under=75
-python -m build
+bash scripts/check.sh
 ```
 
-Never commit credentials, captured account payloads or generated order plans. Use fake SDK modules and API fixtures in tests. Live smoke checks must remain read-only.
+The check verifies frontmatter, directory/name agreement, description length, internal links, and that no file references the retired `hypergrok` CLI. CI runs the same script.

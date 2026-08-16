@@ -1,30 +1,20 @@
 # Provenance
 
-HyperGrok is independently implemented. Sources were studied for public
-interfaces and product gaps, not copied.
+Everything in this repository is original prose and original snippets written against public documentation and open-source SDK code. Sources were studied for interfaces, conventions and gaps; no third-party skill text, prompts, fixtures or scripts were copied.
 
-| Source | Use | Licence / status |
+| Source | Used for | Licence / notes |
 | --- | --- | --- |
-| Hyperliquid docs and Python SDK `2fdb18f` | API fields and signing client | Docs; SDK MIT |
-| DefiLlama API docs and skills `f286bda` | Endpoint coverage and research gaps | Public docs; skills repo had no detected licence on 16 Aug 2026, so no code or prose reused |
-| CoinGecko docs and skills `fcc056f` | Auth tiers and endpoint coverage | Official skills MIT; no code or prose reused |
-| Senpi skills `c3b6df3` | Comparative capability survey only | Root MIT and skill-level Apache-2.0 declarations conflict; no code, prose, fixtures, names or strategies reused |
-| Grok Build and Cursor plugin documentation | Agent Plugin manifests, agents, skills and rules | Official documentation; repository installation applies to these coding-agent surfaces |
-| Grok Bot documentation | Manual Bot and skill setup; shared cloud-computer boundary | Official documentation; no published arbitrary GitHub-install or sibling-Bot-creation contract |
-| Agent Plugins schema | Portable manifest interoperability | Public specification |
-| Community Grok plugin examples | Packaging evidence only | MIT; not treated as an official contract |
+| [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs) (API, trading, onboarding sections, fetched 2026-08-16) | Every endpoint, action, field, limit and error string in the `hyperliquid-*` skills | Public documentation |
+| [hyperliquid-python-sdk](https://github.com/hyperliquid-dex/hyperliquid-python-sdk) 0.24.0 | Python method signatures and response handling in the skills; the SDK is what the desk installs | MIT |
+| [@nktkas/hyperliquid](https://github.com/nktkas/hyperliquid) 0.33.3 | TypeScript client shapes and formatting helpers referenced in the skills | MIT |
+| [Grok Bot documentation](https://docs.x.ai/grok-bot) and [Cursor help for Grok Bot](https://cursor.com/help/grok-bot) | Bots, group chats, shared computer, skills, routines, approvals, secrets | Public documentation |
+| [Grok Build skills, plugins and marketplaces](https://docs.x.ai/build/features/skills-plugins-marketplaces) | Plugin layout and SKILL.md compatibility | Public documentation |
+| [Agent Skills specification](https://agentskills.io) | SKILL.md frontmatter and directory conventions | Public specification |
+| [Senpi skills](https://github.com/Senpi-ai/senpi-skills) | Comparative survey of skill structure and safety patterns only; platform-specific and includes strategy content, none of which was reused | Root MIT with Apache-2.0 declarations in skill files |
+| [cezar-r/hyperliquid-skills](https://github.com/cezar-r/hyperliquid-skills) | Comparative survey of a reference-style skill pack; identifier gotchas cross-checked against official docs | MIT |
+| [Hermes Agent hyperliquid skill](https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/blockchain/hyperliquid) | Comparative survey of a read-only CLI-backed skill and Hermes frontmatter conventions | MIT |
+| kaileycompact51/HyperLiquid-Claw | Reviewed and **not used**. The repository distributes an unverified Windows binary and an obfuscated npm install script; treat with caution. Nothing from it appears here. | Claimed MIT |
 
-Canonical receipts:
+## What changed in 2.0
 
-+ https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md
-+ https://github.com/hyperliquid-dex/hyperliquid-python-sdk
-+ https://defillama.com/docs/api
-+ https://docs.coingecko.com/ai-integration
-+ https://docs.x.ai/grok-bot/skills-routines-and-automations
-+ https://docs.x.ai/grok-bot/bots
-+ https://cursor.com/help/grok-bot/connect-plugins
-+ https://docs.x.ai/build/features/skills-plugins-marketplaces
-+ https://docs.x.ai/build/features/subagents
-+ https://cursor.com/docs/reference/plugins
-+ https://cursor.com/docs/plugins#team-marketplaces
-+ https://agent-plugins.org/schemas/1.0.0/plugin.schema.json
+Version 1.x was a Python CLI (`hypergrok`) with its own plan/execute state machine, tests and packaging, wrapped by thin agent and skill files. Version 2.0 removes the CLI entirely. The repository is now instructions and resources for a user's Grok Bot: seven role definitions with full system prompts, sixteen skills that teach the Bots to work with Hyperliquid directly through the official SDKs and `curl`, and a setup file the Bot follows. The safety model moved from code gates to desk procedure plus Hyperliquid's own API-wallet permissions and Grok Bot's approval controls.

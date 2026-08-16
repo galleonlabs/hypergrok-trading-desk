@@ -1,286 +1,83 @@
 # HyperGrok
 
-[![CI](https://github.com/galleonlabs/hypergrok-trading-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/galleonlabs/hypergrok-trading-desk/actions/workflows/ci.yml)
-[![MIT licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+**Turn your Grok Bot into a Hyperliquid trading desk.**
 
-**Turn your Grok bots into a Hyperliquid trading desk.**
+HyperGrok is not a bot and not a CLI. It is a set of instructions, role definitions and skills that your own [Grok Bot](https://x.ai/bot) reads and uses to build a small trading desk inside your workspace: seven specialist Bots, one group chat, a shared set of Hyperliquid skills, and a way of working that keeps research, risk, execution and review separate.
 
-HyperGrok gives your AI agents seven specialist roles, eleven skills and one
-guarded order path. They research markets, build a thesis, size it against real
-exchange limits, and put a single reviewed order in front of you for approval.
+You bring the ideas. The desk brings method, live data, sizing arithmetic, careful execution and honest review. It ships no strategies, makes no return claims, and never sends an order you have not approved by ticket id.
 
-Nothing is sent that you have not read first. HyperGrok never sees your seed
-phrase, cannot withdraw or transfer funds, and refuses any order that differs by
-a single character from the one you approved.
+## Start
 
----
+Open Grok Bot and paste this to any Bot:
+
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/main/SETUP.md. Follow that file from top to bottom, create the seven Bots and the Trading Floor group chat, install the skills, and finish with the receipt it asks for. Do not request any keys or place any orders.
+
+If the Bot cannot open the link from its computer, attach this repository's archive to the conversation and tell it to unpack it to `/workspace/hypergrok`.
+
+Fifteen minutes later you have a desk. It starts as a research desk (no key). When you want to trade with play money, tell the Desk Lead to set up a testnet API wallet.
 
 ## The desk
 
-| Role | What it does |
-| --- | --- |
-| **Desk lead** | Routes evidence and approvals between the specialists |
-| **Market analyst** | Hyperliquid structure, liquidity, open interest, funding |
-| **Onchain analyst** | Protocol, token, governance and dependency research |
-| **Portfolio manager** | Whole-book exposure, margin and protection state |
-| **Risk officer** | Independent sizing, and the authority to refuse |
-| **Execution trader** | The only role that can reach the order path |
-| **Trade reviewer** | Plan versus effect, and execution quality |
-
-Six of the seven cannot place an order at all. That separation is the point.
-
----
-
-## Quick start
-
-You need **Python 3.11+** and about ten minutes. You do **not** need funds, a
-wallet or a key to research and plan trades — only to place them.
-
-```bash
-git clone https://github.com/galleonlabs/hypergrok-trading-desk.git
-cd hypergrok-trading-desk
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-cp .env.example .env
-hypergrok quickstart
-```
-
-`quickstart` checks your setup in plain English and tells you exactly what to do
-next. It never prints a key.
-
-```
-HyperGrok setup
-
-Network: testnet  (https://api.hyperliquid-testnet.xyz)
-Testnet is the safe default. No real money is at risk here.
-
-Configuration
-  [ok] Config file: /your/repo/.env
-  [ok] Hyperliquid reachable (2702 markets)
-
-You can research and plan orders. Placing them needs the account steps above.
-```
-
-Then try it:
-
-```bash
-hypergrok market BTC                 # a live market
-hypergrok limits BTC --equity 10000  # what the exchange actually allows you
-hypergrok size --equity 10000 --entry 100 --stop 95 --risk-pct 0.5 --max-notional 1000
-```
-
-### To place orders as well
-
-Three steps, in order:
-
-1. **Create an API wallet.** At [app.hyperliquid.xyz](https://app.hyperliquid.xyz)
-   open **Settings → API** and generate one. It can trade but cannot withdraw.
-   **Never** use your seed phrase or main wallet key.
-2. **Put it in `.env`.** Set `HYPERLIQUID_ACCOUNT_ADDRESS` to your trading
-   account and `HYPERLIQUID_PRIVATE_KEY` to the API wallet's key. `.env` is
-   already gitignored.
-3. **Run `hypergrok quickstart` again.** It confirms the API wallet is
-   authorised for that account.
-
-You stay on testnet until you deliberately opt into mainnet.
-
----
-
-## Set up your agent team
-
-### Grok Bot
-
-Open Grok Bot and paste this:
-
-> Set up HyperGrok from https://github.com/galleonlabs/hypergrok-trading-desk/blob/main/BOOTSTRAP.md.
-> Follow that file from top to bottom, create the seven-role desk, and finish by
-> showing me which roles and checks are working.
-
-[`BOOTSTRAP.md`](BOOTSTRAP.md) is the single entry point. If Grok cannot open the
-link, download the file and attach it to the conversation.
-
-Grok Bot has no public API for silently creating sibling Bots, so if it cannot
-create the seven itself it will hand you seven labelled setup blocks instead. We
-would rather tell you that than pretend it is one click. Without the `hypergrok`
-command available, a Grok Bot desk is research-and-review only.
-
-### Grok Build or Cursor
-
-The Agent Plugin supplies the roles and skills; the Python install supplies the
-`hypergrok` command.
-
-```bash
-uv sync --frozen
-. .venv/bin/activate
-grok --plugin-dir .   # Grok Build
-```
-
-Then run `/crew-bootstrap`. In Cursor, open the same repository, enable its local
-plugin and run `crew-bootstrap`. The setup receipt confirms whether the CLI is
-available before any CLI-backed skill is used.
-
----
-
-## Placing an order
-
-Two commands, never one. That is deliberate.
-
-**1. Plan it.** Writes the order to a file. Touches no network, signs nothing.
-
-```bash
-hypergrok plan-order --account 0xYourAccount --coin BTC --side buy \
-  --size 0.001 --limit-px 95000 --out my-order.json
-```
-
-**2. Read the file, then run the command it gives you.** The output includes a
-`next_command` line you can copy verbatim.
-
-```bash
-hypergrok execute-order --plan my-order.json --confirm <sha256> --execute
-```
-
-### What the SHA-256 is for
-
-It is a fingerprint of your exact order file. Change one character — size, price,
-account, anything — and the fingerprint changes and the order is refused.
-
-You are not expected to read or understand the hash. You copy it. Its job is to
-guarantee that what gets sent is byte-for-byte what you reviewed, with no room
-for anything to alter it in between. Plans expire after 30 minutes for the same
-reason.
-
-### Every gate between you and a send
-
-`execute-order` checks all of these before a signing key is even imported:
-
-| Gate | Refuses when |
-| --- | --- |
-| Hash match | The plan file changed after you read it |
-| Expiry | The plan is stale |
-| Network | A testnet plan is run against mainnet, or vice versa |
-| Declared account | Your configured account differs from the plan |
-| Notional | The order exceeds a ceiling you opted into |
-| Price drift | The live price has moved beyond your tolerance |
-| Precision | Size or price breaks Hyperliquid tick and lot rules |
-| API wallet | The signing key is not an authorised wallet for that account |
-| Duplicate | The client order ID was already used |
-| Journal | This exact plan already reached the send boundary once |
-
-A timeout is an **unknown** result, not a failure. HyperGrok never retries;
-reconcile the order first with `hypergrok order-status`.
-
----
-
-## Risk limits come from the exchange
-
-HyperGrok imposes **no risk-per-trade or notional ceiling of its own**. The real
-constraints are Hyperliquid's, they differ per asset, and they are tiered:
-
-```bash
-hypergrok limits BTC --equity 10000
-```
-
-reports max leverage, the margin tiers that apply as a position grows, size
-decimals and the 10 USD minimum order value.
-
-Headline leverage is the **top tier only** — BTC is 40x below 10k notional, 25x
-above it, 10x above 50k — so a size that looks financeable at the headline number
-may not be at the size you intend. Judging an appropriate risk budget from those
-limits is the risk officer's job; see [`skills/pretrade-risk`](skills/pretrade-risk/SKILL.md).
-
-### Optional guardrails
-
-Opt in if you want the CLI itself to catch a fat-fingered figure. Unset means no
-ceiling.
-
-| Setting | Default | Effect |
+| Bot | Job | Sends to the exchange? |
 | --- | --- | --- |
-| `HYPERGROK_MAX_RISK_PCT` | unset | Refuse a `size` request above this percent of equity |
-| `HYPERGROK_MAX_ORDER_NOTIONAL_USD` | unset | Refuse a plan above this USD notional |
+| **Desk Lead** | Your main contact. Routes work, runs the trade lifecycle, keeps the desk record. | No |
+| **Market Analyst** | Live Hyperliquid data: price, book depth, funding, open interest, volume, candles. Timestamped, sourced briefs. | No |
+| **Research Analyst** | Fundamentals, news, catalysts, onchain and social context. Sceptical by design. | No |
+| **Strategist** | Helps you turn *your* ideas into explicit rules, backtests them honestly, paper-trades them on testnet. | No |
+| **Risk Manager** | Owns your written risk limits, sizes every trade from live account state, watches the book, can refuse. | No |
+| **Execution Trader** | The only Bot that places, modifies or cancels orders. One approved ticket, one send, reconciled from the exchange record. | **Yes** |
+| **Trade Reviewer** | Keeps the desk journal, reviews process separately from outcome, runs incident reviews. Off the floor. | No |
 
-These two are **not** ceilings and always have a value:
+Six sit in one Grok Bot group chat, the **Trading Floor**. The Trade Reviewer works by direct message. Every trade follows the same path:
 
-| Setting | Default | Effect |
-| --- | --- | --- |
-| `HYPERGROK_MAX_SLIPPAGE_BPS` | 30 | How far live price may drift from your approved limit |
-| `HYPERGROK_MAX_PLAN_MINUTES` | 30 | Longest a plan may stay valid, up to 1440 |
-
-What is **not** configurable is correctness: hash matching, account matching,
-API-wallet authorisation, duplicate protection, drift checking and tick rules.
-Those are not preferences.
-
----
-
-## Safety
-
-+ **Never provide a seed phrase or main-wallet key.** Use a scoped Hyperliquid
-  API wallet, which can trade but cannot withdraw.
-+ **All Grok Bots belonging to one user share a cloud computer and sign-ins.**
-  Bot names are not credential boundaries.
-+ **Mainnet requires `HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND`.** Testnet is the
-  default and stays the default until you say otherwise.
-+ **No deposits, withdrawals, transfers, bridging, reward claims or unattended
-  execution.** Those commands do not exist in this tool.
-+ **No automatic retry** after the only send.
-
-Report a vulnerability via [SECURITY.md](SECURITY.md).
-
----
-
-## Both networks
-
-```bash
-# Testnet, the default
-hypergrok doctor
-hypergrok market BTC
-
-# Mainnet, explicitly
-HYPERGROK_NETWORK=mainnet HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND hypergrok doctor
-
-# Public data-source smoke checks, no key or signing
-python scripts/live_smoke.py
+```
+idea -> evidence -> risk sign-off -> your approval by ticket id -> one send -> reconciliation -> review
 ```
 
-`hypergrok doctor --user 0x...` separates endpoint health from your own
-account-specific execution readiness.
+## What is in the repository
 
----
+```
+SETUP.md            the file your Grok Bot follows to build the desk
+agents/             seven roles: a Bot profile card (Name, Job, Description) plus a full system prompt each
+skills/             sixteen skills, in the portable SKILL.md format
+  hyperliquid-*     how to work with Hyperliquid from the desk computer: setup and API wallets, market data,
+                    account state, orders, positions and margin, WebSocket, advanced actions, and a compact API reference
+  desk-*            how the desk works: operating model, trade lifecycle, risk limits and sizing, execution protocol,
+                    monitoring, post-trade review, incident response, strategy lab
+docs/               architecture, FAQ, provenance
+rules/, .grok-plugin/, .cursor-plugin/   lets Grok Build and Cursor load the same roles and skills as a plugin
+```
 
-## Status
+Skills are written to the [Agent Skills](https://agentskills.io) convention (`SKILL.md` with `name` and `description` frontmatter), so they also work in Grok Build, Cursor, Claude Code and Hermes. Grok Bot is the primary target: it reads the files from its computer and saves them as skills.
 
-Version 1.0.0. Read-only data, sizing, planning and fail-closed execution logic
-are verified by 92 unit tests plus three live verification harnesses covering the
-CLI, the packaging and every skill procedure — see [docs/TESTING.md](docs/TESTING.md).
+## Hyperliquid skills
 
-Live funded submission has not been exercised. **No strategy, profitability or
-autonomous 24/7 trading claim is made.**
+Each `hyperliquid-*` skill teaches a Bot to do one family of things against the real API, with copy-pasteable `curl` for reads and Python (official `hyperliquid-python-sdk`) or TypeScript (`@nktkas/hyperliquid`) for everything that signs. Testnet and mainnet, perps and spot, orders with take-profit and stop-loss grouping, client order ids, cancels and modifies, leverage and margin modes, dead-man's switch, TWAP, WebSocket subscriptions, rate limits, tick and lot rules, error strings and what they mean.
 
-Perpetual futures can liquidate an account. This software is not financial
-advice.
+What the skills deliberately do not cover: deposits, withdrawals, bridging, transfers between accounts, sub-accounts or vaults, sending USDC or spot tokens, staking, builder fee approvals. You do those in the Hyperliquid app.
 
----
+## Safety model
+
+- **You approve every send**, by writing the ticket id in chat after seeing the exact ticket. "Yes" is not approval.
+- **Only an API wallet key** ever reaches the desk computer, provisioned through Grok Bot's secure secret store, never pasted in chat. API wallets can trade but cannot withdraw. Never a seed phrase, never a main-wallet key.
+- **All your Bots share one computer**, so Bot names are not a security boundary; that is why the key is trade-only, and why the desk starts on testnet.
+- **Testnet first.** Every new kind of action is rehearsed with play money.
+- **No unattended sending.** Routines may read and alert; only a ticket you approved gets sent.
+- **No strategies, no return claims.** The Strategist tests your ideas; nothing here tells you what to trade.
+
+Perpetual futures can liquidate an account. This is software and documentation, not financial advice.
 
 ## Documentation
 
 | Document | Contents |
 | --- | --- |
-| [BOOTSTRAP.md](BOOTSTRAP.md) | The single entry point for setting up the desk |
-| [docs/GROK_BOT.md](docs/GROK_BOT.md) | Which skills belong to which role |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Trust boundaries and the execution gateway |
-| [docs/TESTING.md](docs/TESTING.md) | How to verify a checkout yourself |
-| [docs/SHAPE.md](docs/SHAPE.md) | What HyperGrok is and is not |
-| [docs/PROVENANCE.md](docs/PROVENANCE.md) | Origin of the agents and skills |
+| [SETUP.md](SETUP.md) | The single entry point for your Grok Bot |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Desk topology, trust boundaries, exclusions |
+| [docs/FAQ.md](docs/FAQ.md) | Common questions |
+| [docs/PROVENANCE.md](docs/PROVENANCE.md) | Sources studied and how they were used |
+| [skills/README.md](skills/README.md) | Skill index and which Bot uses which |
 | [SECURITY.md](SECURITY.md) | Reporting a vulnerability |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to improve the desk |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
-
-### Development
-
-```bash
-python -m pip install -e '.[dev]'
-ruff check . && mypy src && pytest -q --cov=hypergrok --cov-fail-under=75
-```
 
 MIT licensed. Built by [Galleon Labs](https://github.com/galleonlabs).

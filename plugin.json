@@ -1,10 +1,10 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hypergrok",
-  "description": "Risk-bounded Hyperliquid trading desk Agent Plugin with live market, protocol and token research.",
-  "version": "1.0.0",
+  "description": "Turn your Grok Bot into a Hyperliquid trading desk: seven specialist roles with full system prompts and sixteen skills for working with Hyperliquid. Instructions and resources, not a bot.",
+  "version": "2.0.0",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
   "license": "MIT",
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
-  "keywords": ["grok-bot", "hyperliquid", "trading", "defi", "agent-skills"]
+  "keywords": ["grok-bot", "hyperliquid", "trading-desk", "agents", "agent-skills"]
 }

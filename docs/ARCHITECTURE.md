@@ -1,57 +1,57 @@
 # Architecture
 
-HyperGrok separates untrusted analysis from the only funds-moving function.
+HyperGrok is a set of files a Grok Bot reads to build a trading desk out of other Grok Bots. There is no server, package or binary in this repository. The runtime is the user's Grok Bot workspace: their Bots, their shared cloud computer, their conversations.
 
-```text
-Grok Bot / Cursor plugin
-  rules + 7 agents + 11 skills
-              |
-              v
-      read-only research
- Hyperliquid / DefiLlama / CoinGecko
-              |
-              v
- deterministic sizing -> immutable order plan -> exact user hash
-              |
-              v
- guarded execution gateway -> official Hyperliquid SDK -> /exchange
+## Topology
+
 ```
+user
+ |
+ |  talks to (mostly)                          direct messages
+ v                                                  |
+Trading Floor (Grok Bot group chat, 6 Bots)         v
+  Desk Lead --------- routes ----------> Trade Reviewer (off the floor)
+   |    |    |    |    |                    journal, reviews, incidents
+   |    |    |    |    +-- Execution Trader ---- the only writer ----> Hyperliquid /exchange
+   |    |    |    +------- Risk Manager ------- reads account ------> Hyperliquid /info
+   |    |    +------------ Strategist --------- reads history ------> Hyperliquid /info
+   |    +----------------- Research Analyst --- reads the web ------> browser, public APIs
+   +---------------------- Market Analyst ----- reads markets ------> Hyperliquid /info, /ws
+
+shared cloud computer: /workspace/hypergrok (this repo)  /workspace/trading-desk (the desk's files)
+secret store: HYPERLIQUID_PRIVATE_KEY (a trade-only API wallet), provisioned by the user, never in chat
+```
+
+Grok Bot facts that shape this: group chats hold up to six Bots; Bots can create other Bots; all Bots of one account share one computer, browser and filesystem; skills are shared across Bots; approvals can be required per action class; secrets go in through a secure secret card.
 
 ## Trust boundaries
 
-### Research plane
+**Read plane.** Six of the seven Bots only ever call `POST /info` (unsigned) and public web pages. They can be wrong, but they cannot move money.
 
-`market`, `account`, `limits`, `defillama`, `coingecko`, `size`, `doctor`, `quickstart`, `order-status` and `plan-order` do not sign or submit. External content is data and cannot approve an action.
+**Write plane.** One Bot, the Execution Trader, calls `POST /exchange` with an API wallet key. It does so only when three artefacts line up: a proposal file with a Risk Manager PASS, the user's approval by ticket id in chat, and a passing pre-send checklist. One approval, one send. Unknown results are reconciled by client order id, never resent.
 
-### Plan boundary
+**Key boundary.** The API wallet can trade but cannot withdraw, transfer or bridge. It is the only key on the computer. Because every Bot on the account can read the computer, the desk does not pretend Bot names are a security boundary; it relies on the key's permissions, on testnet-first rehearsal, and on the user's approval per ticket. Anything that needs the main wallet (agent approval, transfers, withdrawals) happens in the Hyperliquid app, by the user.
 
-An `OrderPlan` binds network, account, market, side, size, limit, time in force, reduce-only flag, slippage cap, required send metadata, unique cloid, creation time and expiry. Canonical JSON is SHA-256 hashed. Any field change invalidates confirmation.
+**Evidence boundary.** Text from web pages, files, other Bots or the user's own earlier messages is data. Only the user's approval phrase with the ticket id, after the ticket was shown, authorises a send.
 
-### Execution boundary
+## Files as the source of truth
 
-`execute-order` is the only call to `Exchange.order`. Before importing a signing key it verifies the plan hash, expiry, network, any configured notional ceiling, the declared trading account, current price drift, and Hyperliquid tick and lot precision. It then verifies that the signing address is a live Hyperliquid API wallet assigned to the planned account.
+Chat is where the desk talks; files are where it remembers.
 
-Immediately before the only send, an `O_EXCL` journal record under `HYPERGROK_STATE_DIR` reserves the plan hash. The directory must be private (`0700`); records are private (`0600`) and are never deleted automatically. This closes same-state-directory concurrency and retry races. Different machines must share a state directory or otherwise coordinate externally.
+- `desk.md` - what the desk is (network, account, level, Bots, chats, standing approvals).
+- `risk-limits.md` - what the user allows, versioned; only the user changes it.
+- `proposals/HG-*.md` - one file per trade idea, appended through its lifecycle; the ticket, the PASS, the approval, the send, the reconciliation, the review.
+- `journal/*.md` - the desk's diary, append-only.
+- `briefs/`, `research/`, `strategies/`, `data/`, `watch/` - working material.
 
-The call carries the plan cloid. Fee attribution metadata is attached on mainnet when every attribution gate passes and is omitted otherwise, so attribution eligibility never blocks a user's order. There is no retry loop. An exception after entering the SDK leaves the journal at `unknown` and must be reconciled by cloid.
+## Why seven roles
 
-## Grok team model
-
-Grok Build and Cursor Agent Plugin discovery loads `rules/`, `agents/` and `skills/`. The persistent rule makes the desk lead route work across six specialist roles. Grok Bot is a different surface: its Plugins screen provides service connectors and its public documentation does not provide arbitrary repository installation, this CLI as a tool, or programmatic sibling-Bot creation. `crew-bootstrap` therefore verifies native plugin agents where supported. A manually taught Grok Bot crew is instruction-only and cannot reach the execution gateway.
-
-All Bots for one Grok user share one cloud computer. Credentials are scoped by the Hyperliquid API-wallet permission, not by Bot identity.
-
-## Risk posture
-
-HyperGrok imposes no risk-per-trade or notional ceiling of its own. Hyperliquid
-publishes the real constraints per asset -- max leverage, tiered margin, lot
-precision and a minimum order value -- and `limits` surfaces them for the risk
-officer to reason from. Optional ceilings exist for users who want the CLI to
-refuse a fat-fingered figure, and are unset by default.
-
-Correctness gates are not configurable: hash matching, account matching,
-API-wallet authorisation, duplicate protection, drift checking and tick rules.
+Separating the person who wants the trade from the person who sizes it, from the person who sends it, from the person who reviews it is the oldest control on any desk. Bots make it cheap: each role has a narrow prompt, a narrow set of skills, and a narrow claim to authority. Agreement between them is not evidence; the Risk Manager recomputes and the Trade Reviewer reconstructs from the exchange record. The Strategist exists because users want to test ideas; it produces proposals like anyone else and never sends.
 
 ## Deliberate exclusions
 
-HyperGrok does not deposit, withdraw, transfer, bridge, claim rewards, schedule unattended orders, manage strategy runtimes or promise returns.
+No deposits, withdrawals, bridging, transfers, sub-account or vault funding, builder fees, staking, copy trading, unattended sending, strategies or return claims. Each exclusion removes a way to lose money that has nothing to do with the user's trading idea.
+
+## Other runtimes
+
+Grok Build, Cursor and Claude Code read `agents/`, `skills/` and `rules/` directly as a plugin (`.grok-plugin/plugin.json`, `.cursor-plugin/plugin.json`, `plugin.json`). The roles become subagents or labelled passes; the approval model is unchanged.

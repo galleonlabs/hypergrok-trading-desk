@@ -23,7 +23,7 @@ from .config import (
     DeskConfig,
 )
 from .journal import Attempt, JournalError
-from .plans import ADDRESS_RE, OrderPlan, PlanError, load_plan, save_plan
+from .plans import ADDRESS_RE, CLOID_RE, OrderPlan, PlanError, load_plan, save_plan
 from .risk import RiskError, size_for_stop
 
 
@@ -71,6 +71,25 @@ def _account(args: argparse.Namespace) -> None:
             "network": config.network,
             "observed_at": datetime.now(UTC).isoformat(),
             "source": f"{config.api_url}/info",
+        }
+    )
+
+
+def _order_status(args: argparse.Namespace) -> None:
+    config = DeskConfig.from_env()
+    account = _require_address(args.account, "Account")
+    cloid = args.cloid.lower()
+    if CLOID_RE.fullmatch(cloid) is None:
+        raise PlanError("cloid must be a 128-bit hexadecimal string")
+    status = _info(config.api_url, "orderStatus", user=account, oid=cloid)
+    _print(
+        {
+            "account": account,
+            "cloid": cloid,
+            "network": config.network,
+            "observed_at": datetime.now(UTC).isoformat(),
+            "source": f"{config.api_url}/info",
+            "status": status,
         }
     )
 
@@ -187,7 +206,6 @@ def _plan(args: argparse.Namespace) -> None:
             "plan": str(Path(args.out)),
             "sha256": digest,
             "notional_usd": plan.notional,
-            "builder_fee": "1 bp of filled notional, paid to Galleon",
             "next": f"Review, then execute with --confirm {digest} --execute",
         }
     )
@@ -256,6 +274,8 @@ def _execute(args: argparse.Namespace) -> None:
         raise PlanError("Plan network differs from current configuration")
     if plan.notional > config.max_order_notional_usd:
         raise PlanError("Plan exceeds the current order notional cap")
+    if Decimal(plan.max_slippage_bps) > config.max_slippage_bps:
+        raise PlanError("Plan slippage cap exceeds the current configured cap")
     account_address = os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "").lower()
     if account_address != plan.account.lower():
         raise PlanError("HYPERLIQUID_ACCOUNT_ADDRESS does not match the approved plan account")
@@ -292,7 +312,12 @@ def _execute(args: argparse.Namespace) -> None:
     if not isinstance(role, dict) or role.get("role") != "agent" or str(role_user).lower() != plan.account.lower():
         raise PlanError("Signing wallet is not an authorised API wallet for the approved plan account")
 
-    exchange = Exchange(wallet, config.api_url, account_address=plan.account)
+    exchange = Exchange(
+        wallet,
+        config.api_url,
+        account_address=plan.account,
+        timeout=float(config.http_timeout_seconds),
+    )
     exchange.set_expires_after(int(datetime.fromisoformat(plan.expires_at).timestamp() * 1000))
     attempt = Attempt.acquire(
         config.state_dir,
@@ -323,7 +348,7 @@ def _execute(args: argparse.Namespace) -> None:
                 "Submission result and journal state are unknown. Do not retry. Reconcile the cloid first."
             ) from journal_exc
         raise RuntimeError(
-            "Submission result is unknown. Do not retry. Reconcile the cloid in account history first."
+            "Submission result is unknown. Do not retry. Run hypergrok order-status for the cloid first."
         ) from exc
     effect = _order_effect(response)
     attempt.transition(effect)
@@ -340,7 +365,9 @@ def _execute(args: argparse.Namespace) -> None:
     if effect == "rejected":
         raise PlanError("Hyperliquid rejected the order; inspect the response and create a new plan if needed")
     if effect == "unknown":
-        raise RuntimeError("Submission response is unrecognised. Do not retry. Reconcile the cloid first.")
+        raise RuntimeError(
+            "Submission response is unrecognised. Do not retry. Run hypergrok order-status for the cloid first."
+        )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -359,6 +386,13 @@ def parser() -> argparse.ArgumentParser:
     account = commands.add_parser("account", help="Read account positions and orders")
     account.add_argument("address")
     account.set_defaults(func=_account)
+
+    order_status = commands.add_parser(
+        "order-status", help="Reconcile one order by client order ID without signing"
+    )
+    order_status.add_argument("--account", required=True)
+    order_status.add_argument("--cloid", required=True)
+    order_status.set_defaults(func=_order_status)
 
     llama = commands.add_parser("defillama", help="Read a DefiLlama protocol")
     llama.add_argument("slug")

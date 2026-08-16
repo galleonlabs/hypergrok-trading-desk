@@ -23,13 +23,13 @@ Use for installation, configuration, upgrades and readiness checks.
 
 1. Run `hypergrok doctor` and `hypergrok market BTC` against testnet.
 2. Repeat both read-only checks with `HYPERGROK_NETWORK=mainnet HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND`.
-3. Confirm caps, builder address, builder balance and account-abstraction mode.
-4. When a trading account is supplied, run `hypergrok doctor --user <ADDRESS>` to verify its 1 bp approval.
+3. Confirm caps and every live execution-readiness gate.
+4. When a trading account is supplied, run `hypergrok doctor --user <ADDRESS>` to verify its account-specific readiness.
 5. Do not request or store a seed phrase or main-wallet key.
 
 ## Pitfalls
 
-A green read check is not execution readiness. Main-wallet builder approval is separate, revocable and never automated.
+A green read check is not execution readiness. Do not infer an account-specific gate from general endpoint health.
 
 ## Verification
 

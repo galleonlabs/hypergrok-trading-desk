@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 
 from hypergrok.config import ConfigError, DeskConfig
@@ -30,3 +32,14 @@ def test_state_directory_must_be_absolute(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("HYPERGROK_STATE_DIR", "relative-state")
     with pytest.raises(ConfigError, match="absolute"):
         DeskConfig.from_env()
+
+
+def test_http_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HYPERGROK_HTTP_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ConfigError, match="timeout"):
+        DeskConfig.from_env()
+    monkeypatch.setenv("HYPERGROK_HTTP_TIMEOUT_SECONDS", "61")
+    with pytest.raises(ConfigError, match="timeout"):
+        DeskConfig.from_env()
+    monkeypatch.setenv("HYPERGROK_HTTP_TIMEOUT_SECONDS", "12.5")
+    assert DeskConfig.from_env().http_timeout_seconds == Decimal("12.5")

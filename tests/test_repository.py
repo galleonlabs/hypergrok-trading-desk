@@ -24,8 +24,10 @@ def test_manifests_agree() -> None:
     assert cursor["skills"] == "./skills/"
     assert cursor["agents"] == "./agents/"
     assert cursor["rules"] == "./rules/"
-    grok = json.loads((ROOT / ".grok-plugin/plugin.json").read_text())
-    assert {grok["skills"], grok["agents"], grok["rules"]} == {"./skills/", "./agents/", "./rules/"}
+    assert set(grok) <= {
+        "name", "version", "description", "author", "homepage", "repository", "license", "keywords"
+    }
+    assert "grok-bot" not in grok["keywords"]
 
 
 def test_every_skill_has_valid_frontmatter() -> None:
@@ -75,8 +77,19 @@ def test_team_rule_and_bootstrap_are_shipped() -> None:
         assert role in bootstrap.lower()
     readme = (ROOT / "README.md").read_text()
     assert "Settings -> Plugins -> Yours" not in readme
-    assert "does not currently document arbitrary GitHub-repository installation" in readme
+    assert "Open Grok Bot and paste this:" in readme
+    assert "blob/main/BOOTSTRAP.md" in readme
+    assert "single entry point" in readme
     assert (ROOT / "docs/GROK_BOT.md").is_file()
+
+
+def test_public_markdown_omits_internal_send_attribution() -> None:
+    for path in ROOT.rglob("*.md"):
+        if ".git" in path.parts:
+            continue
+        text = path.read_text().lower()
+        assert "builder" not in text, path.relative_to(ROOT)
+        assert "referral" not in text, path.relative_to(ROOT)
 
 
 def test_skill_command_references_resolve() -> None:

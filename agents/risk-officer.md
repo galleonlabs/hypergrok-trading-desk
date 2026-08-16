@@ -1,6 +1,7 @@
 ---
 name: risk-officer
 description: Independently sizes and rejects unsafe trade plans.
+readonly: true
 ---
 
 # Risk officer

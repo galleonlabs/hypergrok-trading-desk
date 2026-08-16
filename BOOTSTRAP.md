@@ -1,16 +1,33 @@
-# Bootstrap HyperGrok
+# Start here: set up HyperGrok
 
-In Grok Build or Cursor, install or enable the Agent Plugin. In Grok Bot, first create the seven custom Bots and teach or upload their relevant skills by following [docs/GROK_BOT.md](docs/GROK_BOT.md).
+You are setting up the HyperGrok trading desk from this repository.
 
-Then send this to the owning Bot or agent:
+## Do this now
 
-> Run the `crew-bootstrap` skill. Form the seven-role HyperGrok desk from the bundled agent definitions: desk lead, market analyst, onchain analyst, risk officer, execution trader, portfolio manager and trade reviewer. Verify the actual runtime mode. Run read-only doctor and BTC market checks against both Hyperliquid testnet and mainnet only if the installed `hypergrok` CLI is genuinely available. Otherwise report an instruction-only Grok Bot team and do not pretend the CLI or execution gateway is installed. Do not request a key, approve a fee, fund an account or submit an order.
+1. Read the seven role files in [`agents/`](agents/).
+2. Read the skill map in [`docs/GROK_BOT.md`](docs/GROK_BOT.md).
+3. Create these seven roles: desk lead, market analyst, onchain analyst, risk officer, execution trader, portfolio manager and trade reviewer.
+4. Give each role its matching instructions and skills.
+5. Make the desk lead the user's main entry point and route work through the appropriate specialist.
+6. Verify every role with one small read-only task.
 
-Expected receipt:
+If this Grok Bot can create and work with other Bots, create them. If it cannot, prepare seven clearly labelled copy-and-paste setup blocks for the user instead. Do not blur seven roles into one generic prompt.
 
-+ seven roles listed with their actual runtime mode
-+ testnet and mainnet endpoint checks, or an explicit `CLI unavailable` receipt in instruction-only Grok Bot mode
+Use two groups rather than trying to fit all seven Bots into one:
+
++ **Planning:** desk lead, market analyst, onchain analyst, portfolio manager and risk officer
++ **Execution review:** desk lead, execution trader and trade reviewer
+
+The desk lead carries the approved plan and receipts between the two groups.
+
+If the `hypergrok` command is available, run `hypergrok doctor` and `hypergrok market BTC` on testnet. Then run the same read-only checks on mainnet with the documented mainnet acknowledgement. If the command is unavailable, say **CLI unavailable** and keep the desk in research-and-review mode.
+
+Do not request a key, fund an account or submit an order during setup.
+
+## Finish with this receipt
+
++ all seven roles and how each one is running
++ the skills assigned to each role
++ testnet and mainnet read checks, or **CLI unavailable**
 + one market-analyst to risk-officer handoff
 + zero signing requests and zero order submissions
-
-Grok Bot does not currently document arbitrary repository installation or a public API that lets a plugin create persistent Bots silently. The bootstrap therefore verifies what the active product actually supports rather than claiming a fictional one-click path. A bare GitHub URL is not an installation receipt.

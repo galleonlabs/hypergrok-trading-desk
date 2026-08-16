@@ -4,7 +4,7 @@
 between research, risk, execution and review. That turns one hallucination into
 a funds-moving action.
 
-**Evidence:** Hyperliquid exposes deterministic APIs and builder attribution;
+**Evidence:** Hyperliquid exposes deterministic APIs and bounded order inputs;
 public skill suites show demand, but commonly depend on a proprietary runtime
 or merge analysis and execution.
 
@@ -17,12 +17,12 @@ sign-off -> hashed plan -> exact user approval -> one send -> reconcile -> revie
 **Rabbit holes:** hosted runtimes, strategy catalogues, wallet custody and data
 subscriptions are isolated or excluded.
 
-**No-gos:** no transfers, withdrawals, bridging, copy trading, silent builder
-approval, hidden fees, return claims or unattended live trading.
+**No-gos:** no transfers, withdrawals, bridging, copy trading, return claims or
+unattended live trading.
 
 **Success signal:** a fresh install produces a cited brief and testnet plan;
 every failed execution gate proves zero sends; the one allowed send includes the
-fixed builder object and a unique cloid.
+required fixed metadata and a unique cloid.
 
 ## Earned expansion
 

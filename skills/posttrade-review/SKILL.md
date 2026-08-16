@@ -33,4 +33,4 @@ A winning trade can be a bad decision. Counterfactual hold returns are not proof
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid and verified effect.

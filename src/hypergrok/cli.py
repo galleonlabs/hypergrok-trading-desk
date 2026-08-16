@@ -15,13 +15,15 @@ from pathlib import Path
 from typing import Any
 
 from .api import ApiError, coingecko_coin, defillama_protocol, request_json
-from .builder import BuilderError, check_builder, inspect_builder
+from .builder import BuilderError, inspect_builder, resolve_attribution
 from .config import (
     GALLEON_BUILDER_ADDRESS,
     GALLEON_BUILDER_FEE_TENTHS_BP,
+    HYPERLIQUID_MIN_ORDER_VALUE_USD,
     ConfigError,
     DeskConfig,
 )
+from .env import find_dotenv, load_dotenv
 from .journal import Attempt, JournalError
 from .plans import ADDRESS_RE, CLOID_RE, OrderPlan, PlanError, load_plan, save_plan
 from .risk import RiskError, size_for_stop
@@ -75,6 +77,80 @@ def _account(args: argparse.Namespace) -> None:
     )
 
 
+def _limits(args: argparse.Namespace) -> None:
+    """Report the constraints Hyperliquid itself enforces for one market.
+
+    These are the real limits a risk officer should reason from. HyperGrok adds
+    no ceiling of its own unless the user opts into one.
+    """
+    config = DeskConfig.from_env()
+    meta = _info(config.api_url, "meta")
+    universe = meta.get("universe") if isinstance(meta, dict) else None
+    asset = next(
+        (
+            row
+            for row in universe or []
+            if isinstance(row, dict) and str(row.get("name", "")).upper() == args.coin.upper()
+        ),
+        None,
+    )
+    if asset is None:
+        raise ApiError(f"Unknown perp market: {args.coin}")
+
+    tiers: list[dict[str, Any]] = []
+    for entry in meta.get("marginTables") or []:
+        if isinstance(entry, list) and len(entry) == 2 and entry[0] == asset.get("marginTableId"):
+            table = entry[1] if isinstance(entry[1], dict) else {}
+            for tier in table.get("marginTiers") or []:
+                tiers.append(
+                    {
+                        "lower_bound_usd": tier.get("lowerBound"),
+                        "max_leverage": tier.get("maxLeverage"),
+                    }
+                )
+
+    max_leverage = asset.get("maxLeverage")
+    report: dict[str, Any] = {
+        "coin": asset.get("name"),
+        "network": config.network,
+        "observed_at": datetime.now(UTC).isoformat(),
+        "source": f"{config.api_url}/info",
+        "exchange_limits": {
+            "max_leverage": max_leverage,
+            "size_decimals": asset.get("szDecimals"),
+            "min_order_value_usd": str(HYPERLIQUID_MIN_ORDER_VALUE_USD),
+            "margin_tiers": tiers,
+            "note": (
+                "Leverage above a tier's lower bound is capped at that tier's "
+                "maximum. Liquidation is governed by Hyperliquid's margin engine."
+            ),
+        },
+        "hypergrok_ceilings": {
+            "max_order_notional_usd": config.max_order_notional_usd,
+            "max_risk_pct": config.max_risk_pct,
+            "note": (
+                "null means HyperGrok imposes no ceiling. These are opt-in "
+                "guardrails, not house rules; sizing judgment belongs to the "
+                "risk officer working from the exchange limits above."
+            ),
+        },
+    }
+    if args.equity is not None:
+        try:
+            equity = Decimal(args.equity)
+        except (InvalidOperation, ValueError) as exc:
+            raise RiskError("--equity must be a decimal number") from exc
+        if equity <= 0:
+            raise RiskError("--equity must be positive")
+        if isinstance(max_leverage, int):
+            report["for_your_equity"] = {
+                "equity_usd": str(equity),
+                "max_position_notional_usd": str(equity * Decimal(max_leverage)),
+                "min_order_value_usd": str(HYPERLIQUID_MIN_ORDER_VALUE_USD),
+            }
+    _print(report)
+
+
 def _order_status(args: argparse.Namespace) -> None:
     config = DeskConfig.from_env()
     account = _require_address(args.account, "Account")
@@ -102,17 +178,26 @@ def _doctor(args: argparse.Namespace) -> None:
         raise ApiError("Hyperliquid allMids returned no markets")
     status = inspect_builder(user, lambda kind, **kw: _info(config.api_url, kind, **kw))
     user_supplied = user is not None
-    execution_ready = user_supplied and status.eligible
-    if not status.balance_eligible:
-        next_action = "Fund the builder to at least 100 USDC perps account value."
-    elif not status.standard_mode:
-        next_action = "Put the builder account in standard account-abstraction mode."
-    elif not user_supplied:
-        next_action = "Run doctor --user 0x... to verify that account's builder approval."
-    elif status.approval_sufficient is not True:
-        next_action = "Approve the 1 bp builder fee from the user's main wallet."
+    attribution = (
+        resolve_attribution(
+            config.network, user, lambda kind, **kw: _info(config.api_url, kind, **kw)
+        )
+        if user is not None
+        else None
+    )
+    account_set = bool(os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS"))
+    key_set = bool(os.getenv("HYPERLIQUID_PRIVATE_KEY"))
+    # Execution readiness is about the user's own setup. Builder attribution is
+    # Galleon's revenue concern and never gates whether an order can be sent.
+    execution_ready = user_supplied and account_set and key_set
+    if not user_supplied:
+        next_action = "Run: hypergrok doctor --user 0xYourTradingAccount"
+    elif not account_set:
+        next_action = "Set HYPERLIQUID_ACCOUNT_ADDRESS to your trading account (see .env.example)."
+    elif not key_set:
+        next_action = "Set HYPERLIQUID_PRIVATE_KEY to a scoped Hyperliquid API wallet key, never your seed phrase."
     else:
-        next_action = "Readiness gates pass. Create and review a short-lived order plan."
+        next_action = "Setup looks complete. Run: hypergrok quickstart"
     _print(
         {
             "status": "execution-ready" if execution_ready else "read-only-ready",
@@ -132,6 +217,13 @@ def _doctor(args: argparse.Namespace) -> None:
                 "user": user,
                 "user_max_fee_tenths_bp": status.max_fee_tenths_bp,
                 "user_approval_sufficient": status.approval_sufficient,
+                "attribution_active": attribution.active if attribution else None,
+                "attribution_reason": attribution.reason if attribution else None,
+                "note": (
+                    "Builder attribution is how HyperGrok is funded. It never gates "
+                    "your ability to trade: when it is inactive your order is sent "
+                    "without the 1 bp fee. Nothing here asks you to send funds anywhere."
+                ),
             },
             "execution_ready": execution_ready,
             "next_action": next_action,
@@ -146,11 +238,22 @@ def _health(args: argparse.Namespace) -> None:
 def _builder_status(args: argparse.Namespace) -> None:
     config = DeskConfig.from_env()
     user = _require_address(args.user, "User")
-    status = check_builder(user, lambda kind, **kw: _info(config.api_url, kind, **kw))
-    _print(asdict(status) | {"eligible": status.eligible, "builder": GALLEON_BUILDER_ADDRESS})
+    info = lambda kind, **kw: _info(config.api_url, kind, **kw)  # noqa: E731
+    status = inspect_builder(user, info)
+    attribution = resolve_attribution(config.network, user, info)
+    _print(
+        asdict(status)
+        | {
+            "eligible": status.eligible,
+            "builder": GALLEON_BUILDER_ADDRESS,
+            "attribution_active": attribution.active,
+            "attribution_reason": attribution.reason,
+        }
+    )
 
 
 def _size(args: argparse.Namespace) -> None:
+    config = DeskConfig.from_env()
     try:
         equity = Decimal(args.equity)
         entry = Decimal(args.entry)
@@ -165,14 +268,18 @@ def _size(args: argparse.Namespace) -> None:
         stop=stop,
         risk_pct=risk_pct,
         max_notional=max_notional,
+        max_risk_pct=config.max_risk_pct,
     )
-    _print(asdict(result))
+    _print(asdict(result) | {"max_risk_pct": config.max_risk_pct})
 
 
 def _plan(args: argparse.Namespace) -> None:
     config = DeskConfig.from_env()
-    if not 1 <= args.expires_minutes <= 30:
-        raise PlanError("--expires-minutes must be between 1 and 30")
+    if not 1 <= args.expires_minutes <= config.max_plan_minutes:
+        raise PlanError(
+            f"--expires-minutes must be between 1 and {config.max_plan_minutes}. "
+            "Raise HYPERGROK_MAX_PLAN_MINUTES to allow a longer plan."
+        )
     try:
         size = Decimal(args.size)
         limit_px = Decimal(args.limit_px)
@@ -196,17 +303,31 @@ def _plan(args: argparse.Namespace) -> None:
         created_at=now.isoformat(),
         expires_at=(now + timedelta(minutes=args.expires_minutes)).isoformat(),
     )
-    if plan.notional > config.max_order_notional_usd:
+    if config.max_order_notional_usd is not None and plan.notional > config.max_order_notional_usd:
         raise PlanError(
-            f"Order notional {plan.notional} exceeds cap {config.max_order_notional_usd}"
+            f"Order notional {plan.notional} exceeds your configured ceiling "
+            f"{config.max_order_notional_usd}. Raise or unset HYPERGROK_MAX_ORDER_NOTIONAL_USD."
+        )
+    if plan.notional < HYPERLIQUID_MIN_ORDER_VALUE_USD:
+        raise PlanError(
+            f"Order notional {plan.notional} is below Hyperliquid's "
+            f"{HYPERLIQUID_MIN_ORDER_VALUE_USD} USD minimum order value"
         )
     digest = save_plan(plan, Path(args.out))
+    out_path = Path(args.out)
     _print(
         {
-            "plan": str(Path(args.out)),
+            "plan": str(out_path),
             "sha256": digest,
             "notional_usd": plan.notional,
-            "next": f"Review, then execute with --confirm {digest} --execute",
+            "expires_at": plan.expires_at,
+            "review_first": (
+                f"Open {out_path} and check account, network, side, size, limit price and expiry. "
+                "The hash below is what you are approving; it only matches this exact file."
+            ),
+            "next_command": (
+                f"hypergrok execute-order --plan {out_path} --confirm {digest} --execute"
+            ),
         }
     )
 
@@ -272,14 +393,16 @@ def _execute(args: argparse.Namespace) -> None:
         raise PlanError("Confirmation does not exactly match the plan hash")
     if plan.network != config.network:
         raise PlanError("Plan network differs from current configuration")
-    if plan.notional > config.max_order_notional_usd:
+    if config.max_order_notional_usd is not None and plan.notional > config.max_order_notional_usd:
         raise PlanError("Plan exceeds the current order notional cap")
     if Decimal(plan.max_slippage_bps) > config.max_slippage_bps:
         raise PlanError("Plan slippage cap exceeds the current configured cap")
     account_address = os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "").lower()
     if account_address != plan.account.lower():
         raise PlanError("HYPERLIQUID_ACCOUNT_ADDRESS does not match the approved plan account")
-    check_builder(plan.account, lambda kind, **kw: _info(config.api_url, kind, **kw))
+    attribution = resolve_attribution(
+        plan.network, plan.account, lambda kind, **kw: _info(config.api_url, kind, **kw)
+    )
     mids = _info(config.api_url, "allMids")
     try:
         mid = Decimal(str(mids[plan.coin]))
@@ -329,6 +452,12 @@ def _execute(args: argparse.Namespace) -> None:
     if _seen_cloid(config.api_url, plan.account, plan.cloid):
         raise PlanError("This cloid already exists; refusing duplicate submission")
     attempt.transition("sending")
+    order_kwargs: dict[str, Any] = {
+        "reduce_only": plan.reduce_only,
+        "cloid": Cloid.from_str(plan.cloid),
+    }
+    if attribution.payload is not None:
+        order_kwargs["builder"] = attribution.payload
     try:
         response = exchange.order(
             plan.coin,
@@ -336,9 +465,7 @@ def _execute(args: argparse.Namespace) -> None:
             float(Decimal(plan.size)),
             float(limit_px),
             {"limit": {"tif": plan.tif}},
-            reduce_only=plan.reduce_only,
-            cloid=Cloid.from_str(plan.cloid),
-            builder={"b": GALLEON_BUILDER_ADDRESS, "f": GALLEON_BUILDER_FEE_TENTHS_BP},
+            **order_kwargs,
         )
     except Exception as exc:
         try:
@@ -358,7 +485,8 @@ def _execute(args: argparse.Namespace) -> None:
             "cloid": plan.cloid,
             "network": plan.network,
             "effect": effect,
-            "builder": {"b": GALLEON_BUILDER_ADDRESS, "f": GALLEON_BUILDER_FEE_TENTHS_BP},
+            "builder": attribution.payload,
+            "builder_attribution": attribution.reason,
             "response": response,
         }
     )
@@ -370,9 +498,138 @@ def _execute(args: argparse.Namespace) -> None:
         )
 
 
+def _quickstart(args: argparse.Namespace) -> None:
+    """Plain-English readiness check. Prints what to do next, never a secret."""
+    del args
+    lines: list[str] = []
+    todo: list[str] = []
+
+    def check(ok: bool | None, label: str, fix: str | None = None) -> None:
+        mark = {True: "[ok]", False: "[--]", None: "[??]"}[ok]
+        lines.append(f"  {mark} {label}")
+        if ok is not True and fix:
+            todo.append(fix)
+
+    try:
+        config = DeskConfig.from_env()
+    except ConfigError as exc:
+        print("HyperGrok setup\n")
+        print(f"  [--] Configuration is invalid: {exc}")
+        print("\nFix that first, then run: hypergrok quickstart")
+        return
+
+    dotenv = find_dotenv()
+    account = os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "")
+    key_present = bool(os.getenv("HYPERLIQUID_PRIVATE_KEY"))
+
+    print("HyperGrok setup\n")
+    print(f"Network: {config.network}  ({config.api_url})")
+    if config.network == "testnet":
+        print("Testnet is the safe default. No real money is at risk here.\n")
+    else:
+        print("MAINNET. Orders here use real funds.\n")
+
+    none = "not set (no ceiling)"
+    lines.append("Optional guardrails  (unset by default -- HyperGrok imposes no risk ceiling)")
+    for label, value, var in (
+        ("max risk per trade",
+         f"{config.max_risk_pct}%" if config.max_risk_pct is not None else none,
+         "HYPERGROK_MAX_RISK_PCT"),
+        ("max order notional",
+         f"{config.max_order_notional_usd} USD" if config.max_order_notional_usd is not None else none,
+         "HYPERGROK_MAX_ORDER_NOTIONAL_USD"),
+        ("price drift tolerance", f"{config.max_slippage_bps} bps", "HYPERGROK_MAX_SLIPPAGE_BPS"),
+        ("plan lifetime", f"{config.max_plan_minutes} min", "HYPERGROK_MAX_PLAN_MINUTES"),
+    ):
+        lines.append(f"       {label:<22} {value:<22} {var}")
+    lines.append("       Real limits come from the exchange:  hypergrok limits BTC")
+    lines.append("")
+    lines.append("Configuration")
+    check(
+        dotenv is not None,
+        f"Config file: {dotenv}" if dotenv else "Config file: none found",
+        "Copy the template:  cp .env.example .env",
+    )
+
+    reachable: bool | None
+    try:
+        mids = _info(config.api_url, "allMids")
+        reachable = isinstance(mids, dict) and bool(mids)
+        markets = len(mids) if isinstance(mids, dict) else 0
+    except Exception:  # noqa: BLE001 - a readiness report should not crash
+        reachable, markets = False, 0
+    check(
+        reachable,
+        f"Hyperliquid reachable ({markets} markets)" if reachable else "Hyperliquid unreachable",
+        "Check your internet connection, then re-run.",
+    )
+
+    lines.append("")
+    lines.append("Trading account (only needed to place orders)")
+    valid_account = bool(account) and ADDRESS_RE.fullmatch(account) is not None
+    check(
+        valid_account if account else False,
+        f"HYPERLIQUID_ACCOUNT_ADDRESS = {account}" if account else "HYPERLIQUID_ACCOUNT_ADDRESS not set",
+        "Set HYPERLIQUID_ACCOUNT_ADDRESS in .env to your Hyperliquid trading account.",
+    )
+    check(
+        key_present,
+        "HYPERLIQUID_PRIVATE_KEY is set" if key_present else "HYPERLIQUID_PRIVATE_KEY not set",
+        "Create an API wallet at app.hyperliquid.xyz (Settings -> API), then put its key in .env. "
+        "Never use your seed phrase or main wallet key.",
+    )
+
+    wallet_ok: bool | None = None
+    if key_present and valid_account:
+        try:
+            from eth_account import Account
+
+            address = Account.from_key(os.environ["HYPERLIQUID_PRIVATE_KEY"]).address
+            role = _info(config.api_url, "userRole", user=address)
+            role_user = role.get("data", {}).get("user") if isinstance(role, dict) else None
+            wallet_ok = (
+                isinstance(role, dict)
+                and role.get("role") == "agent"
+                and str(role_user).lower() == account.lower()
+            )
+        except Exception:  # noqa: BLE001
+            wallet_ok = None
+        check(
+            wallet_ok,
+            "API wallet is authorised for that account"
+            if wallet_ok
+            else "API wallet does not match that account",
+            "Approve the API wallet for this trading account at app.hyperliquid.xyz.",
+        )
+
+    print("\n".join(lines))
+
+    ready = bool(reachable)
+    can_trade = ready and valid_account and key_present and wallet_ok is True
+    print()
+    if can_trade:
+        print("You can research, plan and place orders.")
+    elif ready:
+        print("You can research and plan orders. Placing them needs the account steps above.")
+    else:
+        print("Not ready yet.")
+
+    if todo:
+        print("\nNext steps:")
+        for index, item in enumerate(todo, 1):
+            print(f"  {index}. {item}")
+    else:
+        print("\nTry it:")
+        print("  hypergrok market BTC")
+        print("  hypergrok size --equity 1000 --entry 100 --stop 95 --risk-pct 0.5 --max-notional 200")
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="hypergrok", description="HyperGrok trading desk")
     commands = root.add_subparsers(dest="command", required=True)
+    commands.add_parser(
+        "quickstart", help="Plain-English setup check and what to do next. Start here."
+    ).set_defaults(func=_quickstart)
     commands.add_parser("health", help="Validate config and live builder balance").set_defaults(func=_health)
 
     doctor = commands.add_parser("doctor", help="Report read and execution readiness")
@@ -414,6 +671,13 @@ def parser() -> argparse.ArgumentParser:
     builder.add_argument("user")
     builder.set_defaults(func=_builder_status)
 
+    limits = commands.add_parser(
+        "limits", help="Report the limits Hyperliquid itself enforces for a market"
+    )
+    limits.add_argument("coin")
+    limits.add_argument("--equity", help="Optional: show max position notional for this equity")
+    limits.set_defaults(func=_limits)
+
     size = commands.add_parser("size", help="Size a position from a stop")
     for name in ("equity", "entry", "stop", "risk-pct", "max-notional"):
         size.add_argument("--" + name, required=True)
@@ -440,6 +704,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    load_dotenv()
     try:
         args = parser().parse_args(argv)
         args.func(args)

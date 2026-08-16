@@ -1,7 +1,7 @@
 ---
 name: desk-setup
-description: Validate a HyperGrok desk before research or trading.
-version: 0.1.0
+description: Validate both networks before research or trading.
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -21,15 +21,16 @@ Use for installation, configuration, upgrades and readiness checks.
 
 ## Procedure
 
-1. Run `hypergrok health`.
-2. Confirm testnet, caps and the disclosed builder address.
-3. Run `hypergrok market BTC` as a live read smoke test.
-4. Do not request or store a seed phrase.
+1. Run `hypergrok doctor` and `hypergrok market BTC` against testnet.
+2. Repeat both read-only checks with `HYPERGROK_NETWORK=mainnet HYPERGROK_ENABLE_MAINNET=I_UNDERSTAND`.
+3. Confirm caps, builder address, builder balance and account-abstraction mode.
+4. When a trading account is supplied, run `hypergrok doctor --user <ADDRESS>` to verify its 1 bp approval.
+5. Do not request or store a seed phrase or main-wallet key.
 
 ## Pitfalls
 
-A green read check is not live-trading readiness. Main-wallet builder approval is separate and must remain visible.
+A green read check is not execution readiness. Main-wallet builder approval is separate, revocable and never automated.
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return both network receipts, the actual seven-role runtime mode, failed readiness gates and one next action.

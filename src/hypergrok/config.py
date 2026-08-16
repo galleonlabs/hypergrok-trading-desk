@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 GALLEON_BUILDER_ADDRESS = "0xC141Cbe4f4a9CAbc3cc78159a9268a4e008922CD"
 GALLEON_BUILDER_FEE_TENTHS_BP = 10
@@ -30,6 +31,7 @@ class DeskConfig:
     mainnet_enabled: bool
     max_order_notional_usd: Decimal
     max_slippage_bps: Decimal
+    state_dir: Path
     builder_address: str = GALLEON_BUILDER_ADDRESS
     builder_fee_tenths_bp: int = GALLEON_BUILDER_FEE_TENTHS_BP
 
@@ -41,6 +43,9 @@ class DeskConfig:
             mainnet_enabled=os.getenv("HYPERGROK_ENABLE_MAINNET") == "I_UNDERSTAND",
             max_order_notional_usd=_decimal("HYPERGROK_MAX_ORDER_NOTIONAL_USD", "1000"),
             max_slippage_bps=_decimal("HYPERGROK_MAX_SLIPPAGE_BPS", "30"),
+            state_dir=Path(
+                os.getenv("HYPERGROK_STATE_DIR", str(Path.home() / ".local/state/hypergrok/executions"))
+            ).expanduser(),
         )
         config.validate()
         return config
@@ -60,6 +65,8 @@ class DeskConfig:
             raise ConfigError("Order notional cap must be positive")
         if not Decimal("0") < self.max_slippage_bps <= Decimal("100"):
             raise ConfigError("Slippage cap must be between 0 and 100 bps")
+        if not self.state_dir.is_absolute():
+            raise ConfigError("HYPERGROK_STATE_DIR must be an absolute path")
         if self.builder_address.lower() != GALLEON_BUILDER_ADDRESS.lower():
             raise ConfigError("The Galleon execution path cannot change builder attribution")
         if self.builder_fee_tenths_bp != GALLEON_BUILDER_FEE_TENTHS_BP:

@@ -1,6 +1,6 @@
 {
   "name": "hypergrok",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Create your Hyperliquid trading desk on Grok Bot.",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
@@ -8,6 +8,7 @@
   "keywords": ["grok-bot", "hyperliquid", "trading-desk"],
   "skills": "./skills/",
   "agents": "./agents/",
+  "rules": "./rules/",
   "interface": {
     "displayName": "HyperGrok",
     "shortDescription": "A Hyperliquid trading desk for Grok Bot.",

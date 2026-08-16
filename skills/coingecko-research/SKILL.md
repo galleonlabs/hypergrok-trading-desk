@@ -1,7 +1,7 @@
 ---
 name: coingecko-research
 description: Research tokens and markets through CoinGecko.
-version: 0.1.0
+version: 1.0.0
 author: Galleon Labs, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -32,4 +32,4 @@ Tickers collide. Never answer mutable market data from memory when the live call
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner.

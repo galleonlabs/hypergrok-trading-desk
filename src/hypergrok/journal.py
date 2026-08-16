@@ -68,6 +68,7 @@ class Attempt:
                 os.fsync(stream.fileno())
         except OSError as exc:
             raise JournalError(f"Could not persist execution reservation at {path}") from exc
+        _fsync_directory(state_dir)
         return cls(path=path, document=document)
 
     def transition(self, stage: str, **fields: Any) -> None:
@@ -96,6 +97,9 @@ class Attempt:
 
 
 def _secure_state_dir(path: Path) -> None:
+    existing_ancestor = path
+    while not existing_ancestor.exists():
+        existing_ancestor = existing_ancestor.parent
     try:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         details = path.lstat()
@@ -105,3 +109,21 @@ def _secure_state_dir(path: Path) -> None:
         raise JournalError(f"Execution state path is not a real directory: {path}")
     if details.st_mode & 0o077:
         raise JournalError(f"Execution state directory must have mode 700: {path}")
+    current = path
+    while current != existing_ancestor:
+        _fsync_directory(current)
+        _fsync_directory(current.parent)
+        current = current.parent
+
+
+def _fsync_directory(path: Path) -> None:
+    if not hasattr(os, "O_DIRECTORY"):
+        raise JournalError("Execution requires directory fsync support")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise JournalError(f"Could not make execution journal durable at {path}") from exc

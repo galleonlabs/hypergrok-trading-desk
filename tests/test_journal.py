@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -41,3 +42,12 @@ def test_journal_rejects_public_state_directory(tmp_path: Path) -> None:
     state.chmod(0o755)
     with pytest.raises(JournalError, match="mode 700"):
         acquire(state)
+
+
+def test_reservation_fsyncs_file_and_containing_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(os, "fsync", calls.append)
+    acquire(tmp_path / "state")
+    assert len(calls) >= 2

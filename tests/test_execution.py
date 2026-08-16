@@ -36,15 +36,17 @@ def make_plan(path: Path, network: str = "testnet") -> str:
 
 class FakeExchange:
     sends: ClassVar[list[tuple[tuple, dict]]] = []
+    timeouts: ClassVar[list[float | None]] = []
     response: ClassVar[dict] = {
         "status": "ok",
         "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 123}}]}},
     }
 
-    def __init__(self, wallet, base_url, account_address=None):
+    def __init__(self, wallet, base_url, account_address=None, timeout=None):
         self.wallet = wallet
         self.base_url = base_url
         self.account_address = account_address
+        self.timeouts.append(timeout)
 
     def set_expires_after(self, value):
         self.expires = value
@@ -133,6 +135,7 @@ def test_declared_account_must_match_plan(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_only_send_includes_builder_and_cloid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     FakeExchange.sends.clear()
+    FakeExchange.timeouts.clear()
     path = tmp_path / "p.json"
     digest = make_plan(path)
     monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
@@ -145,6 +148,7 @@ def test_only_send_includes_builder_and_cloid(tmp_path: Path, monkeypatch: pytes
     assert call_args[0] == "BTC"
     assert call_kwargs["cloid"] == "0x" + "a" * 32
     assert call_kwargs["builder"] == {"b": GALLEON_BUILDER_ADDRESS, "f": 10}
+    assert FakeExchange.timeouts == [15.0]
 
 
 def test_duplicate_cloid_means_zero_sends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,6 +193,19 @@ def test_price_drift_means_zero_sends(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(cli, "_info", drift_info)
     with pytest.raises(PlanError, match="drift"):
+        cli._execute(args(path, digest))
+    assert FakeExchange.sends == []
+
+
+def test_plan_cannot_weaken_current_slippage_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    FakeExchange.sends.clear()
+    path = tmp_path / "p.json"
+    digest = make_plan(path)
+    monkeypatch.setenv("HYPERGROK_MAX_SLIPPAGE_BPS", "10")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
+    with pytest.raises(PlanError, match="current configured cap"):
         cli._execute(args(path, digest))
     assert FakeExchange.sends == []
 

@@ -3,18 +3,8 @@
   "version": "1.0.0",
   "description": "Create a risk-bounded Hyperliquid trading desk in Grok Build.",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
+  "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
   "license": "MIT",
-  "keywords": ["grok-bot", "hyperliquid", "trading-desk"],
-  "skills": "./skills/",
-  "agents": "./agents/",
-  "rules": "./rules/",
-  "interface": {
-    "displayName": "HyperGrok",
-    "shortDescription": "A risk-bounded Hyperliquid desk for Grok Build.",
-    "developerName": "Galleon Labs",
-    "category": "Finance",
-    "capabilities": ["Interactive", "Read", "Write"],
-    "websiteURL": "https://galleonlabs.io"
-  }
+  "keywords": ["hyperliquid", "trading-desk", "agents"]
 }

@@ -25,11 +25,11 @@ Grok Bot / Cursor plugin
 
 ### Plan boundary
 
-An `OrderPlan` binds network, account, market, side, size, limit, time in force, reduce-only flag, slippage cap, Galleon builder address and fee, unique cloid, creation time and expiry. Canonical JSON is SHA-256 hashed. Any field change invalidates confirmation.
+An `OrderPlan` binds network, account, market, side, size, limit, time in force, reduce-only flag, slippage cap, required send metadata, unique cloid, creation time and expiry. Canonical JSON is SHA-256 hashed. Any field change invalidates confirmation.
 
 ### Execution boundary
 
-`execute-order` is the only call to `Exchange.order`. Before importing a signing key it verifies the plan hash, network, current notional cap, declared trading account, builder eligibility, user fee approval, duplicate cloid and current price drift. It then verifies that the signing address is a live Hyperliquid API wallet assigned to the planned account.
+`execute-order` is the only call to `Exchange.order`. Before importing a signing key it verifies the plan hash, network, current notional cap, declared trading account, all live execution-readiness gates, duplicate cloid and current price drift. It then verifies that the signing address is a live Hyperliquid API wallet assigned to the planned account.
 
 Immediately before the only send, an `O_EXCL` journal record under `HYPERGROK_STATE_DIR` reserves the plan hash. The directory must be private (`0700`); records are private (`0600`) and are never deleted automatically. This closes same-state-directory concurrency and retry races. Different machines must share a state directory or otherwise coordinate externally.
 
@@ -43,4 +43,4 @@ All Bots for one Grok user share one cloud computer. Credentials are scoped by t
 
 ## Deliberate exclusions
 
-HyperGrok does not deposit, withdraw, transfer, bridge, approve builder fees, claim rewards, schedule unattended orders, manage strategy runtimes or promise returns.
+HyperGrok does not deposit, withdraw, transfer, bridge, claim rewards, schedule unattended orders, manage strategy runtimes or promise returns.

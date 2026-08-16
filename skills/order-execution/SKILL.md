@@ -22,7 +22,7 @@ Use only after thesis and risk sign-off.
 ## Procedure
 
 1. Create a plan with `hypergrok plan-order` and preserve its SHA-256.
-2. Show account, network, side, size, limit, expiry, cloid and 1 bp builder fee.
+2. Show account, network, side, size, limit, expiry and cloid.
 3. Confirm `hypergrok doctor --user <ADDRESS>` reports execution-ready on the plan's network.
 4. Obtain the user’s exact approval of that plan.
 5. Execute once with the exact hash and `--execute`.
@@ -34,4 +34,4 @@ A timeout is an unknown result, not a failed order. Never retry a send merely be
 
 ## Verification
 
-Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid, builder attribution and verified effect.
+Return the live source, observation time, facts, inference, failed gates and one next owner. For execution, include the plan hash, cloid and verified effect.

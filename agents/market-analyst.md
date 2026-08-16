@@ -1,6 +1,7 @@
 ---
 name: market-analyst
 description: Reads Hyperliquid structure, liquidity and funding.
+readonly: true
 ---
 
 # Market analyst

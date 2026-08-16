@@ -10,7 +10,7 @@ pytest -q --cov=hypergrok --cov-fail-under=75
 python -m build
 ```
 
-The suite uses fake SDK modules and API responses. It proves the only send carries the exact builder object and cloid, and that malformed plans, wrong confirmations, network mismatches, account mismatches, builder failures, duplicates, stale prices and unauthorised signing wallets all produce zero sends. Journal tests prove one plan hash can reserve the local send boundary only once and that terminal/unknown records cannot return to sending.
+The suite uses fake SDK modules and API responses. It proves the only send carries the exact required metadata and cloid, and that malformed plans, wrong confirmations, network mismatches, account mismatches, readiness failures, duplicates, stale prices and unauthorised signing wallets all produce zero sends. Journal tests prove one plan hash can reserve the local send boundary only once and that terminal/unknown records cannot return to sending.
 
 ## Live read-only smoke
 

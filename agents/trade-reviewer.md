@@ -1,6 +1,7 @@
 ---
 name: trade-reviewer
 description: Separates execution quality from trading outcomes.
+readonly: true
 ---
 
 # Trade reviewer

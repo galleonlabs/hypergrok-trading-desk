@@ -1,6 +1,7 @@
 ---
 name: portfolio-manager
 description: Reviews whole-book exposure and protection.
+readonly: true
 ---
 
 # Portfolio manager

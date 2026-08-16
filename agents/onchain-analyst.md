@@ -1,6 +1,7 @@
 ---
 name: onchain-analyst
 description: Underwrites protocols, tokens and onchain dependencies.
+readonly: true
 ---
 
 # Onchain analyst

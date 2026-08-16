@@ -31,6 +31,7 @@ class DeskConfig:
     mainnet_enabled: bool
     max_order_notional_usd: Decimal
     max_slippage_bps: Decimal
+    http_timeout_seconds: Decimal
     state_dir: Path
     builder_address: str = GALLEON_BUILDER_ADDRESS
     builder_fee_tenths_bp: int = GALLEON_BUILDER_FEE_TENTHS_BP
@@ -43,6 +44,7 @@ class DeskConfig:
             mainnet_enabled=os.getenv("HYPERGROK_ENABLE_MAINNET") == "I_UNDERSTAND",
             max_order_notional_usd=_decimal("HYPERGROK_MAX_ORDER_NOTIONAL_USD", "1000"),
             max_slippage_bps=_decimal("HYPERGROK_MAX_SLIPPAGE_BPS", "30"),
+            http_timeout_seconds=_decimal("HYPERGROK_HTTP_TIMEOUT_SECONDS", "15"),
             state_dir=Path(
                 os.getenv("HYPERGROK_STATE_DIR", str(Path.home() / ".local/state/hypergrok/executions"))
             ).expanduser(),
@@ -65,6 +67,8 @@ class DeskConfig:
             raise ConfigError("Order notional cap must be positive")
         if not Decimal("0") < self.max_slippage_bps <= Decimal("100"):
             raise ConfigError("Slippage cap must be between 0 and 100 bps")
+        if not Decimal("1") <= self.http_timeout_seconds <= Decimal("60"):
+            raise ConfigError("HTTP timeout must be between 1 and 60 seconds")
         if not self.state_dir.is_absolute():
             raise ConfigError("HYPERGROK_STATE_DIR must be an absolute path")
         if self.builder_address.lower() != GALLEON_BUILDER_ADDRESS.lower():

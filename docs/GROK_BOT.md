@@ -1,14 +1,8 @@
-# Grok Bot setup
+# Grok Bot role map
 
-Grok Bot and Grok Build are different products. This repository is directly packageable as an Agent Plugin for Grok Build and Cursor. Grok Bot's public documentation does not currently provide an arbitrary GitHub-repository installer, and its Plugins screen primarily connects services. Do not treat a fetched README or repository URL as proof of installation.
+Start by giving Grok Bot [`BOOTSTRAP.md`](../BOOTSTRAP.md). That file tells it what to create, what to verify and what receipt to return.
 
-## Create the desk manually
-
-1. Open Grok Bot's **Bots** area and create seven named Bots: desk lead, market analyst, onchain analyst, risk officer, execution trader, portfolio manager and trade reviewer.
-2. Copy the matching file from [`agents/`](../agents/) into each Bot's instructions.
-3. Use Grok Bot's documented skill creation routes to teach, paste or upload the relevant [`skills/*/SKILL.md`](../skills/) files. Skills can be created conversationally, from written instructions, by file upload or with **Teach a task**.
-4. Give the desk lead the prompt in [`BOOTSTRAP.md`](../BOOTSTRAP.md). If the product exposes Bot collaboration, verify each named Bot before delegating. If it does not, run explicit role-separated passes and say so.
-5. Treat this as an instruction-only research and review team. Grok Bot's public integration surface does not install or expose HyperGrok's local Python CLI, so this mode cannot run `doctor`, query through the CLI or submit an order.
+If Grok can create the seven Bots itself, let it. If it asks you to do that part, create the seven named Bots and use the files below for each profile. Skills can be taught conversationally, pasted as written instructions or uploaded as files.
 
 | Bot | Role instructions | Skills to teach or upload |
 | --- | --- | --- |
@@ -20,13 +14,9 @@ Grok Bot and Grok Build are different products. This repository is directly pack
 | Portfolio manager | `agents/portfolio-manager.md` | `portfolio-control` |
 | Trade reviewer | `agents/trade-reviewer.md` | `posttrade-review`, `incident-response` |
 
-## What is not automatic
+## Setup boundary
 
-+ A bare repository URL does not install this package in Grok Bot.
-+ HyperGrok cannot silently create persistent sibling Bots through a documented public API.
-+ The manual Grok Bot team cannot access the guarded execution gateway without a separately documented tool integration, which this repository does not ship.
-+ A Bot name is not a credential boundary. Grok Bots for one user share a cloud computer, files and sign-ins.
-+ Creating the crew does not approve builder fees, fund an account or enable order execution.
+The setup is complete only when Grok returns the receipt requested in [`BOOTSTRAP.md`](../BOOTSTRAP.md). If the `hypergrok` command is unavailable, the Bots remain a research-and-review team. A Bot name is not a credential boundary because Bots owned by one user share a cloud computer and sign-ins.
 
 ## Official references
 

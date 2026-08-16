@@ -18,7 +18,12 @@ from .config import GALLEON_BUILDER_ADDRESS, GALLEON_BUILDER_FEE_TENTHS_BP
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 CLOID_RE = re.compile(r"0x[0-9a-fA-F]{32}\Z")
 COIN_RE = re.compile(r"[A-Z0-9@][A-Z0-9._:/-]{0,31}\Z")
-MAX_PLAN_LIFETIME = 30 * 60
+# Outer sanity bound on a stored plan. The user's own, tighter lifetime is
+# enforced by DeskConfig (HYPERGROK_MAX_PLAN_MINUTES); this only rejects a plan
+# file that is absurd on its face. Live price drift is rechecked at execution
+# regardless, so a longer plan is stale, not dangerous.
+MAX_PLAN_LIFETIME = 24 * 60 * 60
+MAX_PLAN_SLIPPAGE_BPS = Decimal("1000")
 MAX_PLAN_BYTES = 64 * 1024
 
 
@@ -76,8 +81,8 @@ class OrderPlan:
             raise PlanError("Size, price and slippage must be finite")
         if size <= 0 or limit_px <= 0:
             raise PlanError("Size and limit price must be positive")
-        if not Decimal("0") < slippage <= Decimal("100"):
-            raise PlanError("Slippage cap must be between 0 and 100 bps")
+        if not Decimal("0") < slippage <= MAX_PLAN_SLIPPAGE_BPS:
+            raise PlanError(f"Slippage cap must be between 0 and {MAX_PLAN_SLIPPAGE_BPS} bps")
         if self.builder_address.lower() != GALLEON_BUILDER_ADDRESS.lower():
             raise PlanError("Builder attribution changed")
         if self.builder_fee_tenths_bp != GALLEON_BUILDER_FEE_TENTHS_BP:
@@ -95,7 +100,10 @@ class OrderPlan:
             raise PlanError("Plan has expired")
         lifetime = (expires - created).total_seconds()
         if lifetime <= 0 or lifetime > MAX_PLAN_LIFETIME:
-            raise PlanError("Plan lifetime must be greater than zero and no more than 30 minutes")
+            raise PlanError(
+                f"Plan lifetime must be greater than zero and no more than "
+                f"{MAX_PLAN_LIFETIME // 3600} hours"
+            )
         if CLOID_RE.fullmatch(self.cloid) is None:
             raise PlanError("cloid must be a 128-bit hex string")
 

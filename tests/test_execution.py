@@ -9,6 +9,7 @@ from typing import ClassVar
 
 import pytest
 
+from hypergrok import builder as builder_module
 from hypergrok import cli
 from hypergrok.builder import BuilderError
 from hypergrok.config import GALLEON_BUILDER_ADDRESS
@@ -109,17 +110,64 @@ def test_exact_confirmation_is_required_before_sdk_import(tmp_path: Path, monkey
     assert FakeExchange.sends == []
 
 
-def test_builder_failure_means_zero_sends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_builder_failure_still_sends_but_without_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Galleon's revenue plumbing must never block someone else's trade."""
+    FakeExchange.sends.clear()
+    path = tmp_path / "p.json"
+    digest = make_plan(path, network="mainnet")
+    monkeypatch.setenv("HYPERGROK_NETWORK", "mainnet")
+    monkeypatch.setenv("HYPERGROK_ENABLE_MAINNET", "I_UNDERSTAND")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
+    install_sdk(monkeypatch)
+    monkeypatch.setattr(cli, "_info", lambda base, kind, **kw: live_info(kind, **kw))
+    monkeypatch.setattr(
+        builder_module, "inspect_builder", lambda *a, **k: (_ for _ in ()).throw(BuilderError("no"))
+    )
+    cli._execute(args(path, digest))
+    assert len(FakeExchange.sends) == 1
+    assert "builder" not in FakeExchange.sends[0][1]
+
+
+def test_ineligible_builder_does_not_block_the_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    FakeExchange.sends.clear()
+    path = tmp_path / "p.json"
+    digest = make_plan(path, network="mainnet")
+    monkeypatch.setenv("HYPERGROK_NETWORK", "mainnet")
+    monkeypatch.setenv("HYPERGROK_ENABLE_MAINNET", "I_UNDERSTAND")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
+    install_sdk(monkeypatch)
+
+    def broke_builder(base, kind, **kwargs):
+        del base
+        if kind == "clearinghouseState":
+            return {"marginSummary": {"accountValue": "0"}}
+        return live_info(kind, **kwargs)
+
+    monkeypatch.setattr(cli, "_info", broke_builder)
+    cli._execute(args(path, digest))
+    assert len(FakeExchange.sends) == 1
+    assert "builder" not in FakeExchange.sends[0][1]
+
+
+def test_testnet_never_attaches_builder_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     FakeExchange.sends.clear()
     path = tmp_path / "p.json"
     digest = make_plan(path)
     monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
     monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
     install_sdk(monkeypatch)
-    monkeypatch.setattr(cli, "check_builder", lambda *a, **k: (_ for _ in ()).throw(BuilderError("no")))
-    with pytest.raises(BuilderError):
-        cli._execute(args(path, digest))
-    assert FakeExchange.sends == []
+    monkeypatch.setattr(cli, "_info", lambda base, kind, **kw: live_info(kind, **kw))
+    cli._execute(args(path, digest))
+    assert len(FakeExchange.sends) == 1
+    assert "builder" not in FakeExchange.sends[0][1]
 
 
 def test_declared_account_must_match_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,10 +182,13 @@ def test_declared_account_must_match_plan(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_only_send_includes_builder_and_cloid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On mainnet, with every builder gate satisfied, the fee is attributed."""
     FakeExchange.sends.clear()
     FakeExchange.timeouts.clear()
     path = tmp_path / "p.json"
-    digest = make_plan(path)
+    digest = make_plan(path, network="mainnet")
+    monkeypatch.setenv("HYPERGROK_NETWORK", "mainnet")
+    monkeypatch.setenv("HYPERGROK_ENABLE_MAINNET", "I_UNDERSTAND")
     monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
     monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
     install_sdk(monkeypatch)

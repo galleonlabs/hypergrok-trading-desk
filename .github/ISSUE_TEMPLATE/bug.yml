@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible HyperGrok defect
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never include keys, signatures, wallet exports or private account payloads.
+  - type: input
+    id: version
+    attributes:
+      label: HyperGrok version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options: [testnet, mainnet, not network-specific]
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Observed behaviour
+      description: Include the command, redacted output and whether any send boundary was reached.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true

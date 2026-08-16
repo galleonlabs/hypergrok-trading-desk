@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hypergrok"
+version = "1.0.0"
+description = "Risk-bounded Hyperliquid trading desk Agent Plugin and CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Galleon Labs"}]
+keywords = ["grok-bot", "hyperliquid", "agent-skills", "trading", "defi"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = ["hyperliquid-python-sdk>=0.20.0,<1"]
+
+[project.urls]
+Homepage = "https://github.com/galleonlabs/hypergrok-trading-desk"
+Repository = "https://github.com/galleonlabs/hypergrok-trading-desk"
+Issues = "https://github.com/galleonlabs/hypergrok-trading-desk/issues"
+
+[project.optional-dependencies]
+dev = ["build>=1,<2", "pytest>=9.0.3,<10", "pytest-cov>=6,<8", "ruff>=0.12,<1", "mypy>=1.17,<2"]
+
+[project.scripts]
+hypergrok = "hypergrok.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hypergrok"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["hypergrok"]
+
+[[tool.mypy.overrides]]
+module = ["hyperliquid.*"]
+ignore_missing_imports = true

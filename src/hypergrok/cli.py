@@ -153,6 +153,9 @@ def _execute(args: argparse.Namespace) -> None:
     key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
     if not key:
         raise ConfigError("HYPERLIQUID_PRIVATE_KEY is required only at execution time")
+    account_address = os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "").lower()
+    if account_address != plan.account.lower():
+        raise PlanError("HYPERLIQUID_ACCOUNT_ADDRESS does not match the approved plan account")
 
     try:
         from eth_account import Account
@@ -162,8 +165,6 @@ def _execute(args: argparse.Namespace) -> None:
         raise ConfigError("Install the project dependencies before execution") from exc
 
     wallet = Account.from_key(key)
-    if wallet.address.lower() != plan.account.lower():
-        raise PlanError("Signing wallet does not match the approved plan account")
     check_builder(plan.account, lambda kind, **kw: _info(config.api_url, kind, **kw))
     if _seen_cloid(config.api_url, plan.account, plan.cloid):
         raise PlanError("This cloid already exists; refusing duplicate submission")
@@ -178,7 +179,7 @@ def _execute(args: argparse.Namespace) -> None:
     if drift_bps > Decimal(plan.max_slippage_bps):
         raise PlanError(f"Live price drift is {drift_bps:.2f} bps; plan cap is {plan.max_slippage_bps}")
 
-    exchange = Exchange(wallet, config.api_url)
+    exchange = Exchange(wallet, config.api_url, account_address=plan.account)
     exchange.set_expires_after(int(datetime.fromisoformat(plan.expires_at).timestamp() * 1000))
     try:
         response = exchange.order(

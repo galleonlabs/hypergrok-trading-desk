@@ -52,6 +52,8 @@ class OrderPlan:
             raise PlanError("Unsupported plan schema")
         if self.network not in {"testnet", "mainnet"}:
             raise PlanError("Invalid network")
+        if not self.account.startswith("0x") or len(self.account) != 42:
+            raise PlanError("Account must be a 20-byte hexadecimal address")
         if self.side not in {"buy", "sell"} or self.tif not in {"Gtc", "Ioc", "Alo"}:
             raise PlanError("Invalid side or time in force")
         if Decimal(self.size) <= 0 or Decimal(self.limit_px) <= 0:

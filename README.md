@@ -77,6 +77,8 @@ Source lineage and licences are recorded in [docs/PROVENANCE.md](docs/PROVENANCE
 ## Safety model
 
 Private keys are read only at execution time and never persisted or printed.
+The signer should be a narrowly authorised API wallet; the separately declared
+account address is bound into the approved plan and passed to the official SDK.
 Mainnet is disabled unless explicitly enabled. Every plan expires, contains its
 builder attribution and cloid, and is covered by an exact hash. The sole send
 path revalidates the signing account, live price drift, notional cap, builder

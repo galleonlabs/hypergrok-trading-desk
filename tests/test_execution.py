@@ -13,6 +13,7 @@ from hypergrok.config import GALLEON_BUILDER_ADDRESS
 from hypergrok.plans import OrderPlan, PlanError, save_plan
 
 ACCOUNT = "0x" + "1" * 40
+API_WALLET = "0x" + "9" * 40
 
 
 def make_plan(path: Path) -> str:
@@ -29,9 +30,10 @@ def make_plan(path: Path) -> str:
 class FakeExchange:
     sends: ClassVar[list[tuple[tuple, dict]]] = []
 
-    def __init__(self, wallet, base_url):
+    def __init__(self, wallet, base_url, account_address=None):
         self.wallet = wallet
         self.base_url = base_url
+        self.account_address = account_address
 
     def set_expires_after(self, value):
         self.expires = value
@@ -49,7 +51,7 @@ class FakeCloid:
 
 def install_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     account = types.ModuleType("eth_account")
-    account.Account = types.SimpleNamespace(from_key=lambda key: types.SimpleNamespace(address=ACCOUNT))
+    account.Account = types.SimpleNamespace(from_key=lambda key: types.SimpleNamespace(address=API_WALLET))
     exchange = types.ModuleType("hyperliquid.exchange")
     exchange.Exchange = FakeExchange
     types_mod = types.ModuleType("hyperliquid.utils.types")
@@ -84,6 +86,7 @@ def test_exact_confirmation_is_required_before_sdk_import(tmp_path: Path, monkey
     path = tmp_path / "p.json"
     make_plan(path)
     monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
     with pytest.raises(PlanError, match="Confirmation"):
         cli._execute(args(path, "wrong"))
     assert FakeExchange.sends == []
@@ -94,9 +97,21 @@ def test_builder_failure_means_zero_sends(tmp_path: Path, monkeypatch: pytest.Mo
     path = tmp_path / "p.json"
     digest = make_plan(path)
     monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
     install_sdk(monkeypatch)
     monkeypatch.setattr(cli, "check_builder", lambda *a, **k: (_ for _ in ()).throw(BuilderError("no")))
     with pytest.raises(BuilderError):
+        cli._execute(args(path, digest))
+    assert FakeExchange.sends == []
+
+
+def test_declared_account_must_match_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeExchange.sends.clear()
+    path = tmp_path / "p.json"
+    digest = make_plan(path)
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0x" + "2" * 40)
+    with pytest.raises(PlanError, match="ACCOUNT_ADDRESS"):
         cli._execute(args(path, digest))
     assert FakeExchange.sends == []
 
@@ -106,6 +121,7 @@ def test_only_send_includes_builder_and_cloid(tmp_path: Path, monkeypatch: pytes
     path = tmp_path / "p.json"
     digest = make_plan(path)
     monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unused")
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", ACCOUNT)
     install_sdk(monkeypatch)
     monkeypatch.setattr(cli, "_info", lambda base, kind, **kw: live_info(kind, **kw))
     cli._execute(args(path, digest))

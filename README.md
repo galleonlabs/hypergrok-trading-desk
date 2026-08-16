@@ -31,11 +31,27 @@ hypergrok market BTC
 hypergrok size --equity 10000 --entry 100 --stop 95 --risk-pct 0.5 --max-notional 1000
 ```
 
-Grok Bot plugin installation from a private GitHub repository is still being
-verified against the live product. The repository follows the Agent Plugins
-manifest plus the observed `.grok-plugin` layout. Do not mistake a plausible
-click path for a tested one. For SKILL-compatible agents, clone the repository
-or use `npx skills add galleonlabs/hypergrok-trading-desk` once it is public.
+Grok Bot does not document a native “install this arbitrary GitHub URL” command.
+The supported private distribution route is inferred from the Cursor plugin
+infrastructure used by Grok Bot:
+
+1. A Cursor team administrator opens **Dashboard -> Plugins**.
+2. Under **Team Marketplaces**, choose **Add Marketplace -> Import from Repo**.
+3. Import this GitHub repository and grant the Cursor GitHub App read access.
+4. In Grok Bot, enable HyperGrok under **Settings -> Plugins -> Yours** for the
+   intended Bot.
+
+This repository now carries the portable Agent Plugins manifest, the observed
+`.grok-plugin` manifest and the official Cursor `.cursor-plugin` manifest. The
+managed installation still needs an end-to-end receipt from the live private
+product before launch. Cloning the repository into the shared cloud computer is
+ordinary computer use, not a durable installation contract. For other
+SKILL-compatible agents, clone the repository or use
+`npx skills add galleonlabs/hypergrok-trading-desk` once it is public.
+
+Grok Bots belonging to one user share a cloud computer, files and sign-ins. Bot
+identity is not a credential boundary. Use a narrowly authorised API wallet and
+assume every Bot on that user account can reach any credential placed there.
 
 ## Order flow
 

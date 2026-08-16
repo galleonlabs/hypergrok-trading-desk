@@ -1,0 +1,8 @@
+{
+  "name": "hypergrok",
+  "description": "Create a risk-bounded Hyperliquid trading desk on Grok Bot.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Galleon Labs"
+  }
+}

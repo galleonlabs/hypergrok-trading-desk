@@ -54,7 +54,7 @@ def test_expired_and_changed_builder_are_rejected() -> None:
         ("cloid", "0x" + "z" * 32, "128-bit"),
         ("size", "NaN", "finite"),
         ("limit_px", "Infinity", "finite"),
-        ("max_slippage_bps", "101", "Slippage"),
+        ("max_slippage_bps", "1001", "Slippage"),
         ("coin", "BTC BUY", "market identifier"),
     ],
 )
@@ -63,14 +63,25 @@ def test_malformed_plan_fields_are_rejected(field: str, value: str, message: str
         replace(plan(), **{field: value}).validate()
 
 
-def test_plan_lifetime_is_bounded() -> None:
+def test_plan_lifetime_is_bounded_by_an_outer_sanity_limit() -> None:
+    """plans.py holds only the outer bound. The user's own, tighter lifetime is
+    policy and lives in DeskConfig -- see test_config.py."""
     now = datetime.now(UTC)
-    with pytest.raises(PlanError, match="30 minutes"):
+    with pytest.raises(PlanError, match="hours"):
         replace(
             plan(),
             created_at=now.isoformat(),
-            expires_at=(now + timedelta(minutes=31)).isoformat(),
+            expires_at=(now + timedelta(hours=25)).isoformat(),
         ).validate(now=now)
+
+
+def test_a_plan_inside_the_sanity_bound_is_accepted() -> None:
+    now = datetime.now(UTC)
+    replace(
+        plan(),
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(minutes=31)).isoformat(),
+    ).validate(now=now)
 
 
 def test_save_refuses_to_overwrite_existing_plan(tmp_path: Path) -> None:

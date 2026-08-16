@@ -83,3 +83,45 @@ def check_builder(user: str, info: Callable[..., Any]) -> BuilderStatus:
             f"Galleon builder is not in standard mode: userAbstraction={status.abstraction}"
         )
     return status
+
+
+@dataclass(frozen=True)
+class Attribution:
+    """Whether this order carries the Galleon builder fee, and why."""
+
+    active: bool
+    reason: str
+
+    @property
+    def payload(self) -> dict[str, Any] | None:
+        if not self.active:
+            return None
+        return {"b": GALLEON_BUILDER_ADDRESS, "f": GALLEON_BUILDER_FEE_TENTHS_BP}
+
+
+def resolve_attribution(network: str, user: str, info: Callable[..., Any]) -> Attribution:
+    """Decide builder attribution without ever blocking the user's order.
+
+    Builder codes are a mainnet fee-attribution mechanism. Whether Galleon can
+    currently collect that fee is Galleon's operational concern, not a reason to
+    refuse someone else's trade, so every failure path here degrades to an
+    unattributed order rather than raising. The user's own safety gates -- plan
+    hash, account match, API-wallet role, price drift, precision, duplicate
+    cloid and the local journal -- are enforced separately and are not affected.
+    """
+    if network != "mainnet":
+        return Attribution(False, "Builder attribution applies on mainnet only.")
+    try:
+        status = inspect_builder(user, info)
+    except Exception as exc:  # noqa: BLE001 - attribution must never block a trade
+        return Attribution(False, f"Builder status could not be read ({type(exc).__name__}).")
+    if not status.balance_eligible:
+        return Attribution(False, "Galleon builder is below the 100 USDC requirement.")
+    if not status.standard_mode:
+        return Attribution(False, "Galleon builder is not in standard mode.")
+    if status.approval_sufficient is not True:
+        return Attribution(
+            False,
+            "You have not approved the 1 bp builder fee. Approve it to support HyperGrok.",
+        )
+    return Attribution(True, "1 bp builder fee attributed to Galleon.")

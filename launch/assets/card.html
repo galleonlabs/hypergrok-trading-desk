@@ -1,0 +1,72 @@
+<meta charset="utf-8">
+<title>HyperGrok launch card</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #000; }
+  .card {
+    position: relative; width: 1600px; height: 900px; overflow: hidden;
+    background:
+      radial-gradient(1000px 760px at 50% 48%, rgba(80,210,193,0.15), transparent 66%),
+      linear-gradient(158deg, #14232A 0%, #0F1A1F 50%, #0A1216 100%);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(80,210,193,0.16) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(80,210,193,0.16) 1px, transparent 1px);
+    background-size: 80px 80px;
+    -webkit-mask-image: radial-gradient(1150px 780px at 50% 50%, #000 6%, transparent 72%);
+    mask-image: radial-gradient(1150px 780px at 50% 50%, #000 6%, transparent 72%);
+    opacity: 0.5;
+  }
+  .hairline { position: absolute; left: 0; right: 0; height: 1px; background: linear-gradient(to right, transparent, rgba(80,210,193,0.5), transparent); }
+  .hairline.top { top: 0; } .hairline.bot { bottom: 0; }
+  svg { position: relative; width: 680px; height: 680px; }
+</style>
+<div class="card">
+  <div class="grid"></div>
+  <div class="hairline top"></div>
+  <div class="hairline bot"></div>
+<svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="orbFill" cx="40%" cy="31%" r="78%">
+      <stop offset="0%"   stop-color="#F2FFFB"/>
+      <stop offset="17%"  stop-color="#C8FEF0"/>
+      <stop offset="38%"  stop-color="#9BFCE5"/>
+      <stop offset="60%"  stop-color="#68DFCB"/>
+      <stop offset="80%"  stop-color="#3FB0A4"/>
+      <stop offset="100%" stop-color="#15625E"/>
+    </radialGradient>
+    <radialGradient id="orbShade" cx="72%" cy="80%" r="62%">
+      <stop offset="0%"   stop-color="#062B2C" stop-opacity="0.62"/>
+      <stop offset="55%"  stop-color="#062B2C" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#062B2C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orbRim" cx="50%" cy="50%" r="50%">
+      <stop offset="86%"  stop-color="#97FCE4" stop-opacity="0"/>
+      <stop offset="97%"  stop-color="#97FCE4" stop-opacity="0.40"/>
+      <stop offset="100%" stop-color="#97FCE4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orbSpec" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="orbHalo" x="-55%" y="-55%" width="210%" height="210%">
+      <feGaussianBlur stdDeviation="46"/>
+    </filter>
+  </defs>
+
+  <circle cx="500" cy="500" r="400" fill="#50D2C1" opacity="0.28" filter="url(#orbHalo)"/>
+
+  <circle cx="500" cy="500" r="390" fill="url(#orbFill)"/>
+  <circle cx="500" cy="500" r="390" fill="url(#orbShade)"/>
+  <circle cx="500" cy="500" r="390" fill="url(#orbRim)"/>
+  <ellipse cx="383" cy="344" rx="135" ry="97" fill="url(#orbSpec)" opacity="0.55" transform="rotate(-24 383 344)"/>
+
+  <g fill="#0C1D20">
+    <rect x="335" y="379" width="100" height="242" rx="50" transform="rotate(16 385 500)"/>
+    <rect x="565" y="339" width="100" height="242" rx="50" transform="rotate(16 615 460)"/>
+  </g>
+</svg>
+</div>

@@ -1,0 +1,35 @@
+name: Bug report
+description: Report an inaccurate instruction, snippet or procedure
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never include keys, signatures, wallet exports or private account payloads.
+  - type: input
+    id: file
+    attributes:
+      label: File
+      placeholder: skills/hyperliquid-orders/SKILL.md
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options: [testnet, mainnet, not network-specific]
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What the instruction says, and what actually happened
+      description: Include the redacted API response or Grok Bot behaviour and whether any order was sent.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What it should say
+    validations:
+      required: true

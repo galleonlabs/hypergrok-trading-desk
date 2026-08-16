@@ -1,0 +1,15 @@
+{
+  "name": "hypergrok",
+  "description": "Hyperliquid trading desk roles and skills.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Galleon Labs"
+  },
+  "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
+  "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
+  "license": "MIT",
+  "keywords": ["grok-bot", "hyperliquid", "trading-desk", "agents"],
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "rules": "./rules/"
+}

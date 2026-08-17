@@ -8,6 +8,7 @@
   "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
   "license": "MIT",
+  "logo": "assets/mascot-320.jpg",
   "keywords": ["grok-bot", "hyperliquid", "trading-desk", "agents"],
   "skills": "./skills/",
   "agents": "./agents/",

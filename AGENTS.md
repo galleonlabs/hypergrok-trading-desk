@@ -2,10 +2,14 @@
 
 ## Product boundary
 
-This repository builds an agent-runtime-neutral trading research and execution harness. Codex is the first supported agent interface, not the trading engine.
+This repository builds an agent-runtime-neutral trading research and execution harness. Codex is the first supported agent interface and OpenCode is a compatible second interface; neither is the trading engine.
 
 - Keep domain, validation, risk, admission, OMS, ledger, signer, and venue-adapter code independent of Codex, ChatGPT, Grok, Claude, or any model runtime.
 - Put durable Codex working agreements here and focused workflows under `.agents/skills`.
+- Keep OpenCode permissions fail-closed in `opencode.json`; do not add a model/provider, MCP server, custom agent with wider rights, or external-directory access without review.
+- Do not use OpenCode `--auto` for this repository; it converts `ask`
+  decisions into approvals. The checked-in profile intentionally denies
+  unlisted shell commands.
 - A future installable plugin or MCP server may expose controlled tools, but it must call the same typed core interfaces.
 
 ## Capital boundary

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "ask",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.key": "deny",
+      "*.p12": "deny",
+      "*.pem": "deny",
+      "*.wallet": "deny",
+      "*.db": "deny",
+      "*.sqlite": "deny",
+      "*.sqlite*": "deny"
+    },
+    "edit": {
+      "*": "ask",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.key": "deny",
+      "*.p12": "deny",
+      "*.pem": "deny",
+      "*.wallet": "deny",
+      "*.db": "deny",
+      "*.sqlite": "deny",
+      "*.sqlite*": "deny"
+    },
+    "bash": {
+      "*": "deny",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "python3 -m unittest*": "allow",
+      "python3 -m compileall*": "allow",
+      "trading-harness doctor*": "allow",
+      "git commit*": "ask",
+      "git push*": "deny",
+      "rm *": "deny"
+    },
+    "external_directory": "deny",
+    "skill": {
+      "*": "deny",
+      "validate-thesis": "allow",
+      "scan-signals": "allow"
+    },
+    "task": "ask",
+    "webfetch": "ask",
+    "websearch": "ask",
+    "doom_loop": "ask"
+  },
+  "agent": {
+    "plan": {
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "external_directory": "deny",
+        "skill": {
+          "*": "deny",
+          "validate-thesis": "allow",
+          "scan-signals": "allow"
+        },
+        "webfetch": "ask",
+        "websearch": "ask"
+      }
+    }
+  }
+}

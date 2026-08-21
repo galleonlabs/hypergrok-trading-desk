@@ -46,12 +46,13 @@ The system is a research and execution harness. It does not create alpha merely 
 The deterministic core must not import, invoke, or depend on ChatGPT, Codex, Grok, Claude, or another model runtime.
 
 - Codex is the first supported interface through repository [`AGENTS.md`](../AGENTS.md) and focused skills under `.agents/skills`.
+- OpenCode is a compatible second interface over those same files. Its checked-in [`opencode.json`](../opencode.json) must default to `ask`, deny external-directory and sensitive-file access, and expose no MCP server or model-specific capital capability.
 - Repository skills contain workflow guidance only; they call typed core interfaces and cannot confer credentials, evidence status, deployment grants, or exchange authority.
 - ChatGPT/Codex distribution may later use an installable plugin. Live data, authentication, authorization, and controlled actions belong in a narrow MCP server rather than skill prose.
 - The same domain, validation, risk, admission, OMS, ledger, and adapter APIs must work without any agent attached.
 - Removing or replacing the agent interface must not change deterministic results or capital-path behavior.
 
-This follows the official Codex model: [`AGENTS.md`](https://learn.chatgpt.com/docs/agent-configuration/agents-md) for durable repository guidance, [repo skills](https://learn.chatgpt.com/docs/build-skills) for focused repeatable workflows, and a [plugin/MCP server](https://developers.openai.com/plugins/concepts/plugins) only when installable connected tools are needed.
+This follows the official Codex model: [`AGENTS.md`](https://learn.chatgpt.com/docs/agent-configuration/agents-md) for durable repository guidance, [repo skills](https://learn.chatgpt.com/docs/build-skills) for focused repeatable workflows, and a [plugin/MCP server](https://developers.openai.com/plugins/concepts/plugins) only when installable connected tools are needed. OpenCode documents the same [`AGENTS.md`](https://opencode.ai/docs/rules/) and [`.agents/skills`](https://opencode.ai/docs/skills/) conventions.
 
 ## 3. Why HyperGrok Is Unsafe for Mainnet As-Is
 

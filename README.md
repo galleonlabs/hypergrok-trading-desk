@@ -56,21 +56,30 @@ keys, approve their own work, change promoted rules, or call venue write APIs.
 See [the harness specification](docs/trading_harness_spec.md) for the proposed
 trust boundaries, validation gates, and staged path toward any future trading.
 
-## Codex interface
+## Codex and OpenCode interfaces
 
 The Python core is agent-runtime neutral. Codex is the first supported
-interface through:
+interface and OpenCode is a compatible second interface through:
 
 - [`AGENTS.md`](AGENTS.md) for durable repository guidance.
 - [`$validate-thesis`](.agents/skills/validate-thesis/SKILL.md) for frozen,
   falsifiable strategy evaluation.
 - [`$scan-signals`](.agents/skills/scan-signals/SKILL.md) for read-only
   registered-rule observations.
+- [`opencode.json`](opencode.json), which defaults actions to `ask`, denies
+  unlisted shell commands, external-directory access, secret/database files,
+  and `git push`, and exposes only the two repository skills.
 
-The skills contain workflow instructions only and are not imported by the
-Python package. No OpenAI SDK, model call, connector, MCP server, or plugin is
-required for the deterministic foundation. A future MCP/plugin boundary may
-expose controlled read tools; venue writes remain a separate qualification.
+Both products natively read root `AGENTS.md` and the open agent-skill layout
+under `.agents/skills`. The skills contain workflow instructions only and
+are not imported by the Python package. No OpenAI/OpenCode SDK, model call,
+connector, MCP server, or plugin is required for the deterministic foundation.
+A future MCP/plugin boundary may expose controlled read tools; venue writes
+remain a separate qualification.
+
+Do not run OpenCode with `--auto` in this repository. OpenCode documents that
+auto mode approves requests that would otherwise ask; explicit deny rules
+remain enforced, but the review checkpoint would be lost.
 
 ## Run locally
 

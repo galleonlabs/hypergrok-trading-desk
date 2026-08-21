@@ -21,8 +21,33 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile source and tests
-        run: python -m compileall -q -f src tests
+        run: python -m compileall -q -f src tests plugins/trading-desk/runtime plugins/trading-desk/server.py scripts
       - name: Run unit tests
         env:
           PYTHONPATH: src
         run: python -m unittest discover -s tests -v
+      - name: Verify generated agent-skill mirror
+        run: python scripts/sync_plugin_skills.py --check
+      - name: Verify self-contained plugin runtime mirror
+        run: python scripts/sync_plugin_runtime.py --check
+      - name: Validate OpenCode JSON
+        run: python -m json.tool opencode.json >/dev/null
+
+  mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: Install pinned optional MCP runtime
+        run: python -m pip install --disable-pip-version-check -e ".[mcp]"
+      - name: Run MCP contract tests
+        run: python -m unittest tests.test_tool_api tests.test_mcp_server -v
+      - name: Qualify the real MCP stdio protocol
+        run: python tests/mcp_stdio_smoke.py
+      - name: Qualify an isolated cached plugin copy
+        run: python tests/plugin_copy_smoke.py
+      - name: Qualify ChatGPT Streamable HTTP on loopback
+        run: python tests/mcp_http_smoke.py

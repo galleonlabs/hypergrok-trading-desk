@@ -1,0 +1,36 @@
+{
+  "name": "trading-desk",
+  "version": "0.1.0",
+  "description": "Read-only market research and trade-intent validation for the deterministic trading harness.",
+  "author": {
+    "name": "JawnDiego",
+    "url": "https://github.com/jawndiego"
+  },
+  "homepage": "https://github.com/jawndiego/hypergrok-trading-desk",
+  "repository": "https://github.com/jawndiego/hypergrok-trading-desk",
+  "license": "MIT",
+  "keywords": [
+    "trading",
+    "market-data",
+    "risk",
+    "research"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Trading Desk",
+    "shortDescription": "Research markets and validate trade intents safely.",
+    "longDescription": "A ChatGPT and Codex interface to public market briefs, harness status, and deterministic trade-intent validation. It cannot load credentials, authorize trades, or write to a venue.",
+    "developerName": "JawnDiego",
+    "category": "Finance",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://github.com/jawndiego/hypergrok-trading-desk",
+    "defaultPrompt": [
+      "Brief me on ETH using live public market data.",
+      "Check that this trading harness is fail-closed.",
+      "Validate and hash this proposed trade intent."
+    ]
+  }
+}

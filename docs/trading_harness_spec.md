@@ -45,10 +45,11 @@ The system is a research and execution harness. It does not create alpha merely 
 
 The deterministic core must not import, invoke, or depend on ChatGPT, Codex, Grok, Claude, or another model runtime.
 
-- Codex is the first supported interface through repository [`AGENTS.md`](../AGENTS.md) and focused skills under `.agents/skills`.
-- OpenCode is a compatible second interface over those same files. Its checked-in [`opencode.json`](../opencode.json) must default to `ask`, deny external-directory and sensitive-file access, and expose no MCP server or model-specific capital capability.
+- ChatGPT and Codex are the first supported interfaces through the installable [`trading-desk` plugin](../plugins/trading-desk), repository [`AGENTS.md`](../AGENTS.md), and five focused packaged skills. ChatGPT and Codex share the same plugin and typed MCP contract.
+- OpenCode is a compatible second interface over a byte-identical mirror under `.agents/skills` and the same local MCP server. Its checked-in [`opencode.json`](../opencode.json) must default to `ask`, deny external-directory and sensitive-file access, omit a model/provider, and allow only the three reviewed read-only MCP tools by exact name.
 - Repository skills contain workflow guidance only; they call typed core interfaces and cannot confer credentials, evidence status, deployment grants, or exchange authority.
-- ChatGPT/Codex distribution may later use an installable plugin. Live data, authentication, authorization, and controlled actions belong in a narrow MCP server rather than skill prose.
+- The current MCP surface is limited to fail-closed harness status, public Hyperliquid market briefs, and semantic-intent schema/hash validation. It cannot read credentials, authorize or admit an intent, reserve exposure, sign, or write to a venue.
+- Future private data, authentication, authorization, and controlled actions belong in narrow server-side tools rather than skill prose. Any write tool requires a separate qualification milestone and must enforce its own authorization at the side-effect boundary.
 - The same domain, validation, risk, admission, OMS, ledger, and adapter APIs must work without any agent attached.
 - Removing or replacing the agent interface must not change deterministic results or capital-path behavior.
 
@@ -393,10 +394,13 @@ The repository selected these systems from a much larger advertised search. Its 
 
 ### 6.7 Skill boundary
 
-The Codex interface begins with two focused repository skills:
+The ChatGPT/Codex plugin begins with five focused skills, mirrored exactly for OpenCode:
 
+- `operate-trading-desk`: coordinates stages and reports unavailable capabilities without manufacturing a fallback.
+- `brief-market`: calls the typed public Hyperliquid market-data tool and preserves network, source, receipt, and freshness evidence.
 - `validate-thesis`: structures validation plans and reviews deterministic evidence artifacts. The foundation does not yet persist thesis evidence or run backtests; future registry/evaluation writes must use typed core interfaces and have no venue access.
 - `scan-signals`: interprets read-only registered-rule scans. Until the deterministic scanner and normalized data adapter exist, it must return `unavailable`.
+- `test-strategy`: designs or reviews leakage-resistant historical evaluation; until a deterministic runner exists, it must not claim a run occurred.
 
 Scanner statuses are `unavailable`, `observation`, `research_candidate`, or `validated_research_signal`. A skill never returns an order or position size. A custom parameter override creates a new draft thesis and forces `exploratory=true` and `no_trade=true`. If registration and evaluation later become materially different workflows, split `validate-thesis` without changing the core API.
 

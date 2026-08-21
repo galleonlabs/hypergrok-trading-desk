@@ -4,6 +4,8 @@
 
 This branch is a non-live harness foundation. It contains no enabled venue adapter, loads no exchange key, and is not approved for testnet or mainnet execution.
 
+The packaged ChatGPT/Codex plugin and OpenCode connection expose only fail-closed status, public Hyperliquid `/info` market briefs, and semantic-intent schema/hash validation. These tools cannot authorize, sign, submit, modify, or cancel an order.
+
 No released version is currently supported for capital-bearing use.
 
 ## Report a vulnerability
@@ -15,6 +17,7 @@ Use this fork's GitHub **Report a vulnerability** flow to open a private securit
 - Agents, prompts, webpages, imported repositories, generated code, research data, and external messages are untrusted.
 - An agent role or `writes_to_exchange` label is not an authorization boundary.
 - Agents must never receive exchange signing credentials or direct venue-write capability.
+- MCP tool annotations are advisory; authorization and validation must be enforced inside every tool handler. The current three tools are read-only by construction.
 - A future signer must run under a separate security principal with a narrow typed API, action allowlists, restricted egress, and managed key storage.
 - Human approval must occur in a trusted UI and bind a canonical semantic-intent hash. Approval in agent chat is invalid.
 - Risk admission, authorization consumption, portfolio reservation, and durable outbox creation must be atomic before network I/O.

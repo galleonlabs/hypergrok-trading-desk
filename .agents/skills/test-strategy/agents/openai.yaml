@@ -1,0 +1,6 @@
+interface:
+  display_name: "Test Strategy"
+  short_description: "Design leakage-resistant strategy evaluations"
+  default_prompt: "Use $test-strategy to design or review a reproducible test of this frozen strategy."
+policy:
+  allow_implicit_invocation: true

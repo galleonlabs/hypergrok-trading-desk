@@ -2,15 +2,16 @@
 
 ## Product boundary
 
-This repository builds an agent-runtime-neutral trading research and execution harness. Codex is the first supported agent interface and OpenCode is a compatible second interface; neither is the trading engine.
+This repository builds an agent-runtime-neutral trading research and execution harness. The installable ChatGPT/Codex plugin is the primary agent interface and OpenCode is the compatible second interface; neither is the trading engine.
 
 - Keep domain, validation, risk, admission, OMS, ledger, signer, and venue-adapter code independent of Codex, ChatGPT, Grok, Claude, or any model runtime.
-- Put durable Codex working agreements here and focused workflows under `.agents/skills`.
-- Keep OpenCode permissions fail-closed in `opencode.json`; do not add a model/provider, MCP server, custom agent with wider rights, or external-directory access without review.
+- Put durable Codex working agreements here. The canonical packaged workflows live under `plugins/trading-desk/skills`; mirror them into `.agents/skills` with `scripts/sync_plugin_skills.py` for repository and OpenCode discovery.
+- The `trading-desk` MCP server exposes exactly three reviewed tools: harness status, public market briefs, and schema/hash validation for proposed intents. All are read-only and none may load an account secret, create authorization, reserve risk, or call a venue write endpoint.
+- Keep OpenCode permissions fail-closed in `opencode.json`; it may call only those exact local MCP tools and mirrored skills. Do not add a model/provider, write tool, custom agent with wider rights, or external-directory access without review.
 - Do not use OpenCode `--auto` for this repository; it converts `ask`
   decisions into approvals. The checked-in profile intentionally denies
   unlisted shell commands.
-- A future installable plugin or MCP server may expose controlled tools, but it must call the same typed core interfaces.
+- ChatGPT/Codex and OpenCode must call the same typed tool service. Protocol or model adapters may not reinterpret tool results or widen their capability.
 
 ## Capital boundary
 
@@ -30,16 +31,21 @@ This repository builds an agent-runtime-neutral trading research and execution h
 - Python baseline: 3.11 or newer, standard library unless a reviewed dependency is justified.
 - Run `python3 -m unittest discover -s tests -v` after changes.
 - Run `python3 -m compileall -q src tests` before handoff.
+- Run `python3 scripts/sync_plugin_skills.py --check` after changing a packaged skill.
+- Run `python3 scripts/sync_plugin_runtime.py --check` after changing any module under `src/trading_harness`; the cached plugin runtime must be an exact generated mirror.
 - Keep the venue executor disabled by default. Tests must prove writes fail closed.
 - Update `docs/trading_harness_spec.md` when an invariant, state, authorization model, or promotion gate changes.
 - Add tests for observable invariants and failure transitions, not wording.
 - Preserve upstream provenance in `UPSTREAM.md`; do not copy legacy capital-path prompts or snippets back into runtime locations.
 
-## Codex workflows
+## Agent workflows
 
+- Use `$operate-trading-desk` for multi-stage desk coordination.
+- Use `$brief-market` for live public Hyperliquid market context through the typed MCP tool.
 - Use `$validate-thesis` for strategy, indicator, backtest, and edge claims.
 - Use `$scan-signals` for read-only registered-rule scans.
-- Neither skill may issue orders, sizes, approvals, or deployment grants.
+- Use `$test-strategy` for reproducible historical evaluation plans or supplied artifacts.
+- No skill may issue orders, sizes, approvals, or deployment grants.
 
 ## Code review rules
 

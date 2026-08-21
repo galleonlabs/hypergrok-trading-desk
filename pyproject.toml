@@ -20,8 +20,12 @@ classifiers = [
   "Topic :: Office/Business :: Financial :: Investment",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp==2.0.0"]
+
 [project.scripts]
 trading-harness = "trading_harness.cli:main"
+trading-harness-mcp = "trading_harness.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

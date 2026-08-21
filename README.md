@@ -14,6 +14,9 @@ profitable strategy and is not ready to control capital.
 The foundation is pre-alpha and suitable for local development only:
 
 - Python 3.11 or newer; runtime dependencies are standard-library only.
+- Public Hyperliquid perpetual market briefs are available through an
+  allowlisted, read-only `/info` client with exact decimal parsing and freshness
+  checks. It cannot access an account or the `/exchange` endpoint.
 - Semantic intents can be normalized and fingerprinted deterministically.
 - Risk and authorization policies can be evaluated without venue access.
 - Persisted admission is limited to local `infrastructure_testnet`
@@ -26,8 +29,8 @@ The foundation is pre-alpha and suitable for local development only:
 - The command-line interface is read-only. It provides diagnostics and intent
   hashing; there is no execute command.
 
-Mainnet, testnet, paper trading, autonomous trading, signing, and exchange API
-writes are all out of scope for this foundation release.
+Mainnet/testnet exchange writes, paper trading, autonomous trading, signing,
+and credential loading are all out of scope for this foundation release.
 
 ## Architecture direction
 
@@ -56,26 +59,49 @@ keys, approve their own work, change promoted rules, or call venue write APIs.
 See [the harness specification](docs/trading_harness_spec.md) for the proposed
 trust boundaries, validation gates, and staged path toward any future trading.
 
-## Codex and OpenCode interfaces
+## ChatGPT/Codex first, OpenCode second
 
-The Python core is agent-runtime neutral. Codex is the first supported
-interface and OpenCode is a compatible second interface through:
+The Python core and tool service are agent-runtime neutral. The primary
+interface is the installable [`trading-desk` plugin](plugins/trading-desk),
+which packages five ChatGPT/Codex skills and one MCP server. OpenCode consumes
+the same skills and exact same MCP tools through the checked-in configuration.
+
+The MCP server exposes only:
+
+- `get_harness_status`: prove execution and credential loading are disabled.
+- `get_market_brief`: read a fresh public Hyperliquid perp brief with mid,
+  mark, oracle, hourly funding, open interest, 24h notional volume, spread, and
+  depth at 5/10/25 bps.
+- `validate_trade_intent`: validate an intent schema and calculate its canonical
+  hash. It does not perform risk review, create authorization, or submit an
+  order.
+
+The packaged workflows are:
 
 - [`AGENTS.md`](AGENTS.md) for durable repository guidance.
-- [`$validate-thesis`](.agents/skills/validate-thesis/SKILL.md) for frozen,
+- [`$operate-trading-desk`](plugins/trading-desk/skills/operate-trading-desk/SKILL.md)
+  for manager-style lifecycle coordination.
+- [`$brief-market`](plugins/trading-desk/skills/brief-market/SKILL.md) for the
+  typed public market-data tool.
+- [`$validate-thesis`](plugins/trading-desk/skills/validate-thesis/SKILL.md) for frozen,
   falsifiable strategy evaluation.
-- [`$scan-signals`](.agents/skills/scan-signals/SKILL.md) for read-only
+- [`$scan-signals`](plugins/trading-desk/skills/scan-signals/SKILL.md) for read-only
   registered-rule observations.
+- [`$test-strategy`](plugins/trading-desk/skills/test-strategy/SKILL.md) for
+  leakage-resistant historical test plans and artifact review.
 - [`opencode.json`](opencode.json), which defaults actions to `ask`, denies
   unlisted shell commands, external-directory access, secret/database files,
-  and `git push`, and exposes only the two repository skills.
+  and `git push`, and allows only those five skills and the three exact
+  read-only MCP tools.
 
-Both products natively read root `AGENTS.md` and the open agent-skill layout
-under `.agents/skills`. The skills contain workflow instructions only and
-are not imported by the Python package. No OpenAI/OpenCode SDK, model call,
-connector, MCP server, or plugin is required for the deterministic foundation.
-A future MCP/plugin boundary may expose controlled read tools; venue writes
-remain a separate qualification.
+The plugin copy under `plugins/trading-desk/skills` is canonical. The mirror
+under `.agents/skills` exists for repository-native Codex and OpenCode
+discovery; CI rejects drift. A generated copy of `trading_harness` under the
+plugin makes a cached plugin independent of the repository checkout; CI also
+requires that runtime to be byte-identical to `src/trading_harness`. No OpenAI
+or OpenCode model SDK is imported by the core. The optional MCP dependency is a
+protocol adapter over the same pure Python `ToolService` used by tests. Venue
+writes remain a separate qualification.
 
 Do not run OpenCode with `--auto` in this repository. OpenCode documents that
 auto mode approves requests that would otherwise ask; explicit deny rules
@@ -104,6 +130,31 @@ trading-harness doctor
 
 The package has no runtime dependencies. The local build step uses setuptools.
 
+### Run the ChatGPT/Codex plugin locally
+
+Install the pinned optional MCP runtime into the isolated environment:
+
+```bash
+python -m pip install -e '.[mcp]'
+```
+
+Codex can load [`plugins/trading-desk`](plugins/trading-desk) directly. For
+local Streamable HTTP protocol qualification, run:
+
+```bash
+trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000
+```
+
+The local endpoint is `http://127.0.0.1:8000/mcp`. ChatGPT cannot connect to a
+bare loopback URL: developer mode requires the
+[Secure MCP Tunnel or a reachable HTTPS endpoint](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+Public binding is deliberately rejected because this foundation has no
+user-authentication layer. Production publication requires a separately
+deployed authenticated HTTPS endpoint; it does not enable exchange writes.
+
+When using OpenCode, activate this environment before starting OpenCode so its
+local MCP process resolves the pinned dependency. Do not use OpenCode `--auto`.
+
 ## Read-only CLI
 
 Inspect the safety posture:
@@ -129,10 +180,10 @@ through Git history and the recorded upstream provenance for audit; they are
 **not** active controls, production code, or evidence that live execution is
 safe.
 
-The replacement workflows under `.agents/skills/` are read-only research
-interfaces for thesis validation and signal scanning. They cannot issue orders,
-position sizes, approvals, or deployment grants, and they are not imported by
-the deterministic Python core.
+The replacement workflows package selected upstream research and desk knowledge
+without copying any private-key loader or direct exchange-write snippet. They
+cannot issue orders, position sizes, approvals, or deployment grants, and they
+are not imported by the deterministic Python core.
 
 The audit record is in [UPSTREAM.md](UPSTREAM.md), with source dispositions in
 [docs/hypergrok_audit_matrix.md](docs/hypergrok_audit_matrix.md).

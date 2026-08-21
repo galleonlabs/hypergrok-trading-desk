@@ -1,0 +1,63 @@
+"""Deterministic, fail-closed foundation for the trading harness."""
+
+from .canonical import (
+    SEMANTIC_INTENT_HASH_DOMAIN,
+    CanonicalizationError,
+    canonical_bytes,
+    canonical_data,
+    canonical_decimal,
+    canonical_json,
+    domain_hash,
+    semantic_intent_hash,
+)
+from .domain import (
+    Authorization,
+    AuthorizationModel,
+    AuthorizationState,
+    DeploymentGrant,
+    Environment,
+    GrantState,
+    GrantType,
+    OrderType,
+    SemanticIntent,
+    Side,
+)
+from .thesis import (
+    DeploymentEligibility,
+    EvidenceReview,
+    EvidenceStatus,
+    EvidenceTransitionError,
+    ThesisVersion,
+    allowed_evidence_transitions,
+    apply_evidence_review,
+    assess_deployment,
+)
+
+__all__ = (
+    "Authorization",
+    "AuthorizationModel",
+    "AuthorizationState",
+    "CanonicalizationError",
+    "DeploymentEligibility",
+    "DeploymentGrant",
+    "Environment",
+    "EvidenceReview",
+    "EvidenceStatus",
+    "EvidenceTransitionError",
+    "GrantState",
+    "GrantType",
+    "OrderType",
+    "SEMANTIC_INTENT_HASH_DOMAIN",
+    "SemanticIntent",
+    "Side",
+    "ThesisVersion",
+    "allowed_evidence_transitions",
+    "apply_evidence_review",
+    "assess_deployment",
+    "canonical_bytes",
+    "canonical_data",
+    "canonical_decimal",
+    "canonical_json",
+    "domain_hash",
+    "semantic_intent_hash",
+)

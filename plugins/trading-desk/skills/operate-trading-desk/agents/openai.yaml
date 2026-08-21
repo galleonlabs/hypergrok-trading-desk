@@ -1,0 +1,6 @@
+interface:
+  display_name: "Operate Trading Desk"
+  short_description: "Coordinate work through safe harness gates"
+  default_prompt: "Use $operate-trading-desk to coordinate this request through the available trading-harness stages."
+policy:
+  allow_implicit_invocation: true

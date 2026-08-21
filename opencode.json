@@ -28,9 +28,12 @@
     },
     "bash": {
       "*": "deny",
-      "git status*": "allow",
-      "git diff*": "allow",
-      "git log*": "allow",
+      "git status*": "deny",
+      "git status": "allow",
+      "git status --short": "allow",
+      "git status --short --branch": "allow",
+      "git diff*": "deny",
+      "git log*": "deny",
       "python3 -m unittest*": "allow",
       "python3 -m compileall*": "allow",
       "trading-harness doctor*": "allow",
@@ -41,9 +44,16 @@
     "external_directory": "deny",
     "skill": {
       "*": "deny",
+      "operate-trading-desk": "allow",
+      "brief-market": "allow",
       "validate-thesis": "allow",
-      "scan-signals": "allow"
+      "scan-signals": "allow",
+      "test-strategy": "allow"
     },
+    "trading_desk_*": "deny",
+    "trading_desk_get_harness_status": "allow",
+    "trading_desk_get_market_brief": "allow",
+    "trading_desk_validate_trade_intent": "allow",
     "task": "ask",
     "webfetch": "ask",
     "websearch": "ask",
@@ -57,12 +67,31 @@
         "external_directory": "deny",
         "skill": {
           "*": "deny",
+          "operate-trading-desk": "allow",
+          "brief-market": "allow",
           "validate-thesis": "allow",
-          "scan-signals": "allow"
+          "scan-signals": "allow",
+          "test-strategy": "allow"
         },
+        "trading_desk_*": "deny",
+        "trading_desk_get_harness_status": "allow",
+        "trading_desk_get_market_brief": "allow",
+        "trading_desk_validate_trade_intent": "allow",
         "webfetch": "ask",
         "websearch": "ask"
       }
+    }
+  },
+  "mcp": {
+    "trading_desk": {
+      "type": "local",
+      "command": [
+        "python3",
+        "plugins/trading-desk/server.py"
+      ],
+      "cwd": ".",
+      "enabled": true,
+      "timeout": 30000
     }
   }
 }

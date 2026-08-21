@@ -1,0 +1,6 @@
+interface:
+  display_name: "Brief Market"
+  short_description: "Create sourced, freshness-aware market briefs"
+  default_prompt: "Use $brief-market to brief me on this instrument using available harness data."
+policy:
+  allow_implicit_invocation: true

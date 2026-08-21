@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools==75.8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-harness"
+version = "0.1.0.dev0"
+description = "Fail-closed foundation for a deterministic trading research harness"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "JawnDiego"}]
+dependencies = []
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[project.scripts]
+trading-harness = "trading_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["trading_harness*"]
+namespaces = true

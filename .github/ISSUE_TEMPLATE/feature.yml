@@ -1,5 +1,5 @@
 name: Improvement
-description: Propose a bounded improvement to a role or skill
+description: Propose a bounded harness or Codex-interface improvement
 title: "feature: "
 labels: [enhancement]
 body:
@@ -7,19 +7,26 @@ body:
     id: problem
     attributes:
       label: Problem
-      description: What a desk user or Bot cannot do well today.
+      description: What user, research, control-plane, or operations outcome is missing?
     validations:
       required: true
   - type: textarea
     id: boundary
     attributes:
       label: Safety boundary
-      description: Does this touch the write path, keys, approvals, transfers or unattended behaviour? Say how it stays inside the ticket protocol.
+      description: Does this touch credentials, authorization, risk, reservations, OMS/outbox, signer, venue writes, or unattended behavior? State the invariant and failure mode.
     validations:
       required: true
   - type: textarea
     id: outcome
     attributes:
       label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification and rollback
+      description: Which tests prove the change and how is it disabled or rolled back safely?
     validations:
       required: true

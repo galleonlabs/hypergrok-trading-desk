@@ -1,13 +1,13 @@
 # Changelog
 
-## 1.0.0 - 2026-08-16
+## Unreleased — Harness foundation
 
-Launch.
+- Replaced the Grok Bot prompt/plugin runtime with an agent-neutral deterministic harness foundation.
+- Added Codex repository guidance and focused `validate-thesis` and `scan-signals` skills.
+- Added canonical semantic intents, evidence/deployment separation, policy/admission scaffolding, durable outbox/reservation design, and a fail-closed executor boundary.
+- Added the fork provenance record, source audit matrix, and normative harness specification.
+- Removed legacy agent prompts, write skills, plugin manifests, mutable setup path, and upstream branding from runtime locations. The exact upstream snapshot remains available through Git history and recorded object IDs.
 
-+ `SETUP.md`: the file a Grok Bot follows to build the desk - repository onto the computer, seven Bots from profile cards, sixteen shared skills, one Trading Floor group chat, approval rules, desk record, read-only verification, receipt.
-+ Seven roles with full system prompts: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader, Trade Reviewer.
-+ Eight Hyperliquid skills: setup and API wallets, market data, account reads, orders, positions and margin, WebSocket, advanced actions, API reference. `curl` for reads, official Python SDK and `@nktkas/hyperliquid` for writes; snippets verified against the live API.
-+ Eight desk skills: operating model, trade lifecycle, risk limits and sizing, execution protocol, monitoring, post-trade review, incident response, strategy lab.
-+ Docs: how the desk works, FAQ, provenance. Mascot in `assets/`.
-+ `scripts/check.sh` and CI: frontmatter, links, one-writer rule.
-+ Plugin manifests and rule so Grok Build, Cursor and Claude Code load the same roles and skills.
+## Upstream history
+
+The fork began from Galleon Labs current-main commit `62cbe227a2ec531e0efa37254d4b6fae043fbfe5`. Its upstream changelog and disconnected Python `v1.0.0` lineage are audit evidence, not releases of this harness. See [`UPSTREAM.md`](UPSTREAM.md).

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Validate Thesis"
+  short_description: "Test trading claims without fooling ourselves"
+  default_prompt: "Use $validate-thesis to turn this trading idea into a frozen, falsifiable validation plan."
+policy:
+  allow_implicit_invocation: true

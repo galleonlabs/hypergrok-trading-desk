@@ -1,18 +1,47 @@
 # Security
 
-Use GitHub's **Report a vulnerability** flow to open a private security advisory. Do not put keys, signatures, wallet exports, account payloads or exploitable details in a public issue.
+## Current status
 
-What "vulnerability" means for a repository of instructions: any prose or snippet that could lead a Bot to send an order without the user's approval by ticket id, to handle a main-wallet key or seed phrase, to move funds, to resend an unknown-result order, or to print a secret. Those are bugs; report them.
+This branch is a non-live harness foundation. It contains no enabled venue adapter, loads no exchange key, and is not approved for testnet or mainnet execution.
 
-Operating reminders that live in the skills:
+No released version is currently supported for capital-bearing use.
 
-+ Only a trade-only Hyperliquid API wallet key ever reaches the desk computer, provisioned through Grok Bot's secure secret store, never through chat.
-+ All Bots for one user share a computer and sign-ins, so Bot identity is not a credential boundary; the key's permissions and the ticket protocol are.
-+ If a send times out or errors after leaving the machine, do not retry. Reconcile the client order id first.
-+ Suspected key misuse: the user revokes the API wallet in the Hyperliquid app first, then the desk investigates.
+## Report a vulnerability
 
-Supported versions:
+Use this fork's GitHub **Report a vulnerability** flow to open a private security advisory. Never place private keys, seed phrases, signatures, wallet exports, authorization tokens, account payloads, or exploitable details in a public issue.
 
-| Version | Supported |
+## Trust boundaries
+
+- Agents, prompts, webpages, imported repositories, generated code, research data, and external messages are untrusted.
+- An agent role or `writes_to_exchange` label is not an authorization boundary.
+- Agents must never receive exchange signing credentials or direct venue-write capability.
+- A future signer must run under a separate security principal with a narrow typed API, action allowlists, restricted egress, and managed key storage.
+- Human approval must occur in a trusted UI and bind a canonical semantic-intent hash. Approval in agent chat is invalid.
+- Risk admission, authorization consumption, portfolio reservation, and durable outbox creation must be atomic before network I/O.
+- Unknown venue outcomes remain reserved and must be reconciled; they are never blindly resent.
+
+The normative requirements are in [`docs/trading_harness_spec.md`](docs/trading_harness_spec.md).
+
+## Forbidden until explicit qualification
+
+- Any testnet or mainnet exchange write.
+- Any persisted grant other than local `infrastructure_testnet` simulation.
+- Loading an API-wallet or main-wallet key.
+- Transfers, withdrawals, bridges, vault/subaccount fund movement, builder fees, or staking actions.
+- Enabling an adapter by environment variable alone.
+- Running copied upstream snippets against an account.
+- Treating an agent, backtest, indicator match, or social post as deployment authorization.
+
+## If a credential is exposed
+
+1. Revoke it at the venue immediately.
+2. Halt new admission and preserve existing protective exits.
+3. Reconcile orders, fills, positions, and non-funding ledger changes from the last known-good point.
+4. Rotate affected credentials and service identities.
+5. Preserve redacted evidence and open a private incident review.
+
+## Supported versions
+
+| Version | Capital-bearing support |
 | --- | --- |
-| 1.x | Yes |
+| Unreleased foundation | No |

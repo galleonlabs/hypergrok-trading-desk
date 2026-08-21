@@ -1,0 +1,6 @@
+interface:
+  display_name: "Scan Signals"
+  short_description: "Find registered signals without placing trades"
+  default_prompt: "Use $scan-signals to scan the registered rules and report read-only evidence."
+policy:
+  allow_implicit_invocation: true

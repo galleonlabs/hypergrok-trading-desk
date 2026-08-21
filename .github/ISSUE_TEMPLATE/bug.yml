@@ -1,35 +1,40 @@
 name: Bug report
-description: Report an inaccurate instruction, snippet or procedure
+description: Report incorrect harness behavior or a violated invariant
 title: "bug: "
 labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Never include keys, signatures, wallet exports or private account payloads.
+      value: Never include keys, signatures, authorization tokens, wallet exports, or private account payloads.
   - type: input
     id: file
     attributes:
-      label: File
-      placeholder: skills/hyperliquid-orders/SKILL.md
+      label: Component or file
+      placeholder: src/trading_harness/store.py
     validations:
       required: true
   - type: dropdown
-    id: network
+    id: mode
     attributes:
-      label: Network
-      options: [testnet, mainnet, not network-specific]
+      label: Mode
+      options: [local foundation, shadow, testnet, mainnet, not environment-specific]
     validations:
       required: true
   - type: textarea
-    id: behaviour
+    id: behavior
     attributes:
-      label: What the instruction says, and what actually happened
-      description: Include the redacted API response or Grok Bot behaviour and whether any order was sent.
+      label: What happened
+      description: Include minimal redacted reproduction steps, state transitions, and whether any external write occurred.
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: What it should say
+      label: Expected behavior or invariant
     validations:
       required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Verification evidence
+      description: Test output, command/outbox state, or redacted logs that make the result reproducible.

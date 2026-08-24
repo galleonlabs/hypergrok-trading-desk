@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jawndiego.trading-desk-research</string>
+
+  <key>UserName</key>
+  <string>__REVIEWED_RESEARCH_USER__</string>
+  <key>GroupName</key>
+  <string>__REVIEWED_RESEARCH_GROUP__</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REVIEWED_VENV_BIN__/trading-harness</string>
+    <string>node</string>
+    <string>run</string>
+    <string>--state-db</string>
+    <string>__REVIEWED_STATE_DIR__/research.sqlite3</string>
+    <string>--node-id</string>
+    <string>trading-desk-research</string>
+    <string>--poll-seconds</string>
+    <string>1</string>
+    <string>--history-bars</string>
+    <string>1200</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REVIEWED_REPO_DIR__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Umask</key>
+  <integer>63</integer>
+
+  <key>StandardOutPath</key>
+  <string>__REVIEWED_LOG_DIR__/research.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REVIEWED_LOG_DIR__/research.stderr.log</string>
+</dict>
+</plist>

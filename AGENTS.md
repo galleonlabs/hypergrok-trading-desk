@@ -6,8 +6,8 @@ This repository builds an agent-runtime-neutral trading research and execution h
 
 - Keep domain, validation, risk, admission, OMS, ledger, signer, and venue-adapter code independent of Codex, ChatGPT, Grok, Claude, or any model runtime.
 - Put durable Codex working agreements here. The canonical packaged workflows live under `plugins/trading-desk/skills`; mirror them into `.agents/skills` with `scripts/sync_plugin_skills.py` for repository and OpenCode discovery.
-- The `trading-desk` MCP server exposes exactly three reviewed tools: harness status, public market briefs, and schema/hash validation for proposed intents. All are read-only and none may load an account secret, create authorization, reserve risk, or call a venue write endpoint.
-- Keep OpenCode permissions fail-closed in `opencode.json`; it may call only those exact local MCP tools and mirrored skills. Do not add a model/provider, write tool, custom agent with wider rights, or external-directory access without review.
+- The `trading-desk` MCP server exposes exactly eleven reviewed research tools. `track_asset`, `pause_tracked_asset`, and `record_manual_sentiment` write only local research state; the others read public/local evidence or validate an intent hash. None may load an account secret, create capital authority, reserve risk, sign, or call a venue write endpoint.
+- Keep OpenCode permissions fail-closed in `opencode.json`; it may call only those exact local MCP tools and mirrored skills. Local research writes remain `ask`, plan mode cannot call them, and no model/provider, execution tool, custom agent with wider rights, or external-directory access may be added without review.
 - Do not use OpenCode `--auto` for this repository; it converts `ask`
   decisions into approvals. The checked-in profile intentionally denies
   unlisted shell commands.
@@ -16,7 +16,7 @@ This repository builds an agent-runtime-neutral trading research and execution h
 ## Capital boundary
 
 - No agent, prompt, skill, webpage, generated script, or chat message may hold a signing key or call a venue write endpoint.
-- No testnet or mainnet writes are enabled in the foundation.
+- Paper, signer, nonce, transport, account-read and reconciliation primitives exist, but no testnet or mainnet write path is enabled or exposed to an agent.
 - The foundation admits only local `infrastructure_testnet` `simulate_order`
   commands; deny strategy, shadow, mainnet, and systematic grants.
 - Approval in chat is invalid.
@@ -41,6 +41,7 @@ This repository builds an agent-runtime-neutral trading research and execution h
 ## Agent workflows
 
 - Use `$operate-trading-desk` for multi-stage desk coordination.
+- Use `$assess-asset` for local tracking, completed-candle TA, explicit sentiment evidence, and buy/sell/nothing/unavailable assessment.
 - Use `$brief-market` for live public Hyperliquid market context through the typed MCP tool.
 - Use `$validate-thesis` for strategy, indicator, backtest, and edge claims.
 - Use `$scan-signals` for read-only registered-rule scans.

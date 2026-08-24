@@ -19,9 +19,27 @@ from mcp.client.streamable_http import streamable_http_client
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "trading-desk"
 EXPECTED_TOOLS = {
+    "analyze_asset",
+    "get_latest_sentiment",
+    "get_node_status",
     "get_harness_status",
     "get_market_brief",
+    "list_tracked_assets",
+    "pause_tracked_asset",
+    "record_manual_sentiment",
+    "track_asset",
+    "validate_candidate_profitability",
     "validate_trade_intent",
+}
+LOCAL_WRITE_TOOLS = {
+    "pause_tracked_asset",
+    "record_manual_sentiment",
+    "track_asset",
+}
+OPEN_WORLD_TOOLS = {
+    "analyze_asset",
+    "get_market_brief",
+    "validate_candidate_profitability",
 }
 
 
@@ -34,13 +52,13 @@ def _assert_contract(tools: list[object]) -> None:
             raise AssertionError(f"incomplete metadata: {name}")
         if tool.annotations is None or tool.annotations.title != tool.title:
             raise AssertionError(f"missing annotation title: {name}")
-        if tool.annotations.read_only_hint is not True:
-            raise AssertionError(f"tool is not read-only: {name}")
+        if tool.annotations.read_only_hint is not (name not in LOCAL_WRITE_TOOLS):
+            raise AssertionError(f"tool has wrong read-only hint: {name}")
         if tool.annotations.destructive_hint is not False:
             raise AssertionError(f"tool is destructive: {name}")
         if tool.annotations.idempotent_hint is not True:
             raise AssertionError(f"tool is not idempotent: {name}")
-        if tool.annotations.open_world_hint is not (name == "get_market_brief"):
+        if tool.annotations.open_world_hint is not (name in OPEN_WORLD_TOOLS):
             raise AssertionError(f"wrong open-world hint: {name}")
     market = by_name["get_market_brief"]
     if market.input_schema["properties"]["network"].get("enum") != [
@@ -84,7 +102,7 @@ async def _qualify(url: str) -> None:
             result = await session.call_tool("get_harness_status", {})
             if result.is_error or result.structured_content is None:
                 raise AssertionError(result)
-            if result.structured_content.get("mode") != "read_only":
+            if result.structured_content.get("mode") != "research_only":
                 raise AssertionError(result.structured_content)
 
 

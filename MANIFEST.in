@@ -11,6 +11,7 @@ include plugins/trading-desk/.codex-plugin/plugin.json
 include plugins/trading-desk/server.py
 recursive-include .agents/skills *.md *.yaml
 recursive-include docs *.md
+recursive-include deploy *.example
 recursive-include plugins/trading-desk/runtime *.py
 recursive-include plugins/trading-desk/skills *.md *.yaml
 recursive-include scripts *.py

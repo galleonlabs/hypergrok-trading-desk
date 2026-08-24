@@ -1,7 +1,7 @@
 # Agent-Assisted Trading Harness Specification
 
-Status: Draft v0.2
-Decision date: 2026-08-21
+Status: Draft v0.3 — research implementation and disabled execution primitives
+Decision date: 2026-08-24
 Upstream source: [`galleonlabs/hypergrok-trading-desk`](https://github.com/galleonlabs/hypergrok-trading-desk)
 Working fork: [`jawndiego/hypergrok-trading-desk`](https://github.com/jawndiego/hypergrok-trading-desk)
 Verified fork `main`: `62cbe227a2ec531e0efa37254d4b6fae043fbfe5`
@@ -41,14 +41,54 @@ Build a trading desk that can:
 
 The system is a research and execution harness. It does not create alpha merely by adding agents, indicators, or roles.
 
-### 2.1 Agent-runtime abstraction
+### 2.1 Current Codex-facing outcome
+
+The implemented research interface must let a user:
+
+1. Register an explicit Hyperliquid asset/network watch in local state.
+2. Read live public context and strict completed 4h candles.
+3. Separate descriptive TA from the frozen registered strategy result.
+4. Add sourced sentiment through either an explicit manual X session or a future compliant API collector.
+5. Receive exactly `buy`, `sell`, `nothing`, or `unavailable`, with machine-readable blockers.
+6. Run costed historical validation and require prospective shadow evidence before profitability promotion.
+7. Reach a deterministic risk ticket only from an active, hash-matched profitability attestation and fresh flat-account snapshot.
+8. Carry an entry, reduce-only stop and take-profit in every risk-increasing plan.
+
+The always-on research node is credential-free and permanently records
+`capability=research_only` and `risk_gate=halted`. Codex, ChatGPT and OpenCode
+may write the local asset registry and sentiment evidence, but they cannot
+create a trusted approval, access the signer, or write to Hyperliquid.
+
+Manual use of the user's signed-in X browser is interactive only. The harness
+does not script the website, store cookies/tokens/raw post text, or treat manual
+polarity as unattended authority. Continuous sentiment requires the official
+X API or another compliant provider.
+
+### 2.2 Profitability is a thesis gate
+
+"Profitable" means a strategy remains eligible only while all registered
+historical, cost-stress, uncertainty, prospective-shadow, drift and
+concentration gates pass. It is not a guarantee.
+
+The first implemented `candidate-v0/1` ETH 4h evaluation was `REJECTED` on
+2026-08-24: 116 trades, -0.0331R net expectancy, 0.9401 profit factor,
+-0.2484R one-sided bootstrap lower bound, 19.4628R maximum drawdown and
+negative stressed expectancy. The harness must retain that failure and refuse
+to trade it. It may not optimize the inspected window until it passes.
+
+`SMA-outfits` is currently a draft hypothesis source only. The reviewed commit
+contains a README and license but no advertised data or scripts, and it does
+not define complete entry/exit/stop/cost rules. See
+[`sma_outfits_validation.md`](sma_outfits_validation.md).
+
+### 2.3 Agent-runtime abstraction
 
 The deterministic core must not import, invoke, or depend on ChatGPT, Codex, Grok, Claude, or another model runtime.
 
-- ChatGPT and Codex are the first supported interfaces through the installable [`trading-desk` plugin](../plugins/trading-desk), repository [`AGENTS.md`](../AGENTS.md), and five focused packaged skills. ChatGPT and Codex share the same plugin and typed MCP contract.
-- OpenCode is a compatible second interface over a byte-identical mirror under `.agents/skills` and the same local MCP server. Its checked-in [`opencode.json`](../opencode.json) must default to `ask`, deny external-directory and sensitive-file access, omit a model/provider, and allow only the three reviewed read-only MCP tools by exact name.
+- ChatGPT and Codex are the first supported interfaces through the installable [`trading-desk` plugin](../plugins/trading-desk), repository [`AGENTS.md`](../AGENTS.md), and six focused packaged skills. ChatGPT and Codex share the same plugin and typed MCP contract.
+- OpenCode is a compatible second interface over a byte-identical mirror under `.agents/skills` and the same local MCP server. Its checked-in [`opencode.json`](../opencode.json) defaults to `ask`, denies external-directory and sensitive-file access, omits a model/provider, allows the reviewed read tools by exact name, and keeps the three local research writes at `ask` and unavailable to plan mode.
 - Repository skills contain workflow guidance only; they call typed core interfaces and cannot confer credentials, evidence status, deployment grants, or exchange authority.
-- The current MCP surface is limited to fail-closed harness status, public Hyperliquid market briefs, and semantic-intent schema/hash validation. It cannot read credentials, authorize or admit an intent, reserve exposure, sign, or write to a venue.
+- The current eleven-tool MCP surface adds asset tracking, manual sentiment persistence, deterministic analysis, historical validation and node status to harness status, public briefs and intent hashing. Its only mutations are local research state. It cannot read credentials, authorize or admit an intent, reserve exposure, sign, or write to a venue.
 - Future private data, authentication, authorization, and controlled actions belong in narrow server-side tools rather than skill prose. Any write tool requires a separate qualification milestone and must enforce its own authorization at the side-effect boundary.
 - The same domain, validation, risk, admission, OMS, ledger, and adapter APIs must work without any agent attached.
 - Removing or replacing the agent interface must not change deterministic results or capital-path behavior.
@@ -105,6 +145,16 @@ Required behavior:
 - Route emergency actions through the same serialized executor, with explicit deadlines, precedence, retry/reconciliation rules, and paging; a second writer is forbidden.
 - Continuously compare protected size with live position size.
 - Never infer protection from the submitted request; verify it from venue state.
+
+Current Hyperliquid `normalTpsl` semantics do not provide a stop for an
+ordinary partially filled IOC parent: children become active only after full
+parent fill, and the IOC remainder cancellation removes them after a partial
+fill. There is no documented FOK order. Initial live qualification therefore
+accepts only a fully filled entry plus an independently visible stop covering
+the exact position. Any partial fill is an emergency state requiring an
+immediate bounded reduce-only flatten; there is an unavoidable brief
+unprotected interval, so a stop can never be described as an absolute loss
+guarantee.
 
 ### 3.5 Unknown outcomes require durable idempotency
 
@@ -394,15 +444,16 @@ The repository selected these systems from a much larger advertised search. Its 
 
 ### 6.7 Skill boundary
 
-The ChatGPT/Codex plugin begins with five focused skills, mirrored exactly for OpenCode:
+The ChatGPT/Codex plugin currently packages six focused skills, mirrored exactly for OpenCode:
 
+- `assess-asset`: tracks a shadow-only 4h asset, combines current context, descriptive TA, the frozen registered signal and explicit sentiment evidence, and preserves buy/sell/nothing/unavailable plus eligibility as separate fields.
 - `operate-trading-desk`: coordinates stages and reports unavailable capabilities without manufacturing a fallback.
 - `brief-market`: calls the typed public Hyperliquid market-data tool and preserves network, source, receipt, and freshness evidence.
-- `validate-thesis`: structures validation plans and reviews deterministic evidence artifacts. The foundation does not yet persist thesis evidence or run backtests; future registry/evaluation writes must use typed core interfaces and have no venue access.
-- `scan-signals`: interprets read-only registered-rule scans. Until the deterministic scanner and normalized data adapter exist, it must return `unavailable`.
-- `test-strategy`: designs or reviews leakage-resistant historical evaluation; until a deterministic runner exists, it must not claim a run occurred.
+- `validate-thesis`: structures validation plans and reviews deterministic evidence artifacts without self-promoting them.
+- `scan-signals`: calls the deterministic completed-candle scanner and reports its registered result without sizing or execution.
+- `test-strategy`: invokes the frozen candidate runner when applicable and otherwise designs/reviews a preregistered leakage-resistant evaluation.
 
-Scanner statuses are `unavailable`, `observation`, `research_candidate`, or `validated_research_signal`. A skill never returns an order or position size. A custom parameter override creates a new draft thesis and forces `exploratory=true` and `no_trade=true`. If registration and evaluation later become materially different workflows, split `validate-thesis` without changing the core API.
+The assessment verdict is `buy`, `sell`, `nothing`, or `unavailable`; risk eligibility and trade authority remain separate booleans. A skill never creates an order or position size. A custom parameter override creates a new draft thesis and forces `exploratory=true` and `no_trade=true`.
 
 ## 7. Authorization Models
 

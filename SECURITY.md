@@ -2,9 +2,9 @@
 
 ## Current status
 
-This branch is a non-live harness foundation. It contains no enabled venue adapter, loads no exchange key, and is not approved for testnet or mainnet execution.
+This branch is a non-live harness. It contains disabled signer, nonce, transport, dispatcher and recovery primitives, but no enabled venue adapter or key loader and no testnet/mainnet qualification.
 
-The packaged ChatGPT/Codex plugin and OpenCode connection expose only fail-closed status, public Hyperliquid `/info` market briefs, and semantic-intent schema/hash validation. These tools cannot authorize, sign, submit, modify, or cancel an order.
+The packaged ChatGPT/Codex plugin and OpenCode connection expose eleven bounded research tools. Three write only local asset/sentiment research state. They cannot create a trusted approval, reserve execution risk, reach the signer, submit, modify, or cancel an exchange order.
 
 No released version is currently supported for capital-bearing use.
 
@@ -17,18 +17,20 @@ Use this fork's GitHub **Report a vulnerability** flow to open a private securit
 - Agents, prompts, webpages, imported repositories, generated code, research data, and external messages are untrusted.
 - An agent role or `writes_to_exchange` label is not an authorization boundary.
 - Agents must never receive exchange signing credentials or direct venue-write capability.
-- MCP tool annotations are advisory; authorization and validation must be enforced inside every tool handler. The current three tools are read-only by construction.
-- A future signer must run under a separate security principal with a narrow typed API, action allowlists, restricted egress, and managed key storage.
+- MCP tool annotations are advisory; authorization and validation are repeated inside every handler. Local research writes confer no capital authority.
+- The signer code must run under a separate security principal with a narrow typed API, explicit account/network/asset/CLOID/action allowlists, restricted egress, and managed key storage. No signer process is deployed by this repository.
 - Human approval must occur in a trusted UI and bind a canonical semantic-intent hash. Approval in agent chat is invalid.
 - Risk admission, authorization consumption, portfolio reservation, and durable outbox creation must be atomic before network I/O.
 - Unknown venue outcomes remain reserved and must be reconciled; they are never blindly resent.
+- A prepared attempt, fresh dispatch attestation, nonce, action hash and wire hash are durable before the one permitted send. Recovery actions are limited to reduce-only close, owned-CLOID cancel and same-nonce noop fencing.
+- Recovery builders exist for testing, but public recovery signing/submission is compiled off until those actions use the same durable authorization/outbox/attempt/reconciliation path.
 
 The normative requirements are in [`docs/trading_harness_spec.md`](docs/trading_harness_spec.md).
 
 ## Forbidden until explicit qualification
 
 - Any testnet or mainnet exchange write.
-- Any persisted grant other than local `infrastructure_testnet` simulation.
+- Treating the local testnet HMAC approval helper as suitable for mainnet; mainnet requires a later independently reviewed hardware-backed/asymmetric authority.
 - Loading an API-wallet or main-wallet key.
 - Transfers, withdrawals, bridges, vault/subaccount fund movement, builder fees, or staking actions.
 - Enabling an adapter by environment variable alone.

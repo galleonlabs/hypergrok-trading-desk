@@ -44,6 +44,7 @@
     "external_directory": "deny",
     "skill": {
       "*": "deny",
+      "assess-asset": "allow",
       "operate-trading-desk": "allow",
       "brief-market": "allow",
       "validate-thesis": "allow",
@@ -51,8 +52,16 @@
       "test-strategy": "allow"
     },
     "trading_desk_*": "deny",
+    "trading_desk_analyze_asset": "allow",
+    "trading_desk_get_latest_sentiment": "allow",
+    "trading_desk_get_node_status": "allow",
     "trading_desk_get_harness_status": "allow",
     "trading_desk_get_market_brief": "allow",
+    "trading_desk_list_tracked_assets": "allow",
+    "trading_desk_pause_tracked_asset": "ask",
+    "trading_desk_record_manual_sentiment": "ask",
+    "trading_desk_track_asset": "ask",
+    "trading_desk_validate_candidate_profitability": "allow",
     "trading_desk_validate_trade_intent": "allow",
     "task": "ask",
     "webfetch": "ask",
@@ -67,6 +76,7 @@
         "external_directory": "deny",
         "skill": {
           "*": "deny",
+          "assess-asset": "allow",
           "operate-trading-desk": "allow",
           "brief-market": "allow",
           "validate-thesis": "allow",
@@ -74,8 +84,13 @@
           "test-strategy": "allow"
         },
         "trading_desk_*": "deny",
+        "trading_desk_analyze_asset": "allow",
+        "trading_desk_get_latest_sentiment": "allow",
+        "trading_desk_get_node_status": "allow",
         "trading_desk_get_harness_status": "allow",
         "trading_desk_get_market_brief": "allow",
+        "trading_desk_list_tracked_assets": "allow",
+        "trading_desk_validate_candidate_profitability": "allow",
         "trading_desk_validate_trade_intent": "allow",
         "webfetch": "ask",
         "websearch": "ask"

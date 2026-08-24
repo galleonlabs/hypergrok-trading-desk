@@ -72,7 +72,27 @@ class DoctorTests(unittest.TestCase):
             action for action in parser._actions if action.dest == "command"
         )
 
-        self.assertEqual(set(subparser_action.choices), {"doctor", "hash-intent"})
+        self.assertEqual(
+            set(subparser_action.choices),
+            {"doctor", "hash-intent", "node"},
+        )
+        self.assertNotIn("trade", subparser_action.choices)
+        self.assertNotIn("execute", subparser_action.choices)
+
+    def test_missing_node_status_is_read_only_and_halted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.sqlite3"
+            status, stdout, stderr = run_cli(
+                ["node", "status", "--state-db", str(path)]
+            )
+
+            self.assertFalse(path.exists())
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        report = json.loads(stdout)
+        self.assertFalse(report["available"])
+        self.assertEqual(report["risk_gate"], "halted")
+        self.assertFalse(report["venue_writes_enabled"])
 
 
 class HashIntentTests(unittest.TestCase):

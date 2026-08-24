@@ -1,4 +1,4 @@
-"""Optional MCP 2.0 adapter for the read-only :mod:`tool_api` service."""
+"""Optional MCP 2.0 adapter for the bounded research :mod:`tool_api` service."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="trading-harness-mcp",
-        description="Run the Trading Desk read-only MCP adapter.",
+        description="Run the Trading Desk research MCP adapter.",
     )
     parser.add_argument(
         "--transport",
@@ -185,6 +185,59 @@ def build_mcp_server(
         __base__=StrictArguments,
         intent=(dict[str, Any], ...),
     )
+    track_arguments = runtime.create_model(
+        "TrackAssetArguments",
+        __base__=StrictArguments,
+        asset_id=(str, runtime.field(min_length=1, max_length=128)),
+        symbol=(
+            str,
+            runtime.field(
+                min_length=1,
+                max_length=64,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+            ),
+        ),
+        network=(str, runtime.field(pattern=r"^(?:mainnet|testnet)$")),
+        sentiment_query=(str, runtime.field(min_length=1, max_length=1024)),
+        poll_seconds=(int, runtime.field(default=60, ge=10, le=86400)),
+    )
+    pause_arguments = runtime.create_model(
+        "PauseTrackedAssetArguments",
+        __base__=StrictArguments,
+        asset_id=(str, runtime.field(min_length=1, max_length=128)),
+        expected_revision=(int, runtime.field(ge=1)),
+    )
+    empty_arguments = runtime.create_model(
+        "ListTrackedAssetsArguments",
+        __base__=StrictArguments,
+    )
+    asset_arguments = runtime.create_model(
+        "AssetIdArguments",
+        __base__=StrictArguments,
+        asset_id=(str, runtime.field(min_length=1, max_length=128)),
+    )
+    sentiment_arguments = runtime.create_model(
+        "RecordManualSentimentArguments",
+        __base__=StrictArguments,
+        asset_id=(str, runtime.field(min_length=1, max_length=128)),
+        window_start=(str, runtime.field(min_length=20, max_length=64)),
+        window_end=(str, runtime.field(min_length=20, max_length=64)),
+        evidence=(list[dict[str, Any]], runtime.field(max_length=100)),
+        excluded_count=(int, runtime.field(ge=0)),
+        collection_complete=(bool, ...),
+    )
+    node_arguments = runtime.create_model(
+        "GetNodeStatusArguments",
+        __base__=StrictArguments,
+        node_id=(
+            str,
+            runtime.field(
+                default="trading-desk-research",
+                min_length=1,
+                max_length=128,
+            ),
+        ),
+    )
     output_model = runtime.root_model[dict[str, Any]]
 
     definitions = {definition.name: definition for definition in TOOL_CATALOG}
@@ -214,9 +267,99 @@ def build_mcp_server(
             tool_service.validate_trade_intent(intent),
         )
 
+    def track_asset(
+        asset_id: str,
+        symbol: str,
+        network: str,
+        sentiment_query: str,
+        poll_seconds: int = 60,
+    ) -> dict[str, Any]:
+        return validate_output(
+            "track_asset",
+            tool_service.track_asset(
+                asset_id,
+                symbol,
+                network,
+                sentiment_query,
+                poll_seconds,
+            ),
+        )
+
+    def pause_tracked_asset(asset_id: str, expected_revision: int) -> dict[str, Any]:
+        return validate_output(
+            "pause_tracked_asset",
+            tool_service.pause_tracked_asset(asset_id, expected_revision),
+        )
+
+    def list_tracked_assets() -> dict[str, Any]:
+        return validate_output(
+            "list_tracked_assets",
+            tool_service.list_tracked_assets(),
+        )
+
+    def record_manual_sentiment(
+        asset_id: str,
+        window_start: str,
+        window_end: str,
+        evidence: list[dict[str, Any]],
+        excluded_count: int,
+        collection_complete: bool,
+    ) -> dict[str, Any]:
+        return validate_output(
+            "record_manual_sentiment",
+            tool_service.record_manual_sentiment(
+                asset_id=asset_id,
+                window_start=window_start,
+                window_end=window_end,
+                evidence=evidence,
+                excluded_count=excluded_count,
+                collection_complete=collection_complete,
+            ),
+        )
+
+    def get_latest_sentiment(asset_id: str) -> dict[str, Any]:
+        return validate_output(
+            "get_latest_sentiment",
+            tool_service.get_latest_sentiment(asset_id),
+        )
+
+    def analyze_asset(asset_id: str) -> dict[str, Any]:
+        return validate_output(
+            "analyze_asset",
+            tool_service.analyze_asset(asset_id),
+        )
+
+    def validate_candidate_profitability(asset_id: str) -> dict[str, Any]:
+        return validate_output(
+            "validate_candidate_profitability",
+            tool_service.validate_candidate_profitability(asset_id),
+        )
+
+    def get_node_status(
+        node_id: str = "trading-desk-research",
+    ) -> dict[str, Any]:
+        return validate_output(
+            "get_node_status",
+            tool_service.get_node_status(node_id),
+        )
+
     functions = {
+        "analyze_asset": (analyze_asset, asset_arguments),
+        "get_latest_sentiment": (get_latest_sentiment, asset_arguments),
+        "get_node_status": (get_node_status, node_arguments),
         "get_harness_status": (get_harness_status, status_arguments),
         "get_market_brief": (get_market_brief, market_arguments),
+        "list_tracked_assets": (list_tracked_assets, empty_arguments),
+        "pause_tracked_asset": (pause_tracked_asset, pause_arguments),
+        "record_manual_sentiment": (
+            record_manual_sentiment,
+            sentiment_arguments,
+        ),
+        "track_asset": (track_asset, track_arguments),
+        "validate_candidate_profitability": (
+            validate_candidate_profitability,
+            asset_arguments,
+        ),
         "validate_trade_intent": (validate_trade_intent, intent_arguments),
     }
     tools: list[Any] = []
@@ -253,12 +396,13 @@ def build_mcp_server(
     server = runtime.server_class(
         name="trading-desk",
         title="Trading Desk",
-        description="Read-only tools for the deterministic trading harness.",
+        description="Bounded research tools for the deterministic trading harness.",
         instructions=(
-            "These tools may read public market data or validate an intent. "
-            "They cannot load credentials, authorize a trade, or write to a venue."
+            "These tools may read public market data, write local research state, "
+            "or validate an intent. They cannot load credentials, authorize a "
+            "trade, or write to a venue."
         ),
-        version="0.1.0",
+        version="0.2.0",
         tools=tools,
     )
     return server

@@ -17,9 +17,27 @@ from mcp.client.stdio import stdio_client
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "trading-desk"
 EXPECTED_TOOLS = {
+    "analyze_asset",
+    "get_latest_sentiment",
+    "get_node_status",
     "get_harness_status",
     "get_market_brief",
+    "list_tracked_assets",
+    "pause_tracked_asset",
+    "record_manual_sentiment",
+    "track_asset",
+    "validate_candidate_profitability",
     "validate_trade_intent",
+}
+LOCAL_WRITE_TOOLS = {
+    "pause_tracked_asset",
+    "record_manual_sentiment",
+    "track_asset",
+}
+OPEN_WORLD_TOOLS = {
+    "analyze_asset",
+    "get_market_brief",
+    "validate_candidate_profitability",
 }
 
 
@@ -32,13 +50,13 @@ def _assert_contract(tools: list[object]) -> None:
             raise AssertionError(f"tool has no title: {name}")
         if tool.annotations is None or tool.annotations.title != tool.title:
             raise AssertionError(f"tool annotation has no matching title: {name}")
-        if tool.annotations.read_only_hint is not True:
-            raise AssertionError(f"tool is not marked read-only: {name}")
+        if tool.annotations.read_only_hint is not (name not in LOCAL_WRITE_TOOLS):
+            raise AssertionError(f"tool has wrong read-only hint: {name}")
         if tool.annotations.destructive_hint is not False:
             raise AssertionError(f"tool is marked destructive: {name}")
         if tool.annotations.idempotent_hint is not True:
             raise AssertionError(f"tool is not marked idempotent: {name}")
-        expected_open_world = name == "get_market_brief"
+        expected_open_world = name in OPEN_WORLD_TOOLS
         if tool.annotations.open_world_hint is not expected_open_world:
             raise AssertionError(f"tool has wrong open-world hint: {name}")
         if tool.output_schema is None:
@@ -117,7 +135,7 @@ async def _qualify_session(
             status = result.structured_content
             if not isinstance(status, dict):
                 raise AssertionError("status tool returned no structured content")
-            if status.get("mode") != "read_only":
+            if status.get("mode") != "research_only":
                 raise AssertionError(status)
             if status.get("venue_writes_enabled") is not False:
                 raise AssertionError(status)

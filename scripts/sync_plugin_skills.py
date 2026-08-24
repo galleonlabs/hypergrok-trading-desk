@@ -3,7 +3,7 @@
 
 The plugin copy is canonical because it is the packaged ChatGPT/Codex
 interface.  OpenCode and repository-native Codex discovery consume the mirror.
-Only the five reviewed skill directories below may be written.
+Only the reviewed skill directories below may be written.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import sys
 
 
 SKILL_NAMES = (
+    "assess-asset",
     "operate-trading-desk",
     "brief-market",
     "validate-thesis",

@@ -16,9 +16,10 @@ Read [references/roles.md](references/roles.md) before assigning or describing d
 ## Route the work
 
 - For current market state, use `$brief-market` and the typed `get_market_brief` tool.
+- For a named asset watch or buy/sell/nothing assessment, use `$assess-asset` and the typed tracking, sentiment, analysis, validation, and node-status tools.
 - For an idea or edge claim, use `$validate-thesis` before treating it as a registered research rule.
-- For registered-rule observations, use `$scan-signals`; a match is evidence, not an order.
-- For historical evaluation, use `$test-strategy` and preserve every attempted variant.
+- For registered-rule observations, use `$scan-signals` and `analyze_asset`; a match is evidence, not an order.
+- For historical evaluation, use `$test-strategy` and `validate_candidate_profitability`; preserve every attempted variant and require prospective shadow evidence after historical PASS.
 - For a harness-produced candidate intent, call `validate_trade_intent`. It currently checks schema and canonical identity only; report that scope and its result unchanged. It does not perform portfolio risk review, approve, sign, or submit an order.
 
 No skill or model is the execution venue. Execution belongs to the deterministic harness and may proceed only when the harness explicitly exposes that capability and its independent authorization, risk, and freshness gates pass. Approval in chat is not authorization. Do not imply that an order was sent without immutable harness and venue records.

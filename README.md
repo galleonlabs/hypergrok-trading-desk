@@ -1,115 +1,132 @@
 # Trading Harness
 
-> **NO LIVE TRADING.** This repository cannot place, amend, or cancel an order.
-> It contains no exchange SDK, signer, key loader, or enabled venue adapter.
+> **LIVE TRADING IS NOT ENABLED.** The repository now contains reviewed paper,
+> wire, signer, nonce, transport, account-read and reconciliation primitives,
+> but no Codex/MCP tool or default runtime can sign or submit an order.
 
-This fork is being rebuilt as a deterministic, testable harness for researching
-and validating trading theses. The current foundation establishes typed domain
-objects, canonical intent hashing, policy admission boundaries, durable local
-records, and an execution boundary that fails closed. It does **not** claim a
-profitable strategy and is not ready to control capital.
+This fork is becoming a Codex-first, agent-runtime-neutral trading desk for
+Hyperliquid. It can track an asset, ingest completed candles, calculate
+deterministic TA, record sourced sentiment evidence, classify the registered
+setup as buy/sell/nothing/unavailable, and evaluate a strategy after costs.
+Capital-bearing actions remain behind a separate, unfinished qualification
+path.
 
-## Current status
+Profitability is a revocable evidence gate, not a product promise. The first
+registered ETH strategy was tested honestly and rejected; the harness will
+abstain instead of relabelling a failed backtest as an opportunity.
 
-The foundation is pre-alpha and suitable for local development only:
+## Capability status
 
-- Python 3.11 or newer; runtime dependencies are standard-library only.
-- Public Hyperliquid perpetual market briefs are available through an
-  allowlisted, read-only `/info` client with exact decimal parsing and freshness
-  checks. It cannot access an account or the `/exchange` endpoint.
-- Semantic intents can be normalized and fingerprinted deterministically.
-- Risk and authorization policies can be evaluated without venue access.
-- Persisted admission is limited to local `infrastructure_testnet`
-  `simulate_order` commands; strategy, mainnet, and systematic grants are
-  rejected by the foundation.
-- The local store supports development and recovery tests; it is not yet a
-  production database or immutable ledger.
-- `DisabledVenueAdapter` is the only shipped execution adapter and rejects
-  every venue mutation, regardless of environment variables.
-- The command-line interface is read-only. It provides diagnostics and intent
-  hashing; there is no execute command.
+| Capability | Status |
+|---|---|
+| Public Hyperliquid brief and completed-candle history | Implemented and live-smoke-tested |
+| Local asset registry and always-on research node | Implemented; credential-free |
+| Descriptive EMA/RSI/ATR TA | Implemented; research only |
+| Registered EMA/Donchian/ATR buy/sell/nothing signal | Implemented |
+| Manual X sentiment evidence | Implemented for explicit browser research; never unattended |
+| Unattended sentiment | Requires an official X API or compliant provider |
+| Costed historical validation and prospective shadow ledger | Implemented |
+| Mandatory-stop risk ticket and exact three-leg plan | Implemented |
+| Local paper OMS/protection watchdog | Implemented |
+| Approval/reservation/outbox/preflight/dispatcher persistence | Implemented; not exposed |
+| Read-only account/metadata/reconciliation | Implemented |
+| Hyperliquid exact wire, durable nonce, isolated signing and one-shot entry transport | Implemented as disabled primitives |
+| Reduce-only close/cancel/noop recovery | Typed and signer-tested, but public signing/submission hard-disabled until durable recovery outbox exists |
+| Live Hyperliquid testnet | **Not qualified or enabled** |
+| Live Hyperliquid mainnet | **Disabled** |
 
-Mainnet/testnet exchange writes, paper trading, autonomous trading, signing,
-and credential loading are all out of scope for this foundation release.
+The only shipped default executor remains disabled. Environment variables
+cannot turn venue writes on.
 
-## Architecture direction
+## Honest strategy result
+
+`candidate-v0/1` uses completed 4h bars, EMA(50/200), a Donchian(20)
+breakout transition excluding the signal bar, Wilder ATR(14), next-bar fills,
+a 1.5 ATR stop, 3 ATR target, and 12-bar time exit.
+
+On 2026-08-24, its first run over the latest 4,999 completed ETH 4h mainnet
+bars produced:
+
+- 116 trades;
+- mean net expectancy: **-0.0331R**;
+- profit factor: **0.9401**;
+- one-sided block-bootstrap lower bound: **-0.2484R**;
+- maximum drawdown: **19.4628R**;
+- negative expectancy under the registered cost stress.
+
+Result: `REJECTED`. That inspected window is failed/discovery evidence; it will
+not be tuned until it passes. See [the SMA-outfits disposition](docs/sma_outfits_validation.md)
+for how imported indicator claims are handled.
+
+## Architecture
 
 ```text
-untrusted research / agent output
-              |
-              v
-typed thesis and deterministic validation
-              |
-              v
-canonical semantic intent
-              |
-              v
-deterministic policy/admission scaffolding + durable reservation
-              |
-              v
-isolated signer/executor (NOT IMPLEMENTED)
-              |
-              v
-venue writes (DISABLED)
+Codex / ChatGPT / OpenCode (no credentials)
+        |
+        v
+bounded MCP research tools + local research database
+        |
+        +--> completed candles --> descriptive TA
+        |                       --> registered signal
+        +--> sourced sentiment evidence
+        +--> buy / sell / nothing / unavailable
+        +--> costed historical + prospective shadow gates
+        |
+        v
+mandatory-stop risk ticket (not trade authority)
+        |
+        v
+trusted local approval + atomic execution store (not MCP/chat)
+        |
+        v
+isolated signer process + one-shot transport (disabled pending testnet)
+        |
+        v
+independent reconciliation + protection watchdog
 ```
 
-Agents may eventually gather evidence, propose falsifiable theses, and explain
-results. They must remain outside the capital-bearing path: they cannot hold
-keys, approve their own work, change promoted rules, or call venue write APIs.
-See [the harness specification](docs/trading_harness_spec.md) for the proposed
-trust boundaries, validation gates, and staged path toward any future trading.
+Agents explain and route evidence. Deterministic code owns indicators,
+classification, risk arithmetic, hashes, state transitions, signing policy,
+and reconciliation. A chat message is never approval.
 
-## ChatGPT/Codex first, OpenCode second
+## Codex/ChatGPT plugin
 
-The Python core and tool service are agent-runtime neutral. The primary
-interface is the installable [`trading-desk` plugin](plugins/trading-desk),
-which packages five ChatGPT/Codex skills and one MCP server. OpenCode consumes
-the same skills and exact same MCP tools through the checked-in configuration.
+[`plugins/trading-desk`](plugins/trading-desk) packages six skills and eleven
+bounded MCP tools. Three tools write only local research state; none writes to
+an exchange.
 
-The MCP server exposes only:
+Research tools:
 
-- `get_harness_status`: prove execution and credential loading are disabled.
-- `get_market_brief`: read a fresh public Hyperliquid perp brief with mid,
-  mark, oracle, hourly funding, open interest, 24h notional volume, spread, and
-  depth at 5/10/25 bps.
-- `validate_trade_intent`: validate an intent schema and calculate its canonical
-  hash. It does not perform risk review, create authorization, or submit an
-  order.
+- `get_harness_status`
+- `get_market_brief`
+- `track_asset` — local database write
+- `pause_tracked_asset` — local database write
+- `list_tracked_assets`
+- `record_manual_sentiment` — local database write
+- `get_latest_sentiment`
+- `analyze_asset`
+- `validate_candidate_profitability`
+- `get_node_status`
+- `validate_trade_intent` — schema/hash only, not risk or approval
 
-The packaged workflows are:
+Use [`$assess-asset`](plugins/trading-desk/skills/assess-asset/SKILL.md) for the
+end-to-end research workflow. Other packaged skills cover market briefs,
+thesis registration, signal interpretation, backtests, and desk coordination.
 
-- [`AGENTS.md`](AGENTS.md) for durable repository guidance.
-- [`$operate-trading-desk`](plugins/trading-desk/skills/operate-trading-desk/SKILL.md)
-  for manager-style lifecycle coordination.
-- [`$brief-market`](plugins/trading-desk/skills/brief-market/SKILL.md) for the
-  typed public market-data tool.
-- [`$validate-thesis`](plugins/trading-desk/skills/validate-thesis/SKILL.md) for frozen,
-  falsifiable strategy evaluation.
-- [`$scan-signals`](plugins/trading-desk/skills/scan-signals/SKILL.md) for read-only
-  registered-rule observations.
-- [`$test-strategy`](plugins/trading-desk/skills/test-strategy/SKILL.md) for
-  leakage-resistant historical test plans and artifact review.
-- [`opencode.json`](opencode.json), which defaults actions to `ask`, denies
-  unlisted shell commands, external-directory access, secret/database files,
-  and `git push`, and allows only those five skills and the three exact
-  read-only MCP tools.
+Manual X research uses the user's visible signed-in browser session only for
+an explicit request. X forbids non-API website scripting, so the always-on node
+does not automate the website. It stores post IDs/URLs/hashes/timestamps and
+bounded polarity—not raw text, cookies, or tokens—and marks the result
+unusable for unattended trading.
 
-The plugin copy under `plugins/trading-desk/skills` is canonical. The mirror
-under `.agents/skills` exists for repository-native Codex and OpenCode
-discovery; CI rejects drift. A generated copy of `trading_harness` under the
-plugin makes a cached plugin independent of the repository checkout; CI also
-requires that runtime to be byte-identical to `src/trading_harness`. No OpenAI
-or OpenCode model SDK is imported by the core. The optional MCP dependency is a
-protocol adapter over the same pure Python `ToolService` used by tests. Venue
-writes remain a separate qualification.
-
-Do not run OpenCode with `--auto` in this repository. OpenCode documents that
-auto mode approves requests that would otherwise ask; explicit deny rules
-remain enforced, but the review checkpoint would be lost.
+OpenCode consumes the same plugin tools and byte-identical skill mirror through
+[`opencode.json`](opencode.json). Its local research writes require review;
+unlisted shell commands, secret/database reads, external directories, and
+`git push` remain denied. Do not use OpenCode `--auto` here.
 
 ## Run locally
 
-No installation is required to inspect or test the foundation:
+The research runtime is standard-library-only:
 
 ```bash
 export PYTHONPATH=src
@@ -118,8 +135,7 @@ python3 -m unittest discover -s tests -v
 python3 -m compileall -q -f src tests
 ```
 
-For an editable command-line installation, create an isolated environment and
-install the local package:
+For an editable Python 3.11 environment:
 
 ```bash
 python3.11 -m venv .venv
@@ -128,78 +144,89 @@ python -m pip install --no-deps -e .
 trading-harness doctor
 ```
 
-The package has no runtime dependencies. The local build step uses setuptools.
+### Run the always-on research node
 
-### Run the ChatGPT/Codex plugin locally
+```bash
+trading-harness node run \
+  --state-db "$HOME/.local/state/trading-harness/research.sqlite3" \
+  --node-id trading-desk-research
+```
 
-Install the pinned optional MCP runtime into the isolated environment:
+Inspect it from another terminal:
+
+```bash
+trading-harness node status \
+  --state-db "$HOME/.local/state/trading-harness/research.sqlite3"
+```
+
+The node starts with new risk halted, holds a fenced singleton lease, persists
+heartbeats, and degrades on missing/gapped data. It has no account or signer
+configuration. See [always-on operation](docs/always_on_operation.md) for
+reviewed launchd/systemd templates.
+
+### Run the local MCP server
 
 ```bash
 python -m pip install -e '.[mcp]'
-```
-
-Codex can load [`plugins/trading-desk`](plugins/trading-desk) directly. For
-local Streamable HTTP protocol qualification, run:
-
-```bash
 trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
-The local endpoint is `http://127.0.0.1:8000/mcp`. ChatGPT cannot connect to a
-bare loopback URL: developer mode requires the
-[Secure MCP Tunnel or a reachable HTTPS endpoint](https://developers.openai.com/plugins/deploy/connect-chatgpt).
-Public binding is deliberately rejected because this foundation has no
-user-authentication layer. Production publication requires a separately
-deployed authenticated HTTPS endpoint; it does not enable exchange writes.
+The endpoint is `http://127.0.0.1:8000/mcp`. Public binding is rejected because
+the local server has no user-authentication layer. ChatGPT requires a reviewed
+authenticated HTTPS deployment or secure tunnel; doing that still does not
+enable exchange writes.
 
-When using OpenCode, activate this environment before starting OpenCode so its
-local MCP process resolves the pinned dependency. Do not use OpenCode `--auto`.
+### Execution development only
 
-## Read-only CLI
-
-Inspect the safety posture:
+The isolated signing boundary lazily accepts exactly the official
+`hyperliquid-python-sdk==0.24.0`:
 
 ```bash
-trading-harness doctor
+python3.11 -m venv .venv-execution
+source .venv-execution/bin/activate
+python -m pip install -e '.[execution]'
 ```
 
-Hash a schema-valid semantic-intent JSON document without sending it anywhere:
+No key loader is included. A wallet object must be injected by a separate OS
+identity/process, and testnet/mainnet require separate accounts, API wallets,
+databases, policies and qualification. Installing the extra does not enable a
+venue path.
 
-```bash
-trading-harness hash-intent path/to/intent.json
-```
+## Testnet before mainnet
 
-Intent hashing is an identity primitive, not approval, risk admission, a trade
-signal, or permission to execute.
+Testnet qualification must prove, with a dedicated API wallet and capped
+account (see the [full qualification checklist](docs/testnet_qualification.md)):
 
-## Upstream legacy material
+1. signer/main-account registration and standard account mode;
+2. exact CLOID place/query/cancel behavior;
+3. full long and short IOC+SL+TP bracket lifecycles;
+4. partial fill detection and emergency reduce-only flatten;
+5. lost HTTP response recovery without duplicate submission;
+6. WebSocket disconnect plus REST reconciliation;
+7. stop disappearance/under-protection detection;
+8. restart with zero unresolved outbox records;
+9. final flat account with no orphan orders.
 
-The inherited model-specific plugins, trading prompts, order snippets, and setup
-instructions have been removed from the working tree. They remain available
-through Git history and the recorded upstream provenance for audit; they are
-**not** active controls, production code, or evidence that live execution is
-safe.
+Testnet proves mechanics, not profit or mainnet fill quality. Mainnet remains
+disabled until execution qualification and independent profitability/shadow
+promotion both pass; the first canary is separately capped.
 
-The replacement workflows package selected upstream research and desk knowledge
-without copying any private-key loader or direct exchange-write snippet. They
-cannot issue orders, position sizes, approvals, or deployment grants, and they
-are not imported by the deterministic Python core.
+## Provenance and safety
 
-The audit record is in [UPSTREAM.md](UPSTREAM.md), with source dispositions in
-[docs/hypergrok_audit_matrix.md](docs/hypergrok_audit_matrix.md).
+The upstream fork is retained for provenance and operating-model ideas, not as
+a trusted execution implementation. See [UPSTREAM.md](UPSTREAM.md), the
+[audit matrix](docs/hypergrok_audit_matrix.md), and the normative
+[harness specification](docs/trading_harness_spec.md).
 
-## Safety and contribution policy
+- Never commit real credentials, account IDs, wallet material, approval
+  tokens, or private logs.
+- A stop is mandatory but cannot guarantee an exit price during gaps, venue
+  failure, liquidation, or insolvency.
+- Mainnet cannot be selected by a single environment-variable toggle.
+- Unknown submission outcomes are reconciled; they are never blindly retried.
 
-- Never add real credentials, account identifiers, approval tokens, or wallet
-  material to this repository, fixtures, logs, issues, or CI.
-- A venue adapter, signer, credential path, or order command requires a separate
-  design review and explicit implementation milestone; it must not be smuggled
-  into a research or CLI change.
-- Tests must continue to prove that the default executor is disabled and that
-  environment variables cannot enable it.
-
-This software is experimental research infrastructure, not financial advice.
-Perpetual futures and other leveraged products can cause losses beyond expected
-stop levels and may liquidate an account.
+This is experimental research infrastructure, not financial advice. Perpetual
+futures can lose more than the expected stop amount and may liquidate an
+account.
 
 MIT licensed; see [LICENSE](LICENSE).

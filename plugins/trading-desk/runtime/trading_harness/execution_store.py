@@ -1,0 +1,5618 @@
+"""Durable, network-free persistence for protected-plan execution.
+
+This module implements the transactional side of the execution boundary.  It
+does not import a venue SDK, load credentials, sign data, or make a network
+request.  Its job is to make every future side effect recoverable:
+
+* bind one trusted approval to one exact risk ticket;
+* consume that approval once while reserving risk and creating a three-leg
+  command plus durable outbox row in the same transaction;
+* fence dispatch/reconciliation workers;
+* persist nonce/action/wire hashes before any caller may send;
+* turn an expired claim with a prepared attempt into ``submitted_unknown``
+  instead of retrying; and
+* release risk only from complete venue/account reconciliation evidence.
+
+An execution database has one immutable environment and account identity.
+Separate testnet and mainnet files remain the recommended deployment model.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+from typing import Any, Iterator, Mapping, Sequence
+
+from .canonical import canonical_json, domain_hash, semantic_intent_hash
+from .domain import Environment, SemanticIntent, Side
+from .errors import (
+    AdmissionDenied,
+    PolicyViolation,
+    RecordNotFound,
+    StateConflict,
+    StorageError,
+    ValidationError,
+)
+from .hyperliquid_response import BatchSubmissionResult, LegSubmissionState
+from .planning import ProtectedTradePlan, RiskTicket, RiskTicketStatus
+from .policy import (
+    decimal_add,
+    decimal_multiply,
+    decimal_subtract,
+    exact_decimal,
+)
+
+
+ZERO = Decimal("0")
+_HASH_CHARS = frozenset("0123456789abcdef")
+_MAX_JSON_BYTES = 4 * 1024 * 1024
+_MAX_DETAILS_BYTES = 64 * 1024
+_ROLES = ("entry", "protective_stop", "take_profit")
+_COMMAND_STATES = frozenset(
+    {"queued", "claimed", "submitted_unknown", "reconciling", "terminal"}
+)
+_OUTBOX_STATES = _COMMAND_STATES
+_ATTEMPT_STATES = frozenset({"prepared", "response_received", "unknown"})
+_LEG_STATES = frozenset(
+    {
+        "queued",
+        "submitted_unknown",
+        "resting",
+        "partially_filled",
+        "filled",
+        "canceled",
+        "rejected",
+        "expired",
+        "triggered",
+        "absent",
+    }
+)
+_TERMINAL_LEG_STATES = frozenset(
+    {"filled", "canceled", "rejected", "expired", "absent"}
+)
+_PROTECTION_STATES = frozenset(
+    {"flat", "protected", "under_protected", "over_protected", "failed"}
+)
+_INCIDENT_STATES = frozenset({"open", "contained", "closed"})
+_INCIDENT_SEVERITIES = frozenset({"warning", "high", "critical"})
+_MAX_PREFLIGHT_LIFETIME_SECONDS = 30
+
+
+def _utc(value: datetime, *, field: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValidationError(f"{field} must be timezone-aware")
+    try:
+        return value.astimezone(timezone.utc)
+    except (OverflowError, ValueError) as error:
+        raise ValidationError(f"{field} is outside the supported UTC range") from error
+
+
+def _time_text(value: datetime, *, field: str) -> str:
+    return _utc(value, field=field).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _parse_time(value: object, *, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise StorageError(f"persisted {field} is not text")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise StorageError(f"persisted {field} is not ISO-8601") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise StorageError(f"persisted {field} is not timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _optional_time(value: object, *, field: str) -> datetime | None:
+    return None if value is None else _parse_time(value, field=field)
+
+
+def _text(value: object, *, field: str, maximum: int = 256) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValidationError(f"{field} must be a non-empty, trimmed string")
+    if len(value) > maximum or any(ord(character) < 32 for character in value):
+        raise ValidationError(f"{field} is invalid")
+    return value
+
+
+def _stored_text(value: object, *, field: str, maximum: int = 256) -> str:
+    try:
+        return _text(value, field=field, maximum=maximum)
+    except ValidationError as error:
+        raise StorageError(f"persisted {field} is invalid") from error
+
+
+def _hash(value: object, *, field: str) -> str:
+    parsed = _text(value, field=field, maximum=64)
+    if len(parsed) != 64 or any(character not in _HASH_CHARS for character in parsed):
+        raise ValidationError(f"{field} must be a lowercase SHA-256 digest")
+    return parsed
+
+
+def _stored_hash(value: object, *, field: str) -> str:
+    try:
+        return _hash(value, field=field)
+    except ValidationError as error:
+        raise StorageError(f"persisted {field} is invalid") from error
+
+
+def _positive_int(value: object, *, field: str, maximum: int | None = None) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValidationError(f"{field} must be a positive integer")
+    if maximum is not None and value > maximum:
+        raise ValidationError(f"{field} exceeds {maximum}")
+    return value
+
+
+def _nonnegative_int(value: object, *, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValidationError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _decimal(value: object, *, field: str, nonnegative: bool = False) -> Decimal:
+    try:
+        result = exact_decimal(value, field=field)  # type: ignore[arg-type]
+    except (TypeError, ValidationError) as error:
+        if isinstance(error, ValidationError):
+            raise
+        raise ValidationError(f"{field} is not an exact decimal") from error
+    if nonnegative and result < ZERO:
+        raise ValidationError(f"{field} must be non-negative")
+    return result
+
+
+def _decimal_text(value: Decimal, *, field: str) -> str:
+    from .canonical import canonical_decimal
+
+    return canonical_decimal(_decimal(value, field=field))
+
+
+def _canonical_payload(value: object, *, maximum: int = _MAX_JSON_BYTES) -> tuple[str, str]:
+    try:
+        payload_json = canonical_json(value)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ValidationError("payload is not canonical JSON") from error
+    encoded = payload_json.encode("utf-8")
+    if len(encoded) > maximum:
+        raise ValidationError("canonical payload exceeds its size limit")
+    return payload_json, hashlib.sha256(encoded).hexdigest()
+
+
+def _decode_payload(
+    payload_json: object,
+    content_hash: object,
+    *,
+    field: str,
+    maximum: int = _MAX_JSON_BYTES,
+) -> Any:
+    if not isinstance(payload_json, str):
+        raise StorageError(f"persisted {field} payload is not text")
+    encoded = payload_json.encode("utf-8")
+    if len(encoded) > maximum:
+        raise StorageError(f"persisted {field} payload exceeds its size limit")
+    if hashlib.sha256(encoded).hexdigest() != _stored_hash(
+        content_hash, field=f"{field} content_hash"
+    ):
+        raise StorageError(f"persisted {field} content hash does not match")
+    try:
+        decoded = json.loads(payload_json)
+        if canonical_json(decoded) != payload_json:
+            raise StorageError(f"persisted {field} payload is not canonical")
+    except StorageError:
+        raise
+    except (TypeError, ValueError, RecursionError) as error:
+        raise StorageError(f"persisted {field} payload is not canonical") from error
+    return decoded
+
+
+def _record_hash(domain: str, value: object) -> str:
+    return domain_hash(f"trading-harness/execution-store/{domain}/v1", value)
+
+
+@dataclass(frozen=True, slots=True)
+class _Migration:
+    version: int
+    name: str
+    statements: tuple[str, ...]
+
+    @property
+    def checksum(self) -> str:
+        joined = "\n-- execution migration statement --\n".join(self.statements)
+        return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+_SCHEMA_V1 = _Migration(
+    1,
+    "protected_plan_execution_foundation",
+    (
+        """
+        CREATE TABLE execution_store_identity (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            environment TEXT NOT NULL CHECK (environment IN ('testnet', 'mainnet')),
+            account_id TEXT NOT NULL,
+            max_reserved_loss TEXT NOT NULL,
+            max_reserved_notional TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_plans (
+            plan_hash TEXT PRIMARY KEY,
+            assessment_hash TEXT NOT NULL,
+            environment TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            venue TEXT NOT NULL,
+            instrument TEXT NOT NULL,
+            registered_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_plan_legs (
+            plan_hash TEXT NOT NULL REFERENCES execution_plans(plan_hash),
+            role TEXT NOT NULL CHECK (
+                role IN ('entry', 'protective_stop', 'take_profit')
+            ),
+            cloid TEXT NOT NULL UNIQUE,
+            intent_hash TEXT NOT NULL,
+            side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+            reduce_only INTEGER NOT NULL CHECK (reduce_only IN (0, 1)),
+            quantity TEXT NOT NULL,
+            price_bound TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            PRIMARY KEY (plan_hash, role)
+        )
+        """,
+        """
+        CREATE TABLE execution_tickets (
+            ticket_hash TEXT PRIMARY KEY,
+            ticket_id TEXT NOT NULL UNIQUE,
+            plan_hash TEXT NOT NULL UNIQUE REFERENCES execution_plans(plan_hash),
+            state TEXT NOT NULL CHECK (state IN ('awaiting_approval', 'consumed', 'terminal')),
+            stressed_loss TEXT NOT NULL,
+            reserved_notional TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            registered_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_approvals (
+            approval_id TEXT PRIMARY KEY,
+            ticket_hash TEXT NOT NULL UNIQUE REFERENCES execution_tickets(ticket_hash),
+            token_hash TEXT NOT NULL UNIQUE,
+            approver_id TEXT NOT NULL,
+            audience TEXT NOT NULL,
+            environment TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            issued_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('issued', 'consumed', 'revoked')),
+            command_id TEXT UNIQUE,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_exposure (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            reserved_loss TEXT NOT NULL,
+            reserved_notional TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_commands (
+            command_id TEXT PRIMARY KEY,
+            ticket_hash TEXT NOT NULL UNIQUE REFERENCES execution_tickets(ticket_hash),
+            plan_hash TEXT NOT NULL UNIQUE REFERENCES execution_plans(plan_hash),
+            approval_id TEXT NOT NULL UNIQUE REFERENCES execution_approvals(approval_id),
+            state TEXT NOT NULL CHECK (
+                state IN ('queued', 'claimed', 'submitted_unknown', 'reconciling', 'terminal')
+            ),
+            reserved_loss TEXT NOT NULL,
+            reserved_notional TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            terminal_at TEXT,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_command_legs (
+            command_id TEXT NOT NULL REFERENCES execution_commands(command_id),
+            role TEXT NOT NULL CHECK (
+                role IN ('entry', 'protective_stop', 'take_profit')
+            ),
+            cloid TEXT NOT NULL UNIQUE,
+            intent_hash TEXT NOT NULL,
+            side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+            reduce_only INTEGER NOT NULL CHECK (reduce_only IN (0, 1)),
+            requested_quantity TEXT NOT NULL,
+            cumulative_filled TEXT NOT NULL,
+            venue_oid INTEGER,
+            status TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL,
+            PRIMARY KEY (command_id, role)
+        )
+        """,
+        """
+        CREATE TABLE execution_outbox (
+            command_id TEXT PRIMARY KEY REFERENCES execution_commands(command_id),
+            state TEXT NOT NULL CHECK (
+                state IN ('queued', 'claimed', 'submitted_unknown', 'reconciling', 'terminal')
+            ),
+            worker_id TEXT,
+            fencing_token INTEGER NOT NULL CHECK (fencing_token >= 0),
+            claimed_at TEXT,
+            lease_expires_at TEXT,
+            current_attempt_id TEXT,
+            attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE REFERENCES execution_commands(command_id),
+            worker_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL CHECK (fencing_token > 0),
+            nonce INTEGER NOT NULL CHECK (nonce >= 0),
+            action_hash TEXT NOT NULL,
+            wire_hash TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('prepared', 'response_received', 'unknown')),
+            response_hash TEXT,
+            prepared_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_reconciliations (
+            reconciliation_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL REFERENCES execution_commands(command_id),
+            account_snapshot_hash TEXT NOT NULL,
+            complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+            observed_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_fills (
+            fill_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL REFERENCES execution_commands(command_id),
+            role TEXT NOT NULL,
+            cloid TEXT NOT NULL,
+            quantity TEXT NOT NULL,
+            price TEXT NOT NULL,
+            fee TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_positions (
+            instrument TEXT PRIMARY KEY,
+            signed_quantity TEXT NOT NULL,
+            account_snapshot_hash TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_protection (
+            command_id TEXT PRIMARY KEY REFERENCES execution_commands(command_id),
+            instrument TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (
+                state IN ('flat', 'protected', 'under_protected', 'over_protected', 'failed')
+            ),
+            signed_position_quantity TEXT NOT NULL,
+            protected_quantity TEXT NOT NULL,
+            stop_cloid TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_incidents (
+            incident_id TEXT PRIMARY KEY,
+            command_id TEXT REFERENCES execution_commands(command_id),
+            code TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK (severity IN ('warning', 'high', 'critical')),
+            state TEXT NOT NULL CHECK (state IN ('open', 'contained', 'closed')),
+            opened_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            details_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_events (
+            event_sequence INTEGER PRIMARY KEY,
+            event_hash TEXT NOT NULL UNIQUE,
+            previous_hash TEXT,
+            command_id TEXT REFERENCES execution_commands(command_id),
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_execution_outbox_state
+        ON execution_outbox (state, created_at, command_id)
+        """,
+        """
+        CREATE INDEX idx_execution_events_command
+        ON execution_events (command_id, event_sequence)
+        """,
+        """
+        CREATE INDEX idx_execution_fills_command
+        ON execution_fills (command_id, occurred_at, fill_id)
+        """,
+    ),
+)
+
+_SCHEMA_V2 = _Migration(
+    2,
+    "fresh_dispatch_preflight",
+    (
+        """
+        CREATE TABLE execution_dispatch_preflights (
+            preflight_hash TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE REFERENCES execution_commands(command_id),
+            ticket_hash TEXT NOT NULL UNIQUE REFERENCES execution_tickets(ticket_hash),
+            plan_hash TEXT NOT NULL UNIQUE REFERENCES execution_plans(plan_hash),
+            environment TEXT NOT NULL CHECK (environment IN ('testnet', 'mainnet')),
+            account_id TEXT NOT NULL,
+            account_snapshot_hash TEXT NOT NULL,
+            metadata_hash TEXT NOT NULL,
+            market_snapshot_hash TEXT NOT NULL,
+            risk_policy_hash TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            passed INTEGER NOT NULL CHECK (passed = 1),
+            registered_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        ALTER TABLE execution_attempts
+        ADD COLUMN preflight_hash TEXT
+            REFERENCES execution_dispatch_preflights(preflight_hash)
+        """,
+        """
+        CREATE UNIQUE INDEX idx_execution_attempt_preflight
+        ON execution_attempts (preflight_hash)
+        WHERE preflight_hash IS NOT NULL
+        """,
+    ),
+)
+
+_SCHEMA_V3 = _Migration(
+    3,
+    "signed_and_transport_evidence",
+    (
+        """
+        CREATE TABLE execution_signed_envelopes (
+            evidence_hash TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE REFERENCES execution_commands(command_id),
+            preflight_hash TEXT NOT NULL UNIQUE
+                REFERENCES execution_dispatch_preflights(preflight_hash),
+            environment TEXT NOT NULL CHECK (environment = 'testnet'),
+            endpoint TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            plan_hash TEXT NOT NULL,
+            action_hash TEXT NOT NULL,
+            nonce INTEGER NOT NULL CHECK (nonce >= 0),
+            wire_hash TEXT NOT NULL,
+            signature_hash TEXT NOT NULL,
+            envelope_hash TEXT NOT NULL,
+            signer_binding_hash TEXT NOT NULL,
+            authorization_expires_at_ms INTEGER NOT NULL,
+            expires_after_ms INTEGER NOT NULL,
+            signed_at_ms INTEGER NOT NULL,
+            recorded_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_transport_outcomes (
+            evidence_hash TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE REFERENCES execution_commands(command_id),
+            attempt_id TEXT NOT NULL UNIQUE REFERENCES execution_attempts(attempt_id),
+            signed_evidence_hash TEXT NOT NULL
+                REFERENCES execution_signed_envelopes(evidence_hash),
+            endpoint TEXT NOT NULL,
+            attempted_at_ms INTEGER NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN ('response_received', 'unknown')),
+            http_status INTEGER,
+            detail_code TEXT NOT NULL,
+            response_hash TEXT,
+            transport_attempt_hash TEXT,
+            send_count INTEGER,
+            retry_performed INTEGER NOT NULL CHECK (retry_performed = 0),
+            venue_write_attempted INTEGER,
+            evidence_basis TEXT NOT NULL CHECK (
+                evidence_basis IN ('transport_result', 'claim_expiry')
+            ),
+            recorded_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        ALTER TABLE execution_attempts
+        ADD COLUMN signed_evidence_hash TEXT
+            REFERENCES execution_signed_envelopes(evidence_hash)
+        """,
+        """
+        ALTER TABLE execution_attempts
+        ADD COLUMN transport_evidence_hash TEXT
+            REFERENCES execution_transport_outcomes(evidence_hash)
+        """,
+    ),
+)
+
+_MIGRATIONS = (_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3)
+EXECUTION_SCHEMA_VERSION = 3
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchPreflight:
+    """Fresh deterministic send-time attestation from the trusted control plane."""
+
+    command_id: str
+    ticket_hash: str
+    plan_hash: str
+    environment: Environment
+    account_id: str
+    account_snapshot_hash: str
+    metadata_hash: str
+    market_snapshot_hash: str
+    risk_policy_hash: str
+    observed_at: datetime
+    expires_at: datetime
+    passed: bool
+    preflight_hash: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "command_id",
+            _text(self.command_id, field="command_id", maximum=128),
+        )
+        object.__setattr__(
+            self,
+            "account_id",
+            _text(self.account_id, field="account_id", maximum=256),
+        )
+        for field in (
+            "ticket_hash",
+            "plan_hash",
+            "account_snapshot_hash",
+            "metadata_hash",
+            "market_snapshot_hash",
+            "risk_policy_hash",
+        ):
+            object.__setattr__(
+                self,
+                field,
+                _hash(getattr(self, field), field=field),
+            )
+        if not isinstance(self.environment, Environment):
+            try:
+                object.__setattr__(self, "environment", Environment(self.environment))
+            except (TypeError, ValueError) as error:
+                raise ValidationError("preflight environment is invalid") from error
+        if self.environment not in {Environment.TESTNET, Environment.MAINNET}:
+            raise ValidationError("preflight must target testnet or mainnet")
+        observed = _utc(self.observed_at, field="observed_at")
+        expires = _utc(self.expires_at, field="expires_at")
+        if not observed < expires:
+            raise ValidationError("preflight must expire after observation")
+        if expires - observed > timedelta(seconds=_MAX_PREFLIGHT_LIFETIME_SECONDS):
+            raise ValidationError("preflight lifetime exceeds compiled freshness bound")
+        if type(self.passed) is not bool:
+            raise TypeError("preflight passed must be bool")
+        object.__setattr__(self, "observed_at", observed)
+        object.__setattr__(self, "expires_at", expires)
+        expected = _record_hash("dispatch-preflight-attestation", self.payload())
+        if self.preflight_hash:
+            supplied = _hash(self.preflight_hash, field="preflight_hash")
+            if supplied != expected:
+                raise ValidationError("preflight_hash does not match attestation")
+        object.__setattr__(self, "preflight_hash", expected)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "dispatch_preflight.v1",
+            "command_id": self.command_id,
+            "ticket_hash": self.ticket_hash,
+            "plan_hash": self.plan_hash,
+            "environment": self.environment.value,
+            "account_id": self.account_id,
+            "account_snapshot_hash": self.account_snapshot_hash,
+            "metadata_hash": self.metadata_hash,
+            "market_snapshot_hash": self.market_snapshot_hash,
+            "risk_policy_hash": self.risk_policy_hash,
+            "observed_at": _time_text(self.observed_at, field="observed_at"),
+            "expires_at": _time_text(self.expires_at, field="expires_at"),
+            "passed": self.passed,
+        }
+
+    def as_dict(self) -> dict[str, object]:
+        return {**self.payload(), "preflight_hash": self.preflight_hash}
+
+
+@dataclass(frozen=True, slots=True)
+class SignedEnvelopeEvidence:
+    """Immutable non-secret evidence for the exact signed wire."""
+
+    command_id: str
+    preflight_hash: str
+    environment: Environment
+    endpoint: str
+    account_id: str
+    plan_hash: str
+    action_hash: str
+    nonce: int
+    wire_hash: str
+    signature_hash: str
+    envelope_hash: str
+    signer_binding_hash: str
+    authorization_expires_at_ms: int
+    expires_after_ms: int
+    signed_at_ms: int
+    evidence_hash: str = ""
+
+    def __post_init__(self) -> None:
+        for field, maximum in (
+            ("command_id", 128),
+            ("endpoint", 256),
+            ("account_id", 256),
+        ):
+            object.__setattr__(
+                self, field, _text(getattr(self, field), field=field, maximum=maximum)
+            )
+        for field in (
+            "preflight_hash",
+            "plan_hash",
+            "action_hash",
+            "wire_hash",
+            "signature_hash",
+            "envelope_hash",
+            "signer_binding_hash",
+        ):
+            object.__setattr__(self, field, _hash(getattr(self, field), field=field))
+        if not isinstance(self.environment, Environment):
+            try:
+                object.__setattr__(self, "environment", Environment(self.environment))
+            except (TypeError, ValueError) as error:
+                raise ValidationError("signed evidence environment is invalid") from error
+        if self.environment is not Environment.TESTNET:
+            raise ValidationError("signed evidence is testnet-only")
+        if self.endpoint != "https://api.hyperliquid-testnet.xyz/exchange":
+            raise ValidationError("signed evidence endpoint is not testnet exchange")
+        for field in (
+            "nonce",
+            "authorization_expires_at_ms",
+            "expires_after_ms",
+            "signed_at_ms",
+        ):
+            value = getattr(self, field)
+            if type(value) is not int or value < 0:
+                raise ValidationError(f"{field} must be a non-negative integer")
+        if not self.signed_at_ms < self.expires_after_ms <= self.authorization_expires_at_ms:
+            raise ValidationError("signed evidence expiry ordering is invalid")
+        expected = _record_hash("signed-envelope-evidence", self.payload())
+        if self.evidence_hash:
+            supplied = _hash(self.evidence_hash, field="evidence_hash")
+            if supplied != expected:
+                raise ValidationError("signed evidence hash does not match")
+        object.__setattr__(self, "evidence_hash", expected)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "signed_envelope_evidence.v1",
+            "command_id": self.command_id,
+            "preflight_hash": self.preflight_hash,
+            "environment": self.environment.value,
+            "endpoint": self.endpoint,
+            "account_id": self.account_id,
+            "plan_hash": self.plan_hash,
+            "action_hash": self.action_hash,
+            "nonce": self.nonce,
+            "wire_hash": self.wire_hash,
+            "signature_hash": self.signature_hash,
+            "envelope_hash": self.envelope_hash,
+            "signer_binding_hash": self.signer_binding_hash,
+            "authorization_expires_at_ms": self.authorization_expires_at_ms,
+            "expires_after_ms": self.expires_after_ms,
+            "signed_at_ms": self.signed_at_ms,
+        }
+
+    def as_dict(self) -> dict[str, object]:
+        return {**self.payload(), "evidence_hash": self.evidence_hash}
+
+
+@dataclass(frozen=True, slots=True)
+class TransportOutcomeEvidence:
+    """Immutable result or explicit crash-boundary evidence for one attempt."""
+
+    command_id: str
+    attempt_id: str
+    signed_evidence_hash: str
+    endpoint: str
+    attempted_at_ms: int
+    outcome: str
+    http_status: int | None
+    detail_code: str
+    response_hash: str | None
+    transport_attempt_hash: str | None
+    send_count: int | None
+    retry_performed: bool
+    venue_write_attempted: bool | None
+    evidence_basis: str = "transport_result"
+    evidence_hash: str = ""
+
+    def __post_init__(self) -> None:
+        for field, maximum in (
+            ("command_id", 128),
+            ("attempt_id", 128),
+            ("endpoint", 256),
+            ("detail_code", 128),
+        ):
+            object.__setattr__(
+                self, field, _text(getattr(self, field), field=field, maximum=maximum)
+            )
+        object.__setattr__(
+            self,
+            "signed_evidence_hash",
+            _hash(self.signed_evidence_hash, field="signed_evidence_hash"),
+        )
+        for field in ("response_hash", "transport_attempt_hash"):
+            value = getattr(self, field)
+            if value is not None:
+                object.__setattr__(self, field, _hash(value, field=field))
+        if self.endpoint != "https://api.hyperliquid-testnet.xyz/exchange":
+            raise ValidationError("transport evidence endpoint is not testnet exchange")
+        if type(self.attempted_at_ms) is not int or self.attempted_at_ms < 0:
+            raise ValidationError("attempted_at_ms must be non-negative")
+        if self.outcome not in {"response_received", "unknown"}:
+            raise ValidationError("transport evidence outcome is invalid")
+        if self.http_status is not None and (
+            type(self.http_status) is not int or not 100 <= self.http_status <= 599
+        ):
+            raise ValidationError("http_status is invalid")
+        if self.send_count is not None and self.send_count != 1:
+            raise ValidationError("transport evidence send_count must be one or unknown")
+        if self.retry_performed is not False:
+            raise ValidationError("transport evidence cannot report a retry")
+        if self.venue_write_attempted not in {True, False, None}:
+            raise ValidationError("venue_write_attempted must be boolean or unknown")
+        if self.evidence_basis not in {"transport_result", "claim_expiry"}:
+            raise ValidationError("transport evidence basis is invalid")
+        if self.evidence_basis == "transport_result" and (
+            self.transport_attempt_hash is None
+            or self.send_count != 1
+            or self.venue_write_attempted is not True
+        ):
+            raise ValidationError("transport result lacks one-send evidence")
+        if self.evidence_basis == "claim_expiry" and (
+            self.transport_attempt_hash is not None
+            or self.send_count is not None
+            or self.venue_write_attempted is not None
+        ):
+            raise ValidationError("claim-expiry evidence must preserve uncertainty")
+        if self.outcome == "response_received" and self.response_hash is None:
+            raise ValidationError("response outcome requires response_hash")
+        expected = _record_hash("transport-outcome-evidence", self.payload())
+        if self.evidence_hash:
+            supplied = _hash(self.evidence_hash, field="evidence_hash")
+            if supplied != expected:
+                raise ValidationError("transport evidence hash does not match")
+        object.__setattr__(self, "evidence_hash", expected)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "transport_outcome_evidence.v1",
+            "command_id": self.command_id,
+            "attempt_id": self.attempt_id,
+            "signed_evidence_hash": self.signed_evidence_hash,
+            "endpoint": self.endpoint,
+            "attempted_at_ms": self.attempted_at_ms,
+            "outcome": self.outcome,
+            "http_status": self.http_status,
+            "detail_code": self.detail_code,
+            "response_hash": self.response_hash,
+            "transport_attempt_hash": self.transport_attempt_hash,
+            "send_count": self.send_count,
+            "retry_performed": self.retry_performed,
+            "venue_write_attempted": self.venue_write_attempted,
+            "evidence_basis": self.evidence_basis,
+        }
+
+    def as_dict(self) -> dict[str, object]:
+        return {**self.payload(), "evidence_hash": self.evidence_hash}
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedApproval:
+    approval_id: str
+    ticket_hash: str
+    token_hash: str
+    approver_id: str
+    audience: str
+    environment: Environment
+    account_id: str
+    issued_at: datetime
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        for field, maximum in (
+            ("approval_id", 128),
+            ("approver_id", 256),
+            ("audience", 256),
+            ("account_id", 256),
+        ):
+            object.__setattr__(
+                self, field, _text(getattr(self, field), field=field, maximum=maximum)
+            )
+        object.__setattr__(self, "ticket_hash", _hash(self.ticket_hash, field="ticket_hash"))
+        object.__setattr__(self, "token_hash", _hash(self.token_hash, field="token_hash"))
+        if not isinstance(self.environment, Environment):
+            try:
+                object.__setattr__(self, "environment", Environment(self.environment))
+            except (TypeError, ValueError) as error:
+                raise ValidationError("approval environment is invalid") from error
+        if self.environment not in {Environment.TESTNET, Environment.MAINNET}:
+            raise ValidationError("approval must target testnet or mainnet")
+        issued = _utc(self.issued_at, field="issued_at")
+        expires = _utc(self.expires_at, field="expires_at")
+        if expires <= issued:
+            raise ValidationError("approval must expire after issuance")
+        object.__setattr__(self, "issued_at", issued)
+        object.__setattr__(self, "expires_at", expires)
+
+
+@dataclass(frozen=True, slots=True)
+class CommandRecord:
+    command_id: str
+    ticket_hash: str
+    plan_hash: str
+    approval_id: str
+    state: str
+    reserved_loss: Decimal
+    reserved_notional: Decimal
+    created_at: datetime
+    updated_at: datetime
+    terminal_at: datetime | None
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxRecord:
+    command_id: str
+    state: str
+    worker_id: str | None
+    fencing_token: int
+    claimed_at: datetime | None
+    lease_expires_at: datetime | None
+    current_attempt_id: str | None
+    attempt_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptRecord:
+    attempt_id: str
+    command_id: str
+    worker_id: str
+    fencing_token: int
+    preflight_hash: str | None
+    signed_evidence_hash: str | None
+    transport_evidence_hash: str | None
+    nonce: int
+    action_hash: str
+    wire_hash: str
+    state: str
+    response_hash: str | None
+    prepared_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class LegRecord:
+    command_id: str
+    role: str
+    cloid: str
+    intent_hash: str
+    side: str
+    reduce_only: bool
+    requested_quantity: Decimal
+    cumulative_filled: Decimal
+    venue_oid: int | None
+    status: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PositionRecord:
+    instrument: str
+    signed_quantity: Decimal
+    account_snapshot_hash: str
+    observed_at: datetime
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProtectionRecord:
+    command_id: str
+    instrument: str
+    state: str
+    signed_position_quantity: Decimal
+    protected_quantity: Decimal
+    stop_cloid: str
+    observed_at: datetime
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentRecord:
+    incident_id: str
+    command_id: str | None
+    code: str
+    severity: str
+    state: str
+    opened_at: datetime
+    updated_at: datetime
+    revision: int
+    details: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class EventRecord:
+    event_sequence: int
+    event_hash: str
+    previous_hash: str | None
+    command_id: str | None
+    event_type: str
+    occurred_at: datetime
+    payload_json: str
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class LegReconciliation:
+    role: str
+    cloid: str
+    status: str
+    cumulative_filled: Decimal
+    venue_oid: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.role not in _ROLES:
+            raise ValidationError("reconciliation role is invalid")
+        object.__setattr__(self, "cloid", _text(self.cloid, field="cloid", maximum=128))
+        if self.status not in _LEG_STATES - {"queued", "submitted_unknown"}:
+            raise ValidationError("reconciliation leg status is invalid")
+        quantity = _decimal(
+            self.cumulative_filled,
+            field="cumulative_filled",
+            nonnegative=True,
+        )
+        object.__setattr__(self, "cumulative_filled", quantity)
+        if self.venue_oid is not None and (
+            type(self.venue_oid) is not int or self.venue_oid < 0
+        ):
+            raise ValidationError("venue_oid must be a non-negative integer or None")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "role": self.role,
+            "cloid": self.cloid,
+            "status": self.status,
+            "cumulative_filled": _decimal_text(
+                self.cumulative_filled, field="cumulative_filled"
+            ),
+            "venue_oid": self.venue_oid,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class VenueFill:
+    fill_id: str
+    role: str
+    cloid: str
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal
+    occurred_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fill_id", _text(self.fill_id, field="fill_id", maximum=256))
+        if self.role not in _ROLES:
+            raise ValidationError("fill role is invalid")
+        object.__setattr__(self, "cloid", _text(self.cloid, field="cloid", maximum=128))
+        for field in ("quantity", "price"):
+            value = _decimal(getattr(self, field), field=field)
+            if value <= ZERO:
+                raise ValidationError(f"{field} must be positive")
+            object.__setattr__(self, field, value)
+        object.__setattr__(
+            self,
+            "fee",
+            _decimal(self.fee, field="fee", nonnegative=True),
+        )
+        object.__setattr__(self, "occurred_at", _utc(self.occurred_at, field="occurred_at"))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "fill_id": self.fill_id,
+            "role": self.role,
+            "cloid": self.cloid,
+            "quantity": _decimal_text(self.quantity, field="quantity"),
+            "price": _decimal_text(self.price, field="price"),
+            "fee": _decimal_text(self.fee, field="fee"),
+            "occurred_at": _time_text(self.occurred_at, field="occurred_at"),
+        }
+
+
+_REQUIRED_TABLES = frozenset(
+    {
+        "execution_schema_migrations",
+        "execution_store_identity",
+        "execution_plans",
+        "execution_plan_legs",
+        "execution_tickets",
+        "execution_approvals",
+        "execution_exposure",
+        "execution_commands",
+        "execution_command_legs",
+        "execution_outbox",
+        "execution_attempts",
+        "execution_dispatch_preflights",
+        "execution_signed_envelopes",
+        "execution_transport_outcomes",
+        "execution_reconciliations",
+        "execution_fills",
+        "execution_positions",
+        "execution_protection",
+        "execution_incidents",
+        "execution_events",
+    }
+)
+
+
+class ExecutionStore:
+    """One-account, one-environment protected execution state machine."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        environment: Environment,
+        account_id: str,
+        max_reserved_loss: Decimal | str | int,
+        max_reserved_notional: Decimal | str | int,
+        busy_timeout_ms: int = 5_000,
+    ) -> None:
+        if str(path) == ":memory:":
+            raise ValidationError("ExecutionStore requires a file-backed database")
+        if not isinstance(environment, Environment):
+            try:
+                environment = Environment(environment)
+            except (TypeError, ValueError) as error:
+                raise ValidationError("environment must be explicit testnet or mainnet") from error
+        if environment is not Environment.TESTNET:
+            raise ValidationError(
+                "execution store is testnet-only until cryptographic mainnet "
+                "authority is implemented"
+            )
+        self.environment = environment
+        self.account_id = _text(account_id, field="account_id", maximum=256)
+        self.max_reserved_loss = _decimal(
+            max_reserved_loss, field="max_reserved_loss"
+        )
+        self.max_reserved_notional = _decimal(
+            max_reserved_notional, field="max_reserved_notional"
+        )
+        if self.max_reserved_loss <= ZERO or self.max_reserved_notional <= ZERO:
+            raise ValidationError("execution-store reservation caps must be positive")
+        if type(busy_timeout_ms) is not int or busy_timeout_ms <= 0:
+            raise ValidationError("busy_timeout_ms must be a positive integer")
+        self.path = Path(path)
+        self.busy_timeout_ms = busy_timeout_ms
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            self.path,
+            timeout=self.busy_timeout_ms / 1_000,
+            isolation_level=None,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms:d}")
+        connection.execute("PRAGMA synchronous = FULL")
+        return connection
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _initialize(self) -> None:
+        connection = self._connect()
+        try:
+            mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            if str(mode).lower() != "wal":
+                raise StorageError(f"SQLite refused WAL mode: {mode}")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_schema_migrations (
+                    version INTEGER PRIMARY KEY CHECK (version > 0),
+                    name TEXT NOT NULL UNIQUE,
+                    checksum TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
+            rows = connection.execute(
+                """
+                SELECT version, name, checksum
+                FROM execution_schema_migrations ORDER BY version
+                """
+            ).fetchall()
+            known = {migration.version: migration for migration in _MIGRATIONS}
+            seen: list[int] = []
+            for row in rows:
+                version = int(row["version"])
+                migration = known.get(version)
+                if migration is None:
+                    raise StorageError(
+                        f"unknown execution migration version {version}"
+                    )
+                if row["name"] != migration.name or row["checksum"] != migration.checksum:
+                    raise StorageError(
+                        f"execution migration {version} checksum or name mismatch"
+                    )
+                seen.append(version)
+            if seen != list(range(1, len(seen) + 1)):
+                raise StorageError("execution migration history is not contiguous")
+            migration_time = _time_text(
+                datetime.now(timezone.utc), field="migration_time"
+            )
+            for migration in _MIGRATIONS:
+                if migration.version in seen:
+                    continue
+                for statement in migration.statements:
+                    connection.execute(statement)
+                connection.execute(
+                    """
+                    INSERT INTO execution_schema_migrations (
+                        version, name, checksum, applied_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        migration.version,
+                        migration.name,
+                        migration.checksum,
+                        migration_time,
+                    ),
+                )
+            self._verify_tables_locked(connection)
+            identity = connection.execute(
+                "SELECT * FROM execution_store_identity WHERE singleton = 1"
+            ).fetchone()
+            if identity is None:
+                created = datetime.now(timezone.utc)
+                identity_payload = self._identity_payload(created)
+                identity_hash = _record_hash("identity", identity_payload)
+                connection.execute(
+                    """
+                    INSERT INTO execution_store_identity (
+                        singleton, environment, account_id, max_reserved_loss,
+                        max_reserved_notional, created_at, record_hash
+                    ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.environment.value,
+                        self.account_id,
+                        _decimal_text(
+                            self.max_reserved_loss, field="max_reserved_loss"
+                        ),
+                        _decimal_text(
+                            self.max_reserved_notional,
+                            field="max_reserved_notional",
+                        ),
+                        _time_text(created, field="created_at"),
+                        identity_hash,
+                    ),
+                )
+                exposure_payload = self._exposure_payload(
+                    ZERO, ZERO, 1, created
+                )
+                connection.execute(
+                    """
+                    INSERT INTO execution_exposure (
+                        singleton, reserved_loss, reserved_notional, revision,
+                        updated_at, record_hash
+                    ) VALUES (1, '0', '0', 1, ?, ?)
+                    """,
+                    (
+                        _time_text(created, field="updated_at"),
+                        _record_hash("exposure", exposure_payload),
+                    ),
+                )
+            else:
+                self._verify_identity_row(identity)
+                self._read_exposure_locked(connection)
+            connection.commit()
+        except sqlite3.Error as error:
+            if connection.in_transaction:
+                connection.rollback()
+            raise StorageError(
+                f"execution schema initialization failed: {type(error).__name__}"
+            ) from error
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _verify_tables_locked(connection: sqlite3.Connection) -> None:
+        tables = {
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if not _REQUIRED_TABLES.issubset(tables):
+            raise StorageError("execution schema is missing required tables")
+
+    def _identity_payload(self, created_at: datetime) -> dict[str, object]:
+        return {
+            "environment": self.environment.value,
+            "account_id": self.account_id,
+            "max_reserved_loss": _decimal_text(
+                self.max_reserved_loss, field="max_reserved_loss"
+            ),
+            "max_reserved_notional": _decimal_text(
+                self.max_reserved_notional, field="max_reserved_notional"
+            ),
+            "created_at": _time_text(created_at, field="created_at"),
+        }
+
+    def _verify_identity_row(self, row: Mapping[str, Any]) -> None:
+        try:
+            environment = Environment(row["environment"])
+            account_id = _stored_text(
+                row["account_id"], field="account_id", maximum=256
+            )
+            loss = _decimal(row["max_reserved_loss"], field="max_reserved_loss")
+            notional = _decimal(
+                row["max_reserved_notional"], field="max_reserved_notional"
+            )
+            created = _parse_time(row["created_at"], field="identity created_at")
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted execution identity is invalid") from error
+        expected = _record_hash(
+            "identity",
+            {
+                "environment": environment.value,
+                "account_id": account_id,
+                "max_reserved_loss": _decimal_text(loss, field="max_reserved_loss"),
+                "max_reserved_notional": _decimal_text(
+                    notional, field="max_reserved_notional"
+                ),
+                "created_at": _time_text(created, field="created_at"),
+            },
+        )
+        if _stored_hash(row["record_hash"], field="identity record_hash") != expected:
+            raise StorageError("persisted execution identity hash does not match")
+        if (
+            environment is not self.environment
+            or account_id != self.account_id
+            or loss != self.max_reserved_loss
+            or notional != self.max_reserved_notional
+        ):
+            raise StorageError(
+                "execution database identity does not match environment/account/caps"
+            )
+
+    @staticmethod
+    def _exposure_payload(
+        reserved_loss: Decimal,
+        reserved_notional: Decimal,
+        revision: int,
+        updated_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "reserved_loss": _decimal_text(
+                reserved_loss, field="reserved_loss"
+            ),
+            "reserved_notional": _decimal_text(
+                reserved_notional, field="reserved_notional"
+            ),
+            "revision": revision,
+            "updated_at": _time_text(updated_at, field="updated_at"),
+        }
+
+    def _read_exposure_locked(
+        self, connection: sqlite3.Connection
+    ) -> tuple[Decimal, Decimal, int, datetime]:
+        row = connection.execute(
+            "SELECT * FROM execution_exposure WHERE singleton = 1"
+        ).fetchone()
+        if row is None:
+            raise StorageError("execution exposure singleton is missing")
+        loss = _decimal(row["reserved_loss"], field="reserved_loss", nonnegative=True)
+        notional = _decimal(
+            row["reserved_notional"],
+            field="reserved_notional",
+            nonnegative=True,
+        )
+        revision = int(row["revision"])
+        updated = _parse_time(row["updated_at"], field="exposure updated_at")
+        expected = _record_hash(
+            "exposure", self._exposure_payload(loss, notional, revision, updated)
+        )
+        if _stored_hash(row["record_hash"], field="exposure record_hash") != expected:
+            raise StorageError("persisted exposure hash does not match")
+        return loss, notional, revision, updated
+
+    def _write_exposure_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        loss: Decimal,
+        notional: Decimal,
+        previous_revision: int,
+        at: datetime,
+    ) -> None:
+        if loss < ZERO or notional < ZERO:
+            raise StorageError("exposure update would become negative")
+        revision = previous_revision + 1
+        payload = self._exposure_payload(loss, notional, revision, at)
+        changed = connection.execute(
+            """
+            UPDATE execution_exposure SET
+                reserved_loss = ?, reserved_notional = ?, revision = ?,
+                updated_at = ?, record_hash = ?
+            WHERE singleton = 1 AND revision = ?
+            """,
+            (
+                _decimal_text(loss, field="reserved_loss"),
+                _decimal_text(notional, field="reserved_notional"),
+                revision,
+                _time_text(at, field="updated_at"),
+                _record_hash("exposure", payload),
+                previous_revision,
+            ),
+        )
+        if changed.rowcount != 1:
+            raise StateConflict("execution exposure changed concurrently")
+
+    def get_reserved_exposure(self) -> tuple[Decimal, Decimal]:
+        connection = self._connect()
+        try:
+            loss, notional, _, _ = self._read_exposure_locked(connection)
+            return loss, notional
+        finally:
+            connection.close()
+
+    # -- immutable events ---------------------------------------------
+
+    def _append_event_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        command_id: str | None,
+        event_type: str,
+        occurred_at: datetime,
+        payload: object,
+    ) -> EventRecord:
+        checked_type = _text(event_type, field="event_type", maximum=128)
+        payload_json, content_hash = _canonical_payload(
+            payload, maximum=_MAX_DETAILS_BYTES
+        )
+        last = connection.execute(
+            """
+            SELECT event_sequence, event_hash
+            FROM execution_events ORDER BY event_sequence DESC LIMIT 1
+            """
+        ).fetchone()
+        sequence = 1 if last is None else int(last["event_sequence"]) + 1
+        previous_hash = None if last is None else str(last["event_hash"])
+        material = {
+            "event_sequence": sequence,
+            "previous_hash": previous_hash,
+            "command_id": command_id,
+            "event_type": checked_type,
+            "occurred_at": _time_text(occurred_at, field="occurred_at"),
+            "content_hash": content_hash,
+            "payload_json": payload_json,
+        }
+        event_hash = _record_hash("event", material)
+        connection.execute(
+            """
+            INSERT INTO execution_events (
+                event_sequence, event_hash, previous_hash, command_id,
+                event_type, occurred_at, payload_json, content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sequence,
+                event_hash,
+                previous_hash,
+                command_id,
+                checked_type,
+                _time_text(occurred_at, field="occurred_at"),
+                payload_json,
+                content_hash,
+            ),
+        )
+        return EventRecord(
+            sequence,
+            event_hash,
+            previous_hash,
+            command_id,
+            checked_type,
+            _utc(occurred_at, field="occurred_at"),
+            payload_json,
+            content_hash,
+        )
+
+    @staticmethod
+    def _event_from_row(row: Mapping[str, Any]) -> EventRecord:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(row["content_hash"], field="event content_hash")
+        _decode_payload(
+            payload_json,
+            content_hash,
+            field="event",
+            maximum=_MAX_DETAILS_BYTES,
+        )
+        record = EventRecord(
+            event_sequence=int(row["event_sequence"]),
+            event_hash=_stored_hash(row["event_hash"], field="event_hash"),
+            previous_hash=(
+                None
+                if row["previous_hash"] is None
+                else _stored_hash(row["previous_hash"], field="previous_hash")
+            ),
+            command_id=(
+                None
+                if row["command_id"] is None
+                else _stored_text(row["command_id"], field="command_id", maximum=128)
+            ),
+            event_type=_stored_text(
+                row["event_type"], field="event_type", maximum=128
+            ),
+            occurred_at=_parse_time(row["occurred_at"], field="event occurred_at"),
+            payload_json=payload_json,
+            content_hash=content_hash,
+        )
+        expected = _record_hash(
+            "event",
+            {
+                "event_sequence": record.event_sequence,
+                "previous_hash": record.previous_hash,
+                "command_id": record.command_id,
+                "event_type": record.event_type,
+                "occurred_at": _time_text(
+                    record.occurred_at, field="occurred_at"
+                ),
+                "content_hash": record.content_hash,
+                "payload_json": record.payload_json,
+            },
+        )
+        if record.event_hash != expected:
+            raise StorageError("execution event hash does not match")
+        return record
+
+    def list_events(self, command_id: str | None = None) -> tuple[EventRecord, ...]:
+        connection = self._connect()
+        try:
+            if command_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM execution_events ORDER BY event_sequence"
+                ).fetchall()
+            else:
+                checked = _text(command_id, field="command_id", maximum=128)
+                rows = connection.execute(
+                    """
+                    SELECT * FROM execution_events
+                    WHERE command_id = ? ORDER BY event_sequence
+                    """,
+                    (checked,),
+                ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._event_from_row(row) for row in rows)
+
+    def verify_event_chain(self) -> bool:
+        previous: str | None = None
+        for event in self.list_events():
+            if event.previous_hash != previous:
+                raise StorageError("execution event chain is discontinuous")
+            previous = event.event_hash
+        return True
+
+    # -- exact plans, tickets, and approvals --------------------------
+
+    def register_ticket(
+        self,
+        ticket: RiskTicket,
+        *,
+        stored_at: datetime,
+    ) -> str:
+        if not isinstance(ticket, RiskTicket):
+            raise TypeError("ticket must be RiskTicket")
+        if ticket.status is not RiskTicketStatus.AWAITING_APPROVAL:
+            raise ValidationError("only awaiting-approval tickets can be registered")
+        if not isinstance(ticket.plan, ProtectedTradePlan):
+            raise ValidationError("execution ticket requires a protected plan")
+        plan = ticket.plan
+        entry = plan.entry
+        if (
+            entry.environment is not self.environment
+            or entry.account_id != self.account_id
+        ):
+            raise ValidationError("ticket environment/account does not match store")
+        if entry.venue != "hyperliquid":
+            raise ValidationError("v1 execution store supports Hyperliquid only")
+        checked_at = _utc(stored_at, field="stored_at")
+        if checked_at < ticket.created_at or checked_at >= ticket.expires_at:
+            raise ValidationError("ticket must be stored during its active interval")
+        if ticket.assessment_hash != plan.assessment_hash:
+            raise ValidationError("ticket and plan assessment hashes differ")
+        if ticket.quantity != entry.quantity:
+            raise ValidationError("ticket and entry quantities differ")
+        if ticket.stressed_loss <= ZERO:
+            raise ValidationError("ticket must reserve positive stressed loss")
+        if entry.price_bound is None:
+            raise ValidationError("protected entry requires price_bound")
+        reserved_notional = decimal_multiply(
+            entry.quantity,
+            entry.price_bound,
+            field="ticket reserved notional",
+        )
+        if ticket.stressed_loss > self.max_reserved_loss:
+            raise PolicyViolation(
+                "EXECUTION_TICKET_LOSS_CAP",
+                "ticket stressed loss exceeds immutable store cap",
+            )
+        if reserved_notional > self.max_reserved_notional:
+            raise PolicyViolation(
+                "EXECUTION_TICKET_NOTIONAL_CAP",
+                "ticket notional exceeds immutable store cap",
+            )
+        plan_payload_json, plan_content_hash = _canonical_payload(plan.as_dict())
+        ticket_payload_json, ticket_content_hash = _canonical_payload(ticket.as_dict())
+        plan_record_material = {
+            "plan_hash": plan.plan_hash,
+            "assessment_hash": plan.assessment_hash,
+            "environment": self.environment.value,
+            "account_id": self.account_id,
+            "venue": entry.venue,
+            "instrument": entry.instrument,
+            "registered_at": _time_text(checked_at, field="registered_at"),
+            "content_hash": plan_content_hash,
+            "payload_json": plan_payload_json,
+        }
+        ticket_record_material = {
+            "ticket_hash": ticket.ticket_hash,
+            "ticket_id": ticket.ticket_id,
+            "plan_hash": plan.plan_hash,
+            "state": "awaiting_approval",
+            "stressed_loss": _decimal_text(
+                ticket.stressed_loss, field="stressed_loss"
+            ),
+            "reserved_notional": _decimal_text(
+                reserved_notional, field="reserved_notional"
+            ),
+            "created_at": _time_text(ticket.created_at, field="created_at"),
+            "expires_at": _time_text(ticket.expires_at, field="expires_at"),
+            "registered_at": _time_text(checked_at, field="registered_at"),
+            "content_hash": ticket_content_hash,
+            "payload_json": ticket_payload_json,
+        }
+        roles = (
+            ("entry", plan.entry),
+            ("protective_stop", plan.protective_stop),
+            ("take_profit", plan.take_profit),
+        )
+        try:
+            with self._transaction() as connection:
+                existing = connection.execute(
+                    "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                    (ticket.ticket_hash,),
+                ).fetchone()
+                if existing is not None:
+                    self._verify_ticket_row(existing)
+                    if (
+                        existing["ticket_id"] == ticket.ticket_id
+                        and existing["plan_hash"] == plan.plan_hash
+                        and existing["content_hash"] == ticket_content_hash
+                    ):
+                        return ticket.ticket_hash
+                    raise StateConflict("ticket hash is already bound differently")
+                connection.execute(
+                    """
+                    INSERT INTO execution_plans (
+                        plan_hash, assessment_hash, environment, account_id,
+                        venue, instrument, registered_at, payload_json,
+                        content_hash, record_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        plan.plan_hash,
+                        plan.assessment_hash,
+                        self.environment.value,
+                        self.account_id,
+                        entry.venue,
+                        entry.instrument,
+                        _time_text(checked_at, field="registered_at"),
+                        plan_payload_json,
+                        plan_content_hash,
+                        _record_hash("plan", plan_record_material),
+                    ),
+                )
+                for role, intent in roles:
+                    payload_json, content_hash = _canonical_payload(intent)
+                    if intent.price_bound is None:
+                        raise ValidationError(f"{role} requires price_bound")
+                    connection.execute(
+                        """
+                        INSERT INTO execution_plan_legs (
+                            plan_hash, role, cloid, intent_hash, side,
+                            reduce_only, quantity, price_bound, payload_json,
+                            content_hash
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            plan.plan_hash,
+                            role,
+                            intent.client_order_id,
+                            semantic_intent_hash(intent),
+                            intent.side.value,
+                            int(intent.reduce_only),
+                            _decimal_text(intent.quantity, field="quantity"),
+                            _decimal_text(
+                                intent.price_bound, field="price_bound"
+                            ),
+                            payload_json,
+                            content_hash,
+                        ),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO execution_tickets (
+                        ticket_hash, ticket_id, plan_hash, state,
+                        stressed_loss, reserved_notional, created_at,
+                        expires_at, registered_at, payload_json, content_hash,
+                        record_hash
+                    ) VALUES (?, ?, ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ticket.ticket_hash,
+                        ticket.ticket_id,
+                        plan.plan_hash,
+                        _decimal_text(ticket.stressed_loss, field="stressed_loss"),
+                        _decimal_text(
+                            reserved_notional, field="reserved_notional"
+                        ),
+                        _time_text(ticket.created_at, field="created_at"),
+                        _time_text(ticket.expires_at, field="expires_at"),
+                        _time_text(checked_at, field="registered_at"),
+                        ticket_payload_json,
+                        ticket_content_hash,
+                        _record_hash("ticket", ticket_record_material),
+                    ),
+                )
+                self._append_event_locked(
+                    connection,
+                    command_id=None,
+                    event_type="risk_ticket_registered",
+                    occurred_at=checked_at,
+                    payload={
+                        "ticket_hash": ticket.ticket_hash,
+                        "plan_hash": plan.plan_hash,
+                        "environment": self.environment.value,
+                        "account_id": self.account_id,
+                    },
+                )
+                return ticket.ticket_hash
+        except sqlite3.IntegrityError as error:
+            raise StateConflict("plan, ticket, or leg identity already exists") from error
+
+    @staticmethod
+    def _ticket_material(row: Mapping[str, Any], *, state: str | None = None) -> dict[str, object]:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(row["content_hash"], field="ticket content_hash")
+        _decode_payload(payload_json, content_hash, field="ticket")
+        return {
+            "ticket_hash": _stored_hash(row["ticket_hash"], field="ticket_hash"),
+            "ticket_id": _stored_text(
+                row["ticket_id"], field="ticket_id", maximum=128
+            ),
+            "plan_hash": _stored_hash(row["plan_hash"], field="plan_hash"),
+            "state": (
+                _stored_text(row["state"], field="ticket state", maximum=32)
+                if state is None
+                else state
+            ),
+            "stressed_loss": _decimal_text(
+                _decimal(row["stressed_loss"], field="stressed_loss"),
+                field="stressed_loss",
+            ),
+            "reserved_notional": _decimal_text(
+                _decimal(row["reserved_notional"], field="reserved_notional"),
+                field="reserved_notional",
+            ),
+            "created_at": _time_text(
+                _parse_time(row["created_at"], field="ticket created_at"),
+                field="created_at",
+            ),
+            "expires_at": _time_text(
+                _parse_time(row["expires_at"], field="ticket expires_at"),
+                field="expires_at",
+            ),
+            "registered_at": _time_text(
+                _parse_time(row["registered_at"], field="ticket registered_at"),
+                field="registered_at",
+            ),
+            "content_hash": content_hash,
+            "payload_json": payload_json,
+        }
+
+    @staticmethod
+    def _verify_ticket_row(row: Mapping[str, Any]) -> None:
+        material = ExecutionStore._ticket_material(row)
+        if _stored_hash(row["record_hash"], field="ticket record_hash") != _record_hash(
+            "ticket", material
+        ):
+            raise StorageError("persisted ticket record hash does not match")
+
+    @staticmethod
+    def _verify_plan_row(row: Mapping[str, Any]) -> None:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(row["content_hash"], field="plan content_hash")
+        _decode_payload(payload_json, content_hash, field="plan")
+        material = {
+            "plan_hash": _stored_hash(row["plan_hash"], field="plan_hash"),
+            "assessment_hash": _stored_hash(
+                row["assessment_hash"], field="assessment_hash"
+            ),
+            "environment": str(row["environment"]),
+            "account_id": str(row["account_id"]),
+            "venue": str(row["venue"]),
+            "instrument": str(row["instrument"]),
+            "registered_at": str(row["registered_at"]),
+            "content_hash": content_hash,
+            "payload_json": payload_json,
+        }
+        if _stored_hash(row["record_hash"], field="plan record_hash") != _record_hash(
+            "plan", material
+        ):
+            raise StorageError("persisted plan record hash does not match")
+
+    @staticmethod
+    def _verify_plan_leg_row(row: Mapping[str, Any]) -> None:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="plan leg content_hash"
+        )
+        payload = _decode_payload(payload_json, content_hash, field="plan leg")
+        if not isinstance(payload, dict):
+            raise StorageError("persisted plan leg payload is not an object")
+        try:
+            intent = SemanticIntent.from_mapping(payload)
+        except (KeyError, TypeError, ValueError) as error:
+            raise StorageError("persisted plan leg intent is invalid") from error
+        comparisons = {
+            "cloid": intent.client_order_id,
+            "intent_hash": semantic_intent_hash(intent),
+            "side": intent.side.value,
+            "reduce_only": int(intent.reduce_only),
+            "quantity": _decimal_text(intent.quantity, field="quantity"),
+            "price_bound": (
+                None
+                if intent.price_bound is None
+                else _decimal_text(intent.price_bound, field="price_bound")
+            ),
+        }
+        if comparisons["price_bound"] is None:
+            raise StorageError("persisted plan leg has no price bound")
+        for column, expected in comparisons.items():
+            if row[column] != expected:
+                raise StorageError(
+                    f"persisted plan leg {column} differs from immutable payload"
+                )
+
+    def get_ticket_payload(self, ticket_hash: str) -> Mapping[str, Any]:
+        checked = _hash(ticket_hash, field="ticket_hash")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_tickets WHERE ticket_hash = ?", (checked,)
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("execution ticket is not registered")
+        self._verify_ticket_row(row)
+        payload = json.loads(str(row["payload_json"]))
+        if not isinstance(payload, dict):
+            raise StorageError("persisted ticket payload is not an object")
+        return payload
+
+    def get_plan_payload(self, plan_hash: str) -> Mapping[str, Any]:
+        checked = _hash(plan_hash, field="plan_hash")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_plans WHERE plan_hash = ?", (checked,)
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("execution plan is not registered")
+        self._verify_plan_row(row)
+        payload = json.loads(str(row["payload_json"]))
+        if not isinstance(payload, dict):
+            raise StorageError("persisted plan payload is not an object")
+        return payload
+
+    def register_approval(self, approval: TrustedApproval) -> TrustedApproval:
+        if not isinstance(approval, TrustedApproval):
+            raise TypeError("approval must be TrustedApproval")
+        if (
+            approval.environment is not self.environment
+            or approval.account_id != self.account_id
+        ):
+            raise ValidationError("approval environment/account does not match store")
+        material = {
+            "approval_id": approval.approval_id,
+            "ticket_hash": approval.ticket_hash,
+            "token_hash": approval.token_hash,
+            "approver_id": approval.approver_id,
+            "audience": approval.audience,
+            "environment": approval.environment.value,
+            "account_id": approval.account_id,
+            "issued_at": _time_text(approval.issued_at, field="issued_at"),
+            "expires_at": _time_text(approval.expires_at, field="expires_at"),
+            "state": "issued",
+            "command_id": None,
+            "updated_at": _time_text(approval.issued_at, field="updated_at"),
+        }
+        try:
+            with self._transaction() as connection:
+                ticket = connection.execute(
+                    "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                    (approval.ticket_hash,),
+                ).fetchone()
+                if ticket is None:
+                    raise RecordNotFound("approval ticket is not registered")
+                self._verify_ticket_row(ticket)
+                if ticket["state"] != "awaiting_approval":
+                    raise StateConflict("ticket is not awaiting approval")
+                if approval.issued_at < _parse_time(
+                    ticket["created_at"], field="ticket created_at"
+                ):
+                    raise ValidationError("approval cannot predate its ticket")
+                if approval.expires_at > _parse_time(
+                    ticket["expires_at"], field="ticket expires_at"
+                ):
+                    raise ValidationError("approval cannot outlive its ticket")
+                existing = connection.execute(
+                    "SELECT * FROM execution_approvals WHERE approval_id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+                record_hash = _record_hash("approval", material)
+                if existing is not None:
+                    if (
+                        existing["ticket_hash"] == approval.ticket_hash
+                        and existing["token_hash"] == approval.token_hash
+                        and existing["record_hash"] == record_hash
+                    ):
+                        return approval
+                    raise StateConflict("approval ID is already bound differently")
+                connection.execute(
+                    """
+                    INSERT INTO execution_approvals (
+                        approval_id, ticket_hash, token_hash, approver_id,
+                        audience, environment, account_id, issued_at,
+                        expires_at, state, command_id, updated_at, record_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', NULL, ?, ?)
+                    """,
+                    (
+                        approval.approval_id,
+                        approval.ticket_hash,
+                        approval.token_hash,
+                        approval.approver_id,
+                        approval.audience,
+                        approval.environment.value,
+                        approval.account_id,
+                        _time_text(approval.issued_at, field="issued_at"),
+                        _time_text(approval.expires_at, field="expires_at"),
+                        _time_text(approval.issued_at, field="updated_at"),
+                        record_hash,
+                    ),
+                )
+                self._append_event_locked(
+                    connection,
+                    command_id=None,
+                    event_type="trusted_approval_registered",
+                    occurred_at=approval.issued_at,
+                    payload={
+                        "approval_id": approval.approval_id,
+                        "ticket_hash": approval.ticket_hash,
+                        "approver_id": approval.approver_id,
+                        "audience": approval.audience,
+                    },
+                )
+                return approval
+        except sqlite3.IntegrityError as error:
+            raise StateConflict("approval token or ticket is already authorized") from error
+
+    @staticmethod
+    def _approval_material(row: Mapping[str, Any]) -> dict[str, object]:
+        return {
+            "approval_id": str(row["approval_id"]),
+            "ticket_hash": str(row["ticket_hash"]),
+            "token_hash": str(row["token_hash"]),
+            "approver_id": str(row["approver_id"]),
+            "audience": str(row["audience"]),
+            "environment": str(row["environment"]),
+            "account_id": str(row["account_id"]),
+            "issued_at": str(row["issued_at"]),
+            "expires_at": str(row["expires_at"]),
+            "state": str(row["state"]),
+            "command_id": row["command_id"],
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def _verify_approval_row(self, row: Mapping[str, Any]) -> None:
+        material = self._approval_material(row)
+        if _stored_hash(
+            row["record_hash"], field="approval record_hash"
+        ) != _record_hash("approval", material):
+            raise StorageError("persisted approval record hash does not match")
+
+    def approval_state(self, approval_id: str) -> str:
+        checked = _text(approval_id, field="approval_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_approvals WHERE approval_id = ?", (checked,)
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("approval is not registered")
+        self._verify_approval_row(row)
+        return str(row["state"])
+
+    def revoke_approval(self, approval_id: str, *, at: datetime) -> None:
+        checked = _text(approval_id, field="approval_id", maximum=128)
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_approvals WHERE approval_id = ?", (checked,)
+            ).fetchone()
+            if row is None:
+                raise RecordNotFound("approval is not registered")
+            self._verify_approval_row(row)
+            if row["state"] != "issued":
+                raise StateConflict("only an unused approval can be revoked")
+            if checked_at < _parse_time(row["issued_at"], field="approval issued_at"):
+                raise ValidationError("approval revocation cannot predate issuance")
+            material = self._approval_material(row)
+            material["state"] = "revoked"
+            material["updated_at"] = _time_text(checked_at, field="updated_at")
+            connection.execute(
+                """
+                UPDATE execution_approvals SET
+                    state = 'revoked', updated_at = ?, record_hash = ?
+                WHERE approval_id = ? AND state = 'issued'
+                """,
+                (
+                    _time_text(checked_at, field="updated_at"),
+                    _record_hash("approval", material),
+                    checked,
+                ),
+            )
+            self._append_event_locked(
+                connection,
+                command_id=None,
+                event_type="trusted_approval_revoked",
+                occurred_at=checked_at,
+                payload={"approval_id": checked, "ticket_hash": row["ticket_hash"]},
+            )
+
+    def admit(
+        self,
+        *,
+        command_id: str,
+        approval_id: str,
+        token_hash: str,
+        audience: str,
+        at: datetime,
+    ) -> CommandRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_approval = _text(approval_id, field="approval_id", maximum=128)
+        checked_token = _hash(token_hash, field="token_hash")
+        checked_audience = _text(audience, field="audience", maximum=256)
+        checked_at = _utc(at, field="at")
+        try:
+            with self._transaction() as connection:
+                approval = connection.execute(
+                    "SELECT * FROM execution_approvals WHERE approval_id = ?",
+                    (checked_approval,),
+                ).fetchone()
+                if approval is None:
+                    raise AdmissionDenied("APPROVAL_NOT_FOUND", "approval is not registered")
+                self._verify_approval_row(approval)
+                if approval["state"] != "issued":
+                    raise AdmissionDenied("APPROVAL_ALREADY_USED", "approval is not issued")
+                if approval["token_hash"] != checked_token:
+                    raise AdmissionDenied("APPROVAL_TOKEN_MISMATCH", "opaque token hash differs")
+                if approval["audience"] != checked_audience:
+                    raise AdmissionDenied("APPROVAL_AUDIENCE_MISMATCH", "audience differs")
+                if (
+                    approval["environment"] != self.environment.value
+                    or approval["account_id"] != self.account_id
+                ):
+                    raise AdmissionDenied("APPROVAL_SCOPE_MISMATCH", "store scope differs")
+                if not (
+                    _parse_time(approval["issued_at"], field="approval issued_at")
+                    <= checked_at
+                    < _parse_time(approval["expires_at"], field="approval expires_at")
+                ):
+                    raise AdmissionDenied("APPROVAL_INACTIVE", "approval is expired or not active")
+                ticket = connection.execute(
+                    "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                    (approval["ticket_hash"],),
+                ).fetchone()
+                if ticket is None:
+                    raise StorageError("approval references missing ticket")
+                self._verify_ticket_row(ticket)
+                if ticket["state"] != "awaiting_approval":
+                    raise AdmissionDenied("TICKET_ALREADY_USED", "ticket is not available")
+                if checked_at >= _parse_time(ticket["expires_at"], field="ticket expires_at"):
+                    raise AdmissionDenied("TICKET_EXPIRED", "risk ticket has expired")
+                plan_row = connection.execute(
+                    "SELECT * FROM execution_plans WHERE plan_hash = ?",
+                    (ticket["plan_hash"],),
+                ).fetchone()
+                if plan_row is None:
+                    raise StorageError("ticket references missing protected plan")
+                self._verify_plan_row(plan_row)
+                active_critical = connection.execute(
+                    """
+                    SELECT incident_id FROM execution_incidents
+                    WHERE severity = 'critical' AND state != 'closed'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if active_critical is not None:
+                    raise AdmissionDenied(
+                        "ACCOUNT_CRITICAL_INCIDENT_ACTIVE",
+                        "critical account incident blocks new risk",
+                    )
+                active_command = connection.execute(
+                    """
+                    SELECT command_id FROM execution_commands
+                    WHERE state != 'terminal'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if active_command is not None:
+                    raise AdmissionDenied(
+                        "ACCOUNT_COMMAND_ALREADY_ACTIVE",
+                        "flat-account v1 permits one nonterminal risk command",
+                    )
+                reserved_loss = _decimal(
+                    ticket["stressed_loss"], field="stressed_loss", nonnegative=True
+                )
+                reserved_notional = _decimal(
+                    ticket["reserved_notional"],
+                    field="reserved_notional",
+                    nonnegative=True,
+                )
+                current_loss, current_notional, exposure_revision, _ = (
+                    self._read_exposure_locked(connection)
+                )
+                next_loss = decimal_add(
+                    current_loss, reserved_loss, field="aggregate reserved loss"
+                )
+                next_notional = decimal_add(
+                    current_notional,
+                    reserved_notional,
+                    field="aggregate reserved notional",
+                )
+                if next_loss > self.max_reserved_loss:
+                    raise PolicyViolation(
+                        "EXECUTION_ACCOUNT_LOSS_CAP",
+                        "aggregate reservation exceeds immutable loss cap",
+                    )
+                if next_notional > self.max_reserved_notional:
+                    raise PolicyViolation(
+                        "EXECUTION_ACCOUNT_NOTIONAL_CAP",
+                        "aggregate reservation exceeds immutable notional cap",
+                    )
+
+                approval_material = self._approval_material(approval)
+                approval_material.update(
+                    {
+                        "state": "consumed",
+                        "command_id": checked_command,
+                        "updated_at": _time_text(checked_at, field="updated_at"),
+                    }
+                )
+                changed = connection.execute(
+                    """
+                    UPDATE execution_approvals SET
+                        state = 'consumed', command_id = ?, updated_at = ?,
+                        record_hash = ?
+                    WHERE approval_id = ? AND state = 'issued'
+                    """,
+                    (
+                        checked_command,
+                        _time_text(checked_at, field="updated_at"),
+                        _record_hash("approval", approval_material),
+                        checked_approval,
+                    ),
+                )
+                if changed.rowcount != 1:
+                    raise StateConflict("approval was consumed concurrently")
+                consumed_ticket_material = self._ticket_material(
+                    ticket, state="consumed"
+                )
+                connection.execute(
+                    """
+                    UPDATE execution_tickets SET state = 'consumed', record_hash = ?
+                    WHERE ticket_hash = ? AND state = 'awaiting_approval'
+                    """,
+                    (
+                        _record_hash("ticket", consumed_ticket_material),
+                        ticket["ticket_hash"],
+                    ),
+                )
+                command_material = self._command_material_values(
+                    checked_command,
+                    str(ticket["ticket_hash"]),
+                    str(ticket["plan_hash"]),
+                    checked_approval,
+                    "queued",
+                    reserved_loss,
+                    reserved_notional,
+                    checked_at,
+                    checked_at,
+                    None,
+                    1,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO execution_commands (
+                        command_id, ticket_hash, plan_hash, approval_id, state,
+                        reserved_loss, reserved_notional, created_at, updated_at,
+                        terminal_at, revision, record_hash
+                    ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, NULL, 1, ?)
+                    """,
+                    (
+                        checked_command,
+                        ticket["ticket_hash"],
+                        ticket["plan_hash"],
+                        checked_approval,
+                        _decimal_text(reserved_loss, field="reserved_loss"),
+                        _decimal_text(
+                            reserved_notional, field="reserved_notional"
+                        ),
+                        _time_text(checked_at, field="created_at"),
+                        _time_text(checked_at, field="updated_at"),
+                        _record_hash("command", command_material),
+                    ),
+                )
+                plan_legs = connection.execute(
+                    """
+                    SELECT * FROM execution_plan_legs
+                    WHERE plan_hash = ? ORDER BY role
+                    """,
+                    (ticket["plan_hash"],),
+                ).fetchall()
+                if {str(row["role"]) for row in plan_legs} != set(_ROLES):
+                    raise StorageError("protected plan does not contain exactly three legs")
+                for leg in plan_legs:
+                    self._verify_plan_leg_row(leg)
+                    leg_material = self._leg_material_values(
+                        checked_command,
+                        str(leg["role"]),
+                        str(leg["cloid"]),
+                        str(leg["intent_hash"]),
+                        str(leg["side"]),
+                        bool(leg["reduce_only"]),
+                        _decimal(leg["quantity"], field="quantity"),
+                        ZERO,
+                        None,
+                        "queued",
+                        checked_at,
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO execution_command_legs (
+                            command_id, role, cloid, intent_hash, side,
+                            reduce_only, requested_quantity, cumulative_filled,
+                            venue_oid, status, updated_at, record_hash
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, '0', NULL, 'queued', ?, ?)
+                        """,
+                        (
+                            checked_command,
+                            leg["role"],
+                            leg["cloid"],
+                            leg["intent_hash"],
+                            leg["side"],
+                            leg["reduce_only"],
+                            leg["quantity"],
+                            _time_text(checked_at, field="updated_at"),
+                            _record_hash("leg", leg_material),
+                        ),
+                    )
+                outbox_material = self._outbox_material_values(
+                    checked_command,
+                    "queued",
+                    None,
+                    0,
+                    None,
+                    None,
+                    None,
+                    0,
+                    checked_at,
+                    checked_at,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO execution_outbox (
+                        command_id, state, worker_id, fencing_token, claimed_at,
+                        lease_expires_at, current_attempt_id, attempt_count,
+                        created_at, updated_at, record_hash
+                    ) VALUES (?, 'queued', NULL, 0, NULL, NULL, NULL, 0, ?, ?, ?)
+                    """,
+                    (
+                        checked_command,
+                        _time_text(checked_at, field="created_at"),
+                        _time_text(checked_at, field="updated_at"),
+                        _record_hash("outbox", outbox_material),
+                    ),
+                )
+                self._write_exposure_locked(
+                    connection,
+                    loss=next_loss,
+                    notional=next_notional,
+                    previous_revision=exposure_revision,
+                    at=checked_at,
+                )
+                self._append_event_locked(
+                    connection,
+                    command_id=checked_command,
+                    event_type="command_admitted",
+                    occurred_at=checked_at,
+                    payload={
+                        "ticket_hash": ticket["ticket_hash"],
+                        "plan_hash": ticket["plan_hash"],
+                        "approval_id": checked_approval,
+                        "reserved_loss": _decimal_text(
+                            reserved_loss, field="reserved_loss"
+                        ),
+                        "reserved_notional": _decimal_text(
+                            reserved_notional, field="reserved_notional"
+                        ),
+                        "leg_count": 3,
+                    },
+                )
+                return self._command_from_row(
+                    connection.execute(
+                        "SELECT * FROM execution_commands WHERE command_id = ?",
+                        (checked_command,),
+                    ).fetchone()
+                )
+        except sqlite3.IntegrityError as error:
+            raise StateConflict("command, plan, or leg identity is already consumed") from error
+
+    # -- mutable record integrity helpers -----------------------------
+
+    @staticmethod
+    def _command_material_values(
+        command_id: str,
+        ticket_hash: str,
+        plan_hash: str,
+        approval_id: str,
+        state: str,
+        reserved_loss: Decimal,
+        reserved_notional: Decimal,
+        created_at: datetime,
+        updated_at: datetime,
+        terminal_at: datetime | None,
+        revision: int,
+    ) -> dict[str, object]:
+        return {
+            "command_id": command_id,
+            "ticket_hash": ticket_hash,
+            "plan_hash": plan_hash,
+            "approval_id": approval_id,
+            "state": state,
+            "reserved_loss": _decimal_text(reserved_loss, field="reserved_loss"),
+            "reserved_notional": _decimal_text(
+                reserved_notional, field="reserved_notional"
+            ),
+            "created_at": _time_text(created_at, field="created_at"),
+            "updated_at": _time_text(updated_at, field="updated_at"),
+            "terminal_at": (
+                None
+                if terminal_at is None
+                else _time_text(terminal_at, field="terminal_at")
+            ),
+            "revision": revision,
+        }
+
+    @classmethod
+    def _command_from_row(cls, row: Mapping[str, Any] | None) -> CommandRecord:
+        if row is None:
+            raise StorageError("command row is missing")
+        state = _stored_text(row["state"], field="command state", maximum=32)
+        if state not in _COMMAND_STATES:
+            raise StorageError("persisted command state is unsupported")
+        record = CommandRecord(
+            command_id=_stored_text(
+                row["command_id"], field="command_id", maximum=128
+            ),
+            ticket_hash=_stored_hash(row["ticket_hash"], field="ticket_hash"),
+            plan_hash=_stored_hash(row["plan_hash"], field="plan_hash"),
+            approval_id=_stored_text(
+                row["approval_id"], field="approval_id", maximum=128
+            ),
+            state=state,
+            reserved_loss=_decimal(
+                row["reserved_loss"], field="reserved_loss", nonnegative=True
+            ),
+            reserved_notional=_decimal(
+                row["reserved_notional"],
+                field="reserved_notional",
+                nonnegative=True,
+            ),
+            created_at=_parse_time(row["created_at"], field="command created_at"),
+            updated_at=_parse_time(row["updated_at"], field="command updated_at"),
+            terminal_at=_optional_time(
+                row["terminal_at"], field="command terminal_at"
+            ),
+            revision=int(row["revision"]),
+        )
+        expected = _record_hash(
+            "command",
+            cls._command_material_values(
+                record.command_id,
+                record.ticket_hash,
+                record.plan_hash,
+                record.approval_id,
+                record.state,
+                record.reserved_loss,
+                record.reserved_notional,
+                record.created_at,
+                record.updated_at,
+                record.terminal_at,
+                record.revision,
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="command record_hash") != expected:
+            raise StorageError("persisted command record hash does not match")
+        return record
+
+    @staticmethod
+    def _outbox_material_values(
+        command_id: str,
+        state: str,
+        worker_id: str | None,
+        fencing_token: int,
+        claimed_at: datetime | None,
+        lease_expires_at: datetime | None,
+        current_attempt_id: str | None,
+        attempt_count: int,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "command_id": command_id,
+            "state": state,
+            "worker_id": worker_id,
+            "fencing_token": fencing_token,
+            "claimed_at": (
+                None
+                if claimed_at is None
+                else _time_text(claimed_at, field="claimed_at")
+            ),
+            "lease_expires_at": (
+                None
+                if lease_expires_at is None
+                else _time_text(lease_expires_at, field="lease_expires_at")
+            ),
+            "current_attempt_id": current_attempt_id,
+            "attempt_count": attempt_count,
+            "created_at": _time_text(created_at, field="created_at"),
+            "updated_at": _time_text(updated_at, field="updated_at"),
+        }
+
+    @classmethod
+    def _outbox_from_row(cls, row: Mapping[str, Any] | None) -> OutboxRecord:
+        if row is None:
+            raise StorageError("outbox row is missing")
+        state = _stored_text(row["state"], field="outbox state", maximum=32)
+        if state not in _OUTBOX_STATES:
+            raise StorageError("persisted outbox state is unsupported")
+        record = OutboxRecord(
+            command_id=_stored_text(
+                row["command_id"], field="command_id", maximum=128
+            ),
+            state=state,
+            worker_id=(
+                None
+                if row["worker_id"] is None
+                else _stored_text(row["worker_id"], field="worker_id", maximum=128)
+            ),
+            fencing_token=int(row["fencing_token"]),
+            claimed_at=_optional_time(row["claimed_at"], field="claimed_at"),
+            lease_expires_at=_optional_time(
+                row["lease_expires_at"], field="lease_expires_at"
+            ),
+            current_attempt_id=(
+                None
+                if row["current_attempt_id"] is None
+                else _stored_text(
+                    row["current_attempt_id"],
+                    field="current_attempt_id",
+                    maximum=128,
+                )
+            ),
+            attempt_count=int(row["attempt_count"]),
+            created_at=_parse_time(row["created_at"], field="outbox created_at"),
+            updated_at=_parse_time(row["updated_at"], field="outbox updated_at"),
+        )
+        expected = _record_hash(
+            "outbox",
+            cls._outbox_material_values(
+                record.command_id,
+                record.state,
+                record.worker_id,
+                record.fencing_token,
+                record.claimed_at,
+                record.lease_expires_at,
+                record.current_attempt_id,
+                record.attempt_count,
+                record.created_at,
+                record.updated_at,
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="outbox record_hash") != expected:
+            raise StorageError("persisted outbox record hash does not match")
+        return record
+
+    @staticmethod
+    def _leg_material_values(
+        command_id: str,
+        role: str,
+        cloid: str,
+        intent_hash: str,
+        side: str,
+        reduce_only: bool,
+        requested_quantity: Decimal,
+        cumulative_filled: Decimal,
+        venue_oid: int | None,
+        status: str,
+        updated_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "command_id": command_id,
+            "role": role,
+            "cloid": cloid,
+            "intent_hash": intent_hash,
+            "side": side,
+            "reduce_only": reduce_only,
+            "requested_quantity": _decimal_text(
+                requested_quantity, field="requested_quantity"
+            ),
+            "cumulative_filled": _decimal_text(
+                cumulative_filled, field="cumulative_filled"
+            ),
+            "venue_oid": venue_oid,
+            "status": status,
+            "updated_at": _time_text(updated_at, field="updated_at"),
+        }
+
+    @classmethod
+    def _leg_from_row(cls, row: Mapping[str, Any]) -> LegRecord:
+        role = _stored_text(row["role"], field="role", maximum=32)
+        status = _stored_text(row["status"], field="leg status", maximum=32)
+        if role not in _ROLES or status not in _LEG_STATES:
+            raise StorageError("persisted execution leg is unsupported")
+        record = LegRecord(
+            command_id=_stored_text(
+                row["command_id"], field="command_id", maximum=128
+            ),
+            role=role,
+            cloid=_stored_text(row["cloid"], field="cloid", maximum=128),
+            intent_hash=_stored_hash(row["intent_hash"], field="intent_hash"),
+            side=_stored_text(row["side"], field="side", maximum=8),
+            reduce_only=bool(row["reduce_only"]),
+            requested_quantity=_decimal(
+                row["requested_quantity"], field="requested_quantity"
+            ),
+            cumulative_filled=_decimal(
+                row["cumulative_filled"],
+                field="cumulative_filled",
+                nonnegative=True,
+            ),
+            venue_oid=(None if row["venue_oid"] is None else int(row["venue_oid"])),
+            status=status,
+            updated_at=_parse_time(row["updated_at"], field="leg updated_at"),
+        )
+        if record.cumulative_filled > record.requested_quantity:
+            raise StorageError("persisted leg fill exceeds requested quantity")
+        expected = _record_hash(
+            "leg",
+            cls._leg_material_values(
+                record.command_id,
+                record.role,
+                record.cloid,
+                record.intent_hash,
+                record.side,
+                record.reduce_only,
+                record.requested_quantity,
+                record.cumulative_filled,
+                record.venue_oid,
+                record.status,
+                record.updated_at,
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="leg record_hash") != expected:
+            raise StorageError("persisted leg record hash does not match")
+        return record
+
+    def get_command(self, command_id: str) -> CommandRecord:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?", (checked,)
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound(f"execution command not found: {checked}")
+        return self._command_from_row(row)
+
+    def get_outbox(self, command_id: str) -> OutboxRecord:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_outbox WHERE command_id = ?", (checked,)
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound(f"execution outbox not found: {checked}")
+        return self._outbox_from_row(row)
+
+    def get_legs(self, command_id: str) -> tuple[LegRecord, ...]:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT * FROM execution_command_legs
+                WHERE command_id = ? ORDER BY
+                    CASE role
+                        WHEN 'entry' THEN 0
+                        WHEN 'protective_stop' THEN 1
+                        ELSE 2
+                    END
+                """,
+                (checked,),
+            ).fetchall()
+        finally:
+            connection.close()
+        if not rows:
+            raise RecordNotFound(f"execution legs not found: {checked}")
+        result = tuple(self._leg_from_row(row) for row in rows)
+        if tuple(leg.role for leg in result) != _ROLES:
+            raise StorageError("command does not contain exactly three ordered legs")
+        return result
+
+    def void_unsent_command(
+        self,
+        command_id: str,
+        *,
+        reason: str,
+        at: datetime,
+    ) -> CommandRecord:
+        """Permanently void a proven-unsent command and consume its authority.
+
+        This path is available only while no attempt row exists.  The ticket
+        and approval are never revived; another send requires a new ticket and
+        a new trusted approval.
+        """
+
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_reason = _text(reason, field="reason", maximum=256)
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            if command_row is None:
+                raise RecordNotFound("execution command is not registered")
+            command = self._command_from_row(command_row)
+            if command.state not in {"queued", "claimed"}:
+                raise StateConflict("only an unsent queued/claimed command may be voided")
+            if connection.execute(
+                "SELECT 1 FROM execution_attempts WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone() is not None:
+                raise StateConflict("command has an attempt and must be reconciled")
+            outbox_row = connection.execute(
+                "SELECT * FROM execution_outbox WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            if outbox_row is None:
+                raise StorageError("execution command has no outbox")
+            outbox = self._outbox_from_row(outbox_row)
+            if outbox.current_attempt_id is not None or outbox.attempt_count != 0:
+                raise StateConflict("outbox records an attempt and cannot be voided")
+            leg_rows = connection.execute(
+                "SELECT * FROM execution_command_legs WHERE command_id = ?",
+                (checked_command,),
+            ).fetchall()
+            if len(leg_rows) != 3:
+                raise StorageError("unsent command is missing protected legs")
+            for row in leg_rows:
+                leg = self._leg_from_row(row)
+                if leg.cumulative_filled != ZERO or leg.venue_oid is not None:
+                    raise StateConflict("leg has venue evidence and cannot be voided")
+                self._update_leg_locked(
+                    connection,
+                    leg,
+                    status="expired",
+                    cumulative_filled=ZERO,
+                    venue_oid=None,
+                    at=checked_at,
+                )
+            current_loss, current_notional, exposure_revision, _ = (
+                self._read_exposure_locked(connection)
+            )
+            self._write_exposure_locked(
+                connection,
+                loss=decimal_subtract(
+                    current_loss,
+                    command.reserved_loss,
+                    field="voided reserved loss",
+                ),
+                notional=decimal_subtract(
+                    current_notional,
+                    command.reserved_notional,
+                    field="voided reserved notional",
+                ),
+                previous_revision=exposure_revision,
+                at=checked_at,
+            )
+            terminal_command = self._set_command_state_locked(
+                connection,
+                command_row,
+                state="terminal",
+                at=checked_at,
+                terminal=True,
+            )
+            self._set_outbox_locked(
+                connection,
+                outbox_row,
+                state="terminal",
+                at=checked_at,
+                worker_id=None,
+                fencing_token=outbox.fencing_token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=None,
+                attempt_count=0,
+            )
+            ticket = connection.execute(
+                "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                (command.ticket_hash,),
+            ).fetchone()
+            if ticket is None:
+                raise StorageError("voided command ticket is missing")
+            terminal_ticket = self._ticket_material(ticket, state="terminal")
+            connection.execute(
+                """
+                UPDATE execution_tickets SET state = 'terminal', record_hash = ?
+                WHERE ticket_hash = ? AND state = 'consumed'
+                """,
+                (_record_hash("ticket", terminal_ticket), command.ticket_hash),
+            )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="unsent_command_voided",
+                occurred_at=checked_at,
+                payload={
+                    "reason": checked_reason,
+                    "authority_reusable": False,
+                    "attempt_existed": False,
+                },
+            )
+            return terminal_command
+
+    # -- fresh send-time preflight ------------------------------------
+
+    @staticmethod
+    def _preflight_material(
+        preflight: DispatchPreflight,
+        *,
+        registered_at: datetime,
+        payload_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            "preflight_hash": preflight.preflight_hash,
+            "command_id": preflight.command_id,
+            "ticket_hash": preflight.ticket_hash,
+            "plan_hash": preflight.plan_hash,
+            "environment": preflight.environment.value,
+            "account_id": preflight.account_id,
+            "account_snapshot_hash": preflight.account_snapshot_hash,
+            "metadata_hash": preflight.metadata_hash,
+            "market_snapshot_hash": preflight.market_snapshot_hash,
+            "risk_policy_hash": preflight.risk_policy_hash,
+            "observed_at": _time_text(
+                preflight.observed_at, field="observed_at"
+            ),
+            "expires_at": _time_text(preflight.expires_at, field="expires_at"),
+            "passed": preflight.passed,
+            "registered_at": _time_text(registered_at, field="registered_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+
+    @classmethod
+    def _preflight_from_row(cls, row: Mapping[str, Any]) -> DispatchPreflight:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="preflight content_hash"
+        )
+        payload = _decode_payload(payload_json, content_hash, field="preflight")
+        if not isinstance(payload, dict):
+            raise StorageError("persisted preflight payload is not an object")
+        try:
+            preflight = DispatchPreflight(
+                command_id=str(row["command_id"]),
+                ticket_hash=str(row["ticket_hash"]),
+                plan_hash=str(row["plan_hash"]),
+                environment=Environment(str(row["environment"])),
+                account_id=str(row["account_id"]),
+                account_snapshot_hash=str(row["account_snapshot_hash"]),
+                metadata_hash=str(row["metadata_hash"]),
+                market_snapshot_hash=str(row["market_snapshot_hash"]),
+                risk_policy_hash=str(row["risk_policy_hash"]),
+                observed_at=_parse_time(
+                    row["observed_at"], field="preflight observed_at"
+                ),
+                expires_at=_parse_time(
+                    row["expires_at"], field="preflight expires_at"
+                ),
+                passed=bool(row["passed"]),
+                preflight_hash=str(row["preflight_hash"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted preflight is invalid") from error
+        if canonical_json(preflight.as_dict()) != payload_json:
+            raise StorageError("persisted preflight payload differs from columns")
+        registered_at = _parse_time(
+            row["registered_at"], field="preflight registered_at"
+        )
+        expected_record_hash = _record_hash(
+            "preflight",
+            cls._preflight_material(
+                preflight,
+                registered_at=registered_at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        if _stored_hash(
+            row["record_hash"], field="preflight record_hash"
+        ) != expected_record_hash:
+            raise StorageError("persisted preflight record hash does not match")
+        return preflight
+
+    def register_preflight(
+        self,
+        preflight: DispatchPreflight,
+        *,
+        at: datetime,
+    ) -> DispatchPreflight:
+        if not isinstance(preflight, DispatchPreflight):
+            raise TypeError("preflight must be DispatchPreflight")
+        checked_at = _utc(at, field="at")
+        if not preflight.passed:
+            raise AdmissionDenied(
+                "DISPATCH_PREFLIGHT_FAILED",
+                "failed preflight cannot authorize attempt preparation",
+            )
+        if (
+            preflight.environment is not self.environment
+            or preflight.account_id != self.account_id
+        ):
+            raise AdmissionDenied(
+                "DISPATCH_PREFLIGHT_SCOPE_MISMATCH",
+                "preflight environment/account differs from store",
+            )
+        if not preflight.observed_at <= checked_at < preflight.expires_at:
+            raise AdmissionDenied(
+                "DISPATCH_PREFLIGHT_STALE",
+                "preflight is not active at registration",
+            )
+        payload_json, content_hash = _canonical_payload(preflight.as_dict())
+        record_hash = _record_hash(
+            "preflight",
+            self._preflight_material(
+                preflight,
+                registered_at=checked_at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        try:
+            with self._transaction() as connection:
+                command_row = connection.execute(
+                    "SELECT * FROM execution_commands WHERE command_id = ?",
+                    (preflight.command_id,),
+                ).fetchone()
+                if command_row is None:
+                    raise RecordNotFound("preflight command is not registered")
+                command = self._command_from_row(command_row)
+                if command.state != "claimed":
+                    raise StateConflict("preflight requires a claimed command")
+                if (
+                    command.ticket_hash != preflight.ticket_hash
+                    or command.plan_hash != preflight.plan_hash
+                ):
+                    raise AdmissionDenied(
+                        "DISPATCH_PREFLIGHT_BINDING_MISMATCH",
+                        "preflight ticket/plan differs from command",
+                    )
+                ticket_row = connection.execute(
+                    "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                    (command.ticket_hash,),
+                ).fetchone()
+                if ticket_row is None:
+                    raise StorageError("preflight command ticket is missing")
+                self._verify_ticket_row(ticket_row)
+                ticket_payload = json.loads(str(ticket_row["payload_json"]))
+                if not isinstance(ticket_payload, dict):
+                    raise StorageError("preflight ticket payload is not an object")
+                policy_hash = ticket_payload.get("policy_hash")
+                if not isinstance(policy_hash, str):
+                    raise AdmissionDenied(
+                        "DISPATCH_PREFLIGHT_LEGACY_POLICY_UNBOUND",
+                        "ticket lacks an exact risk-policy hash",
+                    )
+                if _hash(policy_hash, field="ticket policy_hash") != preflight.risk_policy_hash:
+                    raise AdmissionDenied(
+                        "DISPATCH_PREFLIGHT_POLICY_MISMATCH",
+                        "preflight risk policy differs from approved ticket",
+                    )
+                outbox_row = connection.execute(
+                    "SELECT * FROM execution_outbox WHERE command_id = ?",
+                    (preflight.command_id,),
+                ).fetchone()
+                if outbox_row is None:
+                    raise StorageError("preflight command has no outbox")
+                outbox = self._outbox_from_row(outbox_row)
+                if (
+                    outbox.state != "claimed"
+                    or outbox.lease_expires_at is None
+                    or not outbox.claimed_at
+                    or not outbox.claimed_at <= checked_at < outbox.lease_expires_at
+                ):
+                    raise StateConflict("preflight requires an active dispatch claim")
+                if preflight.observed_at < outbox.claimed_at:
+                    raise AdmissionDenied(
+                        "DISPATCH_PREFLIGHT_PREDATES_CLAIM",
+                        "send-time preflight must be observed after dispatch claim",
+                    )
+                if connection.execute(
+                    "SELECT 1 FROM execution_attempts WHERE command_id = ?",
+                    (preflight.command_id,),
+                ).fetchone() is not None:
+                    raise StateConflict("attempt already exists for preflight command")
+                existing = connection.execute(
+                    """
+                    SELECT * FROM execution_dispatch_preflights
+                    WHERE command_id = ?
+                    """,
+                    (preflight.command_id,),
+                ).fetchone()
+                if existing is not None:
+                    current = self._preflight_from_row(existing)
+                    if current.preflight_hash == preflight.preflight_hash:
+                        return current
+                    raise StateConflict("command cannot swap dispatch preflights")
+                connection.execute(
+                    """
+                    INSERT INTO execution_dispatch_preflights (
+                        preflight_hash, command_id, ticket_hash, plan_hash,
+                        environment, account_id, account_snapshot_hash,
+                        metadata_hash, market_snapshot_hash, risk_policy_hash,
+                        observed_at, expires_at, passed, registered_at,
+                        payload_json, content_hash, record_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    """,
+                    (
+                        preflight.preflight_hash,
+                        preflight.command_id,
+                        preflight.ticket_hash,
+                        preflight.plan_hash,
+                        preflight.environment.value,
+                        preflight.account_id,
+                        preflight.account_snapshot_hash,
+                        preflight.metadata_hash,
+                        preflight.market_snapshot_hash,
+                        preflight.risk_policy_hash,
+                        _time_text(preflight.observed_at, field="observed_at"),
+                        _time_text(preflight.expires_at, field="expires_at"),
+                        _time_text(checked_at, field="registered_at"),
+                        payload_json,
+                        content_hash,
+                        record_hash,
+                    ),
+                )
+                self._append_event_locked(
+                    connection,
+                    command_id=preflight.command_id,
+                    event_type="dispatch_preflight_registered",
+                    occurred_at=checked_at,
+                    payload={
+                        "preflight_hash": preflight.preflight_hash,
+                        "account_snapshot_hash": preflight.account_snapshot_hash,
+                        "metadata_hash": preflight.metadata_hash,
+                        "market_snapshot_hash": preflight.market_snapshot_hash,
+                        "risk_policy_hash": preflight.risk_policy_hash,
+                        "expires_at": _time_text(
+                            preflight.expires_at, field="expires_at"
+                        ),
+                        "model_authority": False,
+                    },
+                )
+                return preflight
+        except sqlite3.IntegrityError as error:
+            raise StateConflict(
+                "preflight command/ticket/plan is already uniquely bound"
+            ) from error
+
+    def get_preflight(self, command_id: str) -> DispatchPreflight:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_dispatch_preflights
+                WHERE command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("dispatch preflight is not registered")
+        return self._preflight_from_row(row)
+
+    @staticmethod
+    def _signed_evidence_material(
+        evidence: SignedEnvelopeEvidence,
+        *,
+        recorded_at: datetime,
+        payload_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            **evidence.as_dict(),
+            "recorded_at": _time_text(recorded_at, field="recorded_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+
+    @classmethod
+    def _signed_evidence_from_row(
+        cls, row: Mapping[str, Any]
+    ) -> SignedEnvelopeEvidence:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="signed evidence content_hash"
+        )
+        payload = _decode_payload(payload_json, content_hash, field="signed evidence")
+        if not isinstance(payload, dict):
+            raise StorageError("persisted signed evidence payload is not an object")
+        try:
+            evidence = SignedEnvelopeEvidence(
+                command_id=str(row["command_id"]),
+                preflight_hash=str(row["preflight_hash"]),
+                environment=Environment(str(row["environment"])),
+                endpoint=str(row["endpoint"]),
+                account_id=str(row["account_id"]),
+                plan_hash=str(row["plan_hash"]),
+                action_hash=str(row["action_hash"]),
+                nonce=int(row["nonce"]),
+                wire_hash=str(row["wire_hash"]),
+                signature_hash=str(row["signature_hash"]),
+                envelope_hash=str(row["envelope_hash"]),
+                signer_binding_hash=str(row["signer_binding_hash"]),
+                authorization_expires_at_ms=int(
+                    row["authorization_expires_at_ms"]
+                ),
+                expires_after_ms=int(row["expires_after_ms"]),
+                signed_at_ms=int(row["signed_at_ms"]),
+                evidence_hash=str(row["evidence_hash"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted signed evidence is invalid") from error
+        if canonical_json(evidence.as_dict()) != payload_json:
+            raise StorageError("persisted signed evidence differs from columns")
+        recorded_at = _parse_time(
+            row["recorded_at"], field="signed evidence recorded_at"
+        )
+        expected = _record_hash(
+            "signed-evidence-record",
+            cls._signed_evidence_material(
+                evidence,
+                recorded_at=recorded_at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        if _stored_hash(
+            row["record_hash"], field="signed evidence record_hash"
+        ) != expected:
+            raise StorageError("persisted signed evidence record hash does not match")
+        return evidence
+
+    def _put_signed_evidence_locked(
+        self,
+        connection: sqlite3.Connection,
+        evidence: SignedEnvelopeEvidence,
+        *,
+        at: datetime,
+    ) -> SignedEnvelopeEvidence:
+        payload_json, content_hash = _canonical_payload(evidence.as_dict())
+        record_hash = _record_hash(
+            "signed-evidence-record",
+            self._signed_evidence_material(
+                evidence,
+                recorded_at=at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        existing = connection.execute(
+            "SELECT * FROM execution_signed_envelopes WHERE command_id = ?",
+            (evidence.command_id,),
+        ).fetchone()
+        if existing is not None:
+            current = self._signed_evidence_from_row(existing)
+            if current.evidence_hash == evidence.evidence_hash:
+                return current
+            raise StateConflict("command cannot swap signed-envelope evidence")
+        connection.execute(
+            """
+            INSERT INTO execution_signed_envelopes (
+                evidence_hash, command_id, preflight_hash, environment,
+                endpoint, account_id, plan_hash, action_hash, nonce, wire_hash,
+                signature_hash, envelope_hash, signer_binding_hash,
+                authorization_expires_at_ms, expires_after_ms, signed_at_ms,
+                recorded_at, payload_json, content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence.evidence_hash,
+                evidence.command_id,
+                evidence.preflight_hash,
+                evidence.environment.value,
+                evidence.endpoint,
+                evidence.account_id,
+                evidence.plan_hash,
+                evidence.action_hash,
+                evidence.nonce,
+                evidence.wire_hash,
+                evidence.signature_hash,
+                evidence.envelope_hash,
+                evidence.signer_binding_hash,
+                evidence.authorization_expires_at_ms,
+                evidence.expires_after_ms,
+                evidence.signed_at_ms,
+                _time_text(at, field="recorded_at"),
+                payload_json,
+                content_hash,
+                record_hash,
+            ),
+        )
+        return evidence
+
+    @staticmethod
+    def _transport_evidence_material(
+        evidence: TransportOutcomeEvidence,
+        *,
+        recorded_at: datetime,
+        payload_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            **evidence.as_dict(),
+            "recorded_at": _time_text(recorded_at, field="recorded_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+
+    @classmethod
+    def _transport_evidence_from_row(
+        cls, row: Mapping[str, Any]
+    ) -> TransportOutcomeEvidence:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="transport evidence content_hash"
+        )
+        payload = _decode_payload(
+            payload_json, content_hash, field="transport evidence"
+        )
+        if not isinstance(payload, dict):
+            raise StorageError("persisted transport evidence payload is not an object")
+        try:
+            evidence = TransportOutcomeEvidence(
+                command_id=str(row["command_id"]),
+                attempt_id=str(row["attempt_id"]),
+                signed_evidence_hash=str(row["signed_evidence_hash"]),
+                endpoint=str(row["endpoint"]),
+                attempted_at_ms=int(row["attempted_at_ms"]),
+                outcome=str(row["outcome"]),
+                http_status=(
+                    None if row["http_status"] is None else int(row["http_status"])
+                ),
+                detail_code=str(row["detail_code"]),
+                response_hash=(
+                    None
+                    if row["response_hash"] is None
+                    else str(row["response_hash"])
+                ),
+                transport_attempt_hash=(
+                    None
+                    if row["transport_attempt_hash"] is None
+                    else str(row["transport_attempt_hash"])
+                ),
+                send_count=(
+                    None if row["send_count"] is None else int(row["send_count"])
+                ),
+                retry_performed=bool(row["retry_performed"]),
+                venue_write_attempted=(
+                    None
+                    if row["venue_write_attempted"] is None
+                    else bool(row["venue_write_attempted"])
+                ),
+                evidence_basis=str(row["evidence_basis"]),
+                evidence_hash=str(row["evidence_hash"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted transport evidence is invalid") from error
+        if canonical_json(evidence.as_dict()) != payload_json:
+            raise StorageError("persisted transport evidence differs from columns")
+        recorded_at = _parse_time(
+            row["recorded_at"], field="transport evidence recorded_at"
+        )
+        expected = _record_hash(
+            "transport-evidence-record",
+            cls._transport_evidence_material(
+                evidence,
+                recorded_at=recorded_at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        if _stored_hash(
+            row["record_hash"], field="transport evidence record_hash"
+        ) != expected:
+            raise StorageError("persisted transport evidence record hash does not match")
+        return evidence
+
+    def _put_transport_evidence_locked(
+        self,
+        connection: sqlite3.Connection,
+        evidence: TransportOutcomeEvidence,
+        *,
+        at: datetime,
+    ) -> TransportOutcomeEvidence:
+        payload_json, content_hash = _canonical_payload(evidence.as_dict())
+        record_hash = _record_hash(
+            "transport-evidence-record",
+            self._transport_evidence_material(
+                evidence,
+                recorded_at=at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        existing = connection.execute(
+            "SELECT * FROM execution_transport_outcomes WHERE command_id = ?",
+            (evidence.command_id,),
+        ).fetchone()
+        if existing is not None:
+            current = self._transport_evidence_from_row(existing)
+            if current.evidence_hash == evidence.evidence_hash:
+                return current
+            raise StateConflict("command cannot swap transport evidence")
+        connection.execute(
+            """
+            INSERT INTO execution_transport_outcomes (
+                evidence_hash, command_id, attempt_id, signed_evidence_hash,
+                endpoint, attempted_at_ms, outcome, http_status, detail_code,
+                response_hash, transport_attempt_hash, send_count,
+                retry_performed, venue_write_attempted, evidence_basis,
+                recorded_at, payload_json, content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence.evidence_hash,
+                evidence.command_id,
+                evidence.attempt_id,
+                evidence.signed_evidence_hash,
+                evidence.endpoint,
+                evidence.attempted_at_ms,
+                evidence.outcome,
+                evidence.http_status,
+                evidence.detail_code,
+                evidence.response_hash,
+                evidence.transport_attempt_hash,
+                evidence.send_count,
+                (
+                    None
+                    if evidence.venue_write_attempted is None
+                    else int(evidence.venue_write_attempted)
+                ),
+                evidence.evidence_basis,
+                _time_text(at, field="recorded_at"),
+                payload_json,
+                content_hash,
+                record_hash,
+            ),
+        )
+        return evidence
+
+    def get_signed_evidence(self, command_id: str) -> SignedEnvelopeEvidence:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_signed_envelopes WHERE command_id = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("signed-envelope evidence is not registered")
+        return self._signed_evidence_from_row(row)
+
+    def get_transport_evidence(self, command_id: str) -> TransportOutcomeEvidence:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_transport_outcomes WHERE command_id = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("transport evidence is not registered")
+        return self._transport_evidence_from_row(row)
+
+    # -- fenced outbox and one prepared send attempt ------------------
+
+    def _set_command_state_locked(
+        self,
+        connection: sqlite3.Connection,
+        row: Mapping[str, Any],
+        *,
+        state: str,
+        at: datetime,
+        terminal: bool = False,
+    ) -> CommandRecord:
+        current = self._command_from_row(row)
+        if state not in _COMMAND_STATES:
+            raise ValidationError("unsupported command state")
+        revision = current.revision + 1
+        terminal_at = _utc(at, field="at") if terminal else current.terminal_at
+        material = self._command_material_values(
+            current.command_id,
+            current.ticket_hash,
+            current.plan_hash,
+            current.approval_id,
+            state,
+            current.reserved_loss,
+            current.reserved_notional,
+            current.created_at,
+            at,
+            terminal_at,
+            revision,
+        )
+        changed = connection.execute(
+            """
+            UPDATE execution_commands SET
+                state = ?, updated_at = ?, terminal_at = ?, revision = ?,
+                record_hash = ?
+            WHERE command_id = ? AND revision = ?
+            """,
+            (
+                state,
+                _time_text(at, field="updated_at"),
+                (
+                    None
+                    if terminal_at is None
+                    else _time_text(terminal_at, field="terminal_at")
+                ),
+                revision,
+                _record_hash("command", material),
+                current.command_id,
+                current.revision,
+            ),
+        )
+        if changed.rowcount != 1:
+            raise StateConflict("execution command changed concurrently")
+        return self._command_from_row(
+            connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (current.command_id,),
+            ).fetchone()
+        )
+
+    def _set_outbox_locked(
+        self,
+        connection: sqlite3.Connection,
+        row: Mapping[str, Any],
+        *,
+        state: str,
+        at: datetime,
+        worker_id: str | None,
+        fencing_token: int,
+        claimed_at: datetime | None,
+        lease_expires_at: datetime | None,
+        current_attempt_id: str | None,
+        attempt_count: int,
+    ) -> OutboxRecord:
+        current = self._outbox_from_row(row)
+        if state not in _OUTBOX_STATES:
+            raise ValidationError("unsupported outbox state")
+        material = self._outbox_material_values(
+            current.command_id,
+            state,
+            worker_id,
+            fencing_token,
+            claimed_at,
+            lease_expires_at,
+            current_attempt_id,
+            attempt_count,
+            current.created_at,
+            at,
+        )
+        connection.execute(
+            """
+            UPDATE execution_outbox SET
+                state = ?, worker_id = ?, fencing_token = ?, claimed_at = ?,
+                lease_expires_at = ?, current_attempt_id = ?,
+                attempt_count = ?, updated_at = ?, record_hash = ?
+            WHERE command_id = ?
+            """,
+            (
+                state,
+                worker_id,
+                fencing_token,
+                None if claimed_at is None else _time_text(claimed_at, field="claimed_at"),
+                (
+                    None
+                    if lease_expires_at is None
+                    else _time_text(lease_expires_at, field="lease_expires_at")
+                ),
+                current_attempt_id,
+                attempt_count,
+                _time_text(at, field="updated_at"),
+                _record_hash("outbox", material),
+                current.command_id,
+            ),
+        )
+        return self._outbox_from_row(
+            connection.execute(
+                "SELECT * FROM execution_outbox WHERE command_id = ?",
+                (current.command_id,),
+            ).fetchone()
+        )
+
+    def _normalize_expired_claims_locked(
+        self, connection: sqlite3.Connection, *, at: datetime
+    ) -> None:
+        now_text = _time_text(at, field="at")
+        rows = connection.execute(
+            """
+            SELECT * FROM execution_outbox
+            WHERE state = 'claimed' AND lease_expires_at <= ?
+            ORDER BY created_at, command_id
+            """,
+            (now_text,),
+        ).fetchall()
+        for row in rows:
+            current = self._outbox_from_row(row)
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (current.command_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("expired claim references missing command")
+            if current.current_attempt_id is None:
+                self._set_outbox_locked(
+                    connection,
+                    row,
+                    state="queued",
+                    at=at,
+                    worker_id=None,
+                    fencing_token=current.fencing_token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=None,
+                    attempt_count=current.attempt_count,
+                )
+                self._set_command_state_locked(
+                    connection, command_row, state="queued", at=at
+                )
+                event_type = "unsent_claim_expired_requeued"
+            else:
+                attempt = connection.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                    (current.current_attempt_id,),
+                ).fetchone()
+                if attempt is None:
+                    raise StorageError("claimed outbox references missing attempt")
+                attempt_record = self._attempt_from_row(attempt)
+                transport_evidence: TransportOutcomeEvidence | None = None
+                if attempt_record.signed_evidence_hash is not None:
+                    transport_evidence = TransportOutcomeEvidence(
+                        command_id=attempt_record.command_id,
+                        attempt_id=attempt_record.attempt_id,
+                        signed_evidence_hash=attempt_record.signed_evidence_hash,
+                        endpoint="https://api.hyperliquid-testnet.xyz/exchange",
+                        attempted_at_ms=int(at.timestamp() * 1_000),
+                        outcome="unknown",
+                        http_status=None,
+                        detail_code="worker_lease_expired_after_prepare",
+                        response_hash=None,
+                        transport_attempt_hash=None,
+                        send_count=None,
+                        retry_performed=False,
+                        venue_write_attempted=None,
+                        evidence_basis="claim_expiry",
+                    )
+                    self._put_transport_evidence_locked(
+                        connection, transport_evidence, at=at
+                    )
+                connection.execute(
+                    """
+                    UPDATE execution_attempts SET
+                        state = 'unknown', transport_evidence_hash = ?,
+                        updated_at = ?, record_hash = ?
+                    WHERE attempt_id = ? AND state = 'prepared'
+                    """,
+                    (
+                        (
+                            None
+                            if transport_evidence is None
+                            else transport_evidence.evidence_hash
+                        ),
+                        now_text,
+                        self._attempt_hash_from_values(
+                            attempt_record.attempt_id,
+                            attempt_record.command_id,
+                            attempt_record.worker_id,
+                            attempt_record.fencing_token,
+                            attempt_record.preflight_hash,
+                            attempt_record.signed_evidence_hash,
+                            (
+                                None
+                                if transport_evidence is None
+                                else transport_evidence.evidence_hash
+                            ),
+                            attempt_record.nonce,
+                            attempt_record.action_hash,
+                            attempt_record.wire_hash,
+                            "unknown",
+                            attempt_record.response_hash,
+                            attempt_record.prepared_at,
+                            at,
+                        ),
+                        current.current_attempt_id,
+                    ),
+                )
+                self._set_outbox_locked(
+                    connection,
+                    row,
+                    state="submitted_unknown",
+                    at=at,
+                    worker_id=None,
+                    fencing_token=current.fencing_token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=current.current_attempt_id,
+                    attempt_count=current.attempt_count,
+                )
+                self._set_command_state_locked(
+                    connection, command_row, state="submitted_unknown", at=at
+                )
+                self._mark_legs_unknown_locked(connection, current.command_id, at=at)
+                event_type = "prepared_attempt_became_unknown"
+            self._append_event_locked(
+                connection,
+                command_id=current.command_id,
+                event_type=event_type,
+                occurred_at=at,
+                payload={
+                    "fencing_token": current.fencing_token,
+                    "attempt_id": current.current_attempt_id,
+                    "transport_evidence_hash": (
+                        None
+                        if current.current_attempt_id is None
+                        else connection.execute(
+                            """
+                            SELECT transport_evidence_hash
+                            FROM execution_attempts WHERE attempt_id = ?
+                            """,
+                            (current.current_attempt_id,),
+                        ).fetchone()["transport_evidence_hash"]
+                    ),
+                },
+            )
+
+    def claim_next(
+        self,
+        worker_id: str,
+        *,
+        at: datetime,
+        lease_seconds: int,
+    ) -> OutboxRecord | None:
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        checked_at = _utc(at, field="at")
+        lease = _positive_int(lease_seconds, field="lease_seconds", maximum=3_600)
+        expires = checked_at + timedelta(seconds=lease)
+        with self._transaction() as connection:
+            self._normalize_expired_claims_locked(connection, at=checked_at)
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_incidents
+                WHERE severity = 'critical' AND state != 'closed'
+                LIMIT 1
+                """
+            ).fetchone() is not None:
+                raise StateConflict("critical account incident blocks new dispatch")
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_commands
+                WHERE state IN ('submitted_unknown', 'reconciling')
+                LIMIT 1
+                """
+            ).fetchone() is not None:
+                # Returning without raising commits any claim-expiry
+                # normalization performed above while still blocking every
+                # new risk-increasing dispatch.
+                return None
+            row = connection.execute(
+                """
+                SELECT * FROM execution_outbox
+                WHERE state = 'queued'
+                ORDER BY created_at, command_id LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            current = self._outbox_from_row(row)
+            claimed = self._set_outbox_locked(
+                connection,
+                row,
+                state="claimed",
+                at=checked_at,
+                worker_id=checked_worker,
+                fencing_token=current.fencing_token + 1,
+                claimed_at=checked_at,
+                lease_expires_at=expires,
+                current_attempt_id=None,
+                attempt_count=current.attempt_count,
+            )
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (current.command_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("outbox references missing command")
+            self._set_command_state_locked(
+                connection, command_row, state="claimed", at=checked_at
+            )
+            self._append_event_locked(
+                connection,
+                command_id=current.command_id,
+                event_type="outbox_claimed",
+                occurred_at=checked_at,
+                payload={
+                    "worker_id": checked_worker,
+                    "fencing_token": claimed.fencing_token,
+                    "lease_expires_at": _time_text(
+                        expires, field="lease_expires_at"
+                    ),
+                },
+            )
+            return claimed
+
+    def _require_claim_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        at: datetime,
+        allowed_states: frozenset[str],
+    ) -> tuple[OutboxRecord, sqlite3.Row]:
+        row = connection.execute(
+            "SELECT * FROM execution_outbox WHERE command_id = ?", (command_id,)
+        ).fetchone()
+        if row is None:
+            raise RecordNotFound("outbox command is not registered")
+        current = self._outbox_from_row(row)
+        if (
+            current.state not in allowed_states
+            or current.worker_id != worker_id
+            or current.fencing_token != fencing_token
+            or current.lease_expires_at is None
+            or not current.claimed_at
+            or not current.claimed_at <= at < current.lease_expires_at
+        ):
+            raise StateConflict("outbox claim is stale, expired, or wrong state")
+        return current, row
+
+    def renew_claim(
+        self,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        at: datetime,
+        lease_seconds: int,
+    ) -> OutboxRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        lease = _positive_int(lease_seconds, field="lease_seconds", maximum=3_600)
+        with self._transaction() as connection:
+            current, row = self._require_claim_locked(
+                connection,
+                command_id=checked_command,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                allowed_states=frozenset({"claimed", "reconciling"}),
+            )
+            return self._set_outbox_locked(
+                connection,
+                row,
+                state=current.state,
+                at=checked_at,
+                worker_id=checked_worker,
+                fencing_token=token,
+                claimed_at=current.claimed_at,
+                lease_expires_at=checked_at + timedelta(seconds=lease),
+                current_attempt_id=current.current_attempt_id,
+                attempt_count=current.attempt_count,
+            )
+
+    @staticmethod
+    def _attempt_hash_from_values(
+        attempt_id: str,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        preflight_hash: str | None,
+        signed_evidence_hash: str | None,
+        transport_evidence_hash: str | None,
+        nonce: int,
+        action_hash: str,
+        wire_hash: str,
+        state: str,
+        response_hash: str | None,
+        prepared_at: datetime,
+        updated_at: datetime,
+    ) -> str:
+        material: dict[str, object] = {
+            "attempt_id": attempt_id,
+            "command_id": command_id,
+            "worker_id": worker_id,
+            "fencing_token": fencing_token,
+            "nonce": nonce,
+            "action_hash": action_hash,
+            "wire_hash": wire_hash,
+            "state": state,
+            "response_hash": response_hash,
+            "prepared_at": _time_text(prepared_at, field="prepared_at"),
+            "updated_at": _time_text(updated_at, field="updated_at"),
+        }
+        # Migration v2 leaves old attempts nullable.  Their v1 record hashes
+        # remain verifiable, but every newly prepared attempt must bind a
+        # non-null preflight below.
+        if preflight_hash is not None:
+            material["preflight_hash"] = preflight_hash
+        if signed_evidence_hash is not None:
+            material["signed_evidence_hash"] = signed_evidence_hash
+        if transport_evidence_hash is not None:
+            material["transport_evidence_hash"] = transport_evidence_hash
+        return _record_hash("attempt", material)
+
+    @classmethod
+    def _attempt_from_row(cls, row: Mapping[str, Any] | None) -> AttemptRecord:
+        if row is None:
+            raise StorageError("attempt row is missing")
+        state = _stored_text(row["state"], field="attempt state", maximum=32)
+        if state not in _ATTEMPT_STATES:
+            raise StorageError("persisted attempt state is unsupported")
+        record = AttemptRecord(
+            attempt_id=_stored_text(
+                row["attempt_id"], field="attempt_id", maximum=128
+            ),
+            command_id=_stored_text(
+                row["command_id"], field="command_id", maximum=128
+            ),
+            worker_id=_stored_text(
+                row["worker_id"], field="worker_id", maximum=128
+            ),
+            fencing_token=int(row["fencing_token"]),
+            preflight_hash=(
+                None
+                if row["preflight_hash"] is None
+                else _stored_hash(row["preflight_hash"], field="preflight_hash")
+            ),
+            signed_evidence_hash=(
+                None
+                if row["signed_evidence_hash"] is None
+                else _stored_hash(
+                    row["signed_evidence_hash"], field="signed_evidence_hash"
+                )
+            ),
+            transport_evidence_hash=(
+                None
+                if row["transport_evidence_hash"] is None
+                else _stored_hash(
+                    row["transport_evidence_hash"], field="transport_evidence_hash"
+                )
+            ),
+            nonce=int(row["nonce"]),
+            action_hash=_stored_hash(row["action_hash"], field="action_hash"),
+            wire_hash=_stored_hash(row["wire_hash"], field="wire_hash"),
+            state=state,
+            response_hash=(
+                None
+                if row["response_hash"] is None
+                else _stored_hash(row["response_hash"], field="response_hash")
+            ),
+            prepared_at=_parse_time(row["prepared_at"], field="attempt prepared_at"),
+            updated_at=_parse_time(row["updated_at"], field="attempt updated_at"),
+        )
+        expected = cls._attempt_hash_from_values(
+            record.attempt_id,
+            record.command_id,
+            record.worker_id,
+            record.fencing_token,
+            record.preflight_hash,
+            record.signed_evidence_hash,
+            record.transport_evidence_hash,
+            record.nonce,
+            record.action_hash,
+            record.wire_hash,
+            record.state,
+            record.response_hash,
+            record.prepared_at,
+            record.updated_at,
+        )
+        if _stored_hash(row["record_hash"], field="attempt record_hash") != expected:
+            raise StorageError("persisted attempt record hash does not match")
+        return record
+
+    def prepare_attempt(
+        self,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        attempt_id: str,
+        preflight_hash: str,
+        signed_evidence: SignedEnvelopeEvidence,
+        nonce: int,
+        action_hash: str,
+        wire_hash: str,
+        at: datetime,
+    ) -> AttemptRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_attempt = _text(attempt_id, field="attempt_id", maximum=128)
+        checked_preflight = _hash(preflight_hash, field="preflight_hash")
+        if not isinstance(signed_evidence, SignedEnvelopeEvidence):
+            raise TypeError("signed_evidence must be SignedEnvelopeEvidence")
+        checked_nonce = _nonnegative_int(nonce, field="nonce")
+        checked_action = _hash(action_hash, field="action_hash")
+        checked_wire = _hash(wire_hash, field="wire_hash")
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            current, outbox_row = self._require_claim_locked(
+                connection,
+                command_id=checked_command,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                allowed_states=frozenset({"claimed"}),
+            )
+            preflight_row = connection.execute(
+                """
+                SELECT * FROM execution_dispatch_preflights
+                WHERE preflight_hash = ? AND command_id = ?
+                """,
+                (checked_preflight, checked_command),
+            ).fetchone()
+            if preflight_row is None:
+                raise AdmissionDenied(
+                    "DISPATCH_PREFLIGHT_NOT_FOUND",
+                    "attempt requires the exact command-bound preflight",
+                )
+            preflight = self._preflight_from_row(preflight_row)
+            if not preflight.passed:
+                raise AdmissionDenied(
+                    "DISPATCH_PREFLIGHT_FAILED",
+                    "attempt preflight did not pass",
+                )
+            if not preflight.observed_at <= checked_at < preflight.expires_at:
+                raise AdmissionDenied(
+                    "DISPATCH_PREFLIGHT_STALE",
+                    "attempt preflight is stale",
+                )
+            preflight_expiry_ms = int(preflight.expires_at.timestamp() * 1_000)
+            if (
+                signed_evidence.command_id != checked_command
+                or signed_evidence.preflight_hash != checked_preflight
+                or signed_evidence.environment is not self.environment
+                or signed_evidence.account_id != self.account_id
+                or signed_evidence.plan_hash != preflight.plan_hash
+                or signed_evidence.nonce != checked_nonce
+                or signed_evidence.action_hash != checked_action
+                or signed_evidence.wire_hash != checked_wire
+            ):
+                raise AdmissionDenied(
+                    "SIGNED_EVIDENCE_BINDING_MISMATCH",
+                    "signed envelope differs from command/preflight/attempt",
+                )
+            if signed_evidence.expires_after_ms > preflight_expiry_ms:
+                raise AdmissionDenied(
+                    "SIGNED_EVIDENCE_OUTLIVES_PREFLIGHT",
+                    "signed venue action remains valid beyond preflight",
+                )
+            if checked_at.timestamp() * 1_000 >= signed_evidence.expires_after_ms:
+                raise AdmissionDenied(
+                    "SIGNED_EVIDENCE_STALE",
+                    "signed venue action is already expired",
+                )
+            existing = connection.execute(
+                "SELECT * FROM execution_attempts WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            if existing is not None:
+                record = self._attempt_from_row(existing)
+                if (
+                    record.attempt_id == checked_attempt
+                    and record.preflight_hash == checked_preflight
+                    and record.signed_evidence_hash
+                    == signed_evidence.evidence_hash
+                    and record.nonce == checked_nonce
+                    and record.action_hash == checked_action
+                    and record.wire_hash == checked_wire
+                ):
+                    return record
+                raise StateConflict("command already has a prepared attempt; retry forbidden")
+            record_hash = self._attempt_hash_from_values(
+                checked_attempt,
+                checked_command,
+                checked_worker,
+                token,
+                checked_preflight,
+                signed_evidence.evidence_hash,
+                None,
+                checked_nonce,
+                checked_action,
+                checked_wire,
+                "prepared",
+                None,
+                checked_at,
+                checked_at,
+            )
+            self._put_signed_evidence_locked(
+                connection, signed_evidence, at=checked_at
+            )
+            connection.execute(
+                """
+                INSERT INTO execution_attempts (
+                    attempt_id, command_id, worker_id, fencing_token,
+                    preflight_hash, signed_evidence_hash,
+                    transport_evidence_hash, nonce,
+                    action_hash, wire_hash, state, response_hash, prepared_at,
+                    updated_at, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'prepared', NULL, ?, ?, ?)
+                """,
+                (
+                    checked_attempt,
+                    checked_command,
+                    checked_worker,
+                    token,
+                    checked_preflight,
+                    signed_evidence.evidence_hash,
+                    checked_nonce,
+                    checked_action,
+                    checked_wire,
+                    _time_text(checked_at, field="prepared_at"),
+                    _time_text(checked_at, field="updated_at"),
+                    record_hash,
+                ),
+            )
+            self._set_outbox_locked(
+                connection,
+                outbox_row,
+                state="claimed",
+                at=checked_at,
+                worker_id=checked_worker,
+                fencing_token=token,
+                claimed_at=current.claimed_at,
+                lease_expires_at=current.lease_expires_at,
+                current_attempt_id=checked_attempt,
+                attempt_count=current.attempt_count + 1,
+            )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="send_attempt_prepared",
+                occurred_at=checked_at,
+                payload={
+                    "attempt_id": checked_attempt,
+                    "nonce": checked_nonce,
+                    "action_hash": checked_action,
+                    "wire_hash": checked_wire,
+                    "fencing_token": token,
+                    "preflight_hash": checked_preflight,
+                    "signed_evidence_hash": signed_evidence.evidence_hash,
+                },
+            )
+            return self._attempt_from_row(
+                connection.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                    (checked_attempt,),
+                ).fetchone()
+            )
+
+    def get_attempt(self, command_id: str) -> AttemptRecord:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_attempts WHERE command_id = ?", (checked,)
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound(f"execution attempt not found: {checked}")
+        return self._attempt_from_row(row)
+
+    def _mark_legs_unknown_locked(
+        self, connection: sqlite3.Connection, command_id: str, *, at: datetime
+    ) -> None:
+        rows = connection.execute(
+            "SELECT * FROM execution_command_legs WHERE command_id = ?",
+            (command_id,),
+        ).fetchall()
+        for row in rows:
+            leg = self._leg_from_row(row)
+            if leg.status == "queued":
+                self._update_leg_locked(
+                    connection,
+                    leg,
+                    status="submitted_unknown",
+                    cumulative_filled=leg.cumulative_filled,
+                    venue_oid=leg.venue_oid,
+                    at=at,
+                )
+
+    def mark_submitted_unknown(
+        self,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        transport_evidence: TransportOutcomeEvidence,
+        at: datetime,
+    ) -> CommandRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        if not isinstance(transport_evidence, TransportOutcomeEvidence):
+            raise TypeError("transport_evidence must be TransportOutcomeEvidence")
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            current, row = self._require_claim_locked(
+                connection,
+                command_id=checked_command,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                allowed_states=frozenset({"claimed"}),
+            )
+            if current.current_attempt_id is None:
+                raise StateConflict("unknown outcome requires a prepared attempt")
+            attempt_row = connection.execute(
+                "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                (current.current_attempt_id,),
+            ).fetchone()
+            attempt = self._attempt_from_row(attempt_row)
+            if (
+                transport_evidence.command_id != checked_command
+                or transport_evidence.attempt_id != attempt.attempt_id
+                or transport_evidence.signed_evidence_hash
+                != attempt.signed_evidence_hash
+                or transport_evidence.outcome != "unknown"
+                or transport_evidence.evidence_basis != "transport_result"
+            ):
+                raise StateConflict(
+                    "unknown transport evidence differs from prepared attempt"
+                )
+            self._put_transport_evidence_locked(
+                connection, transport_evidence, at=checked_at
+            )
+            connection.execute(
+                """
+                UPDATE execution_attempts SET
+                    state = 'unknown', transport_evidence_hash = ?,
+                    updated_at = ?, record_hash = ? WHERE attempt_id = ?
+                """,
+                (
+                    transport_evidence.evidence_hash,
+                    _time_text(checked_at, field="updated_at"),
+                    self._attempt_hash_from_values(
+                        attempt.attempt_id,
+                        attempt.command_id,
+                        attempt.worker_id,
+                        attempt.fencing_token,
+                        attempt.preflight_hash,
+                        attempt.signed_evidence_hash,
+                        transport_evidence.evidence_hash,
+                        attempt.nonce,
+                        attempt.action_hash,
+                        attempt.wire_hash,
+                        "unknown",
+                        attempt.response_hash,
+                        attempt.prepared_at,
+                        checked_at,
+                    ),
+                    attempt.attempt_id,
+                ),
+            )
+            self._set_outbox_locked(
+                connection,
+                row,
+                state="submitted_unknown",
+                at=checked_at,
+                worker_id=None,
+                fencing_token=token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=attempt.attempt_id,
+                attempt_count=current.attempt_count,
+            )
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            command = self._set_command_state_locked(
+                connection,
+                command_row,
+                state="submitted_unknown",
+                at=checked_at,
+            )
+            self._mark_legs_unknown_locked(connection, checked_command, at=checked_at)
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="submission_outcome_unknown",
+                occurred_at=checked_at,
+                payload={
+                    "attempt_id": attempt.attempt_id,
+                    "transport_evidence_hash": transport_evidence.evidence_hash,
+                    "transport_attempt_hash": (
+                        transport_evidence.transport_attempt_hash
+                    ),
+                    "detail_code": transport_evidence.detail_code,
+                    "retry_allowed": False,
+                },
+            )
+            return command
+
+    def _update_leg_locked(
+        self,
+        connection: sqlite3.Connection,
+        leg: LegRecord,
+        *,
+        status: str,
+        cumulative_filled: Decimal,
+        venue_oid: int | None,
+        at: datetime,
+    ) -> LegRecord:
+        if status not in _LEG_STATES:
+            raise ValidationError("unsupported leg state")
+        cumulative = _decimal(
+            cumulative_filled, field="cumulative_filled", nonnegative=True
+        )
+        if cumulative < leg.cumulative_filled:
+            raise StateConflict("cumulative venue fill cannot decrease")
+        if cumulative > leg.requested_quantity:
+            raise StateConflict("cumulative venue fill exceeds requested quantity")
+        if leg.venue_oid is not None and venue_oid not in (None, leg.venue_oid):
+            raise StateConflict("venue OID changed for an existing leg")
+        resolved_oid = leg.venue_oid if venue_oid is None else venue_oid
+        if resolved_oid is not None and (type(resolved_oid) is not int or resolved_oid < 0):
+            raise ValidationError("venue_oid must be non-negative")
+        if leg.status in _TERMINAL_LEG_STATES and status != leg.status:
+            raise StateConflict("terminal leg status cannot change without an incident")
+        if status == "filled" and cumulative != leg.requested_quantity:
+            raise StateConflict("filled leg must equal requested quantity")
+        if status == "partially_filled" and not ZERO < cumulative < leg.requested_quantity:
+            raise StateConflict("partial leg fill must be between zero and requested")
+        material = self._leg_material_values(
+            leg.command_id,
+            leg.role,
+            leg.cloid,
+            leg.intent_hash,
+            leg.side,
+            leg.reduce_only,
+            leg.requested_quantity,
+            cumulative,
+            resolved_oid,
+            status,
+            at,
+        )
+        connection.execute(
+            """
+            UPDATE execution_command_legs SET
+                cumulative_filled = ?, venue_oid = ?, status = ?,
+                updated_at = ?, record_hash = ?
+            WHERE command_id = ? AND role = ?
+            """,
+            (
+                _decimal_text(cumulative, field="cumulative_filled"),
+                resolved_oid,
+                status,
+                _time_text(at, field="updated_at"),
+                _record_hash("leg", material),
+                leg.command_id,
+                leg.role,
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT * FROM execution_command_legs
+            WHERE command_id = ? AND role = ?
+            """,
+            (leg.command_id, leg.role),
+        ).fetchone()
+        if row is None:
+            raise StorageError("command leg disappeared during update")
+        return self._leg_from_row(row)
+
+    def record_submission_response(
+        self,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        result: BatchSubmissionResult,
+        *,
+        transport_evidence: TransportOutcomeEvidence,
+        at: datetime,
+    ) -> CommandRecord:
+        if not isinstance(result, BatchSubmissionResult):
+            raise TypeError("result must be BatchSubmissionResult")
+        if not isinstance(transport_evidence, TransportOutcomeEvidence):
+            raise TypeError("transport_evidence must be TransportOutcomeEvidence")
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        response_hash = _hash(result.response_hash, field="response_hash")
+        with self._transaction() as connection:
+            current, outbox_row = self._require_claim_locked(
+                connection,
+                command_id=checked_command,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                allowed_states=frozenset({"claimed"}),
+            )
+            if current.current_attempt_id is None:
+                raise StateConflict("submission response requires prepared attempt")
+            attempt_row = connection.execute(
+                "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                (current.current_attempt_id,),
+            ).fetchone()
+            attempt = self._attempt_from_row(attempt_row)
+            if attempt.state != "prepared":
+                raise StateConflict("attempt already has an outcome")
+            if (
+                transport_evidence.command_id != checked_command
+                or transport_evidence.attempt_id != attempt.attempt_id
+                or transport_evidence.signed_evidence_hash
+                != attempt.signed_evidence_hash
+                or transport_evidence.outcome != "response_received"
+                or transport_evidence.evidence_basis != "transport_result"
+            ):
+                raise StateConflict(
+                    "response transport evidence differs from prepared attempt"
+                )
+            self._put_transport_evidence_locked(
+                connection, transport_evidence, at=checked_at
+            )
+            if len(result.legs) not in (0, 3):
+                raise ValidationError("protected batch response must cover zero or three legs")
+            provisional_protection: ProtectionRecord | None = None
+            if result.legs:
+                legs = {
+                    leg.role: leg
+                    for leg in (
+                        self._leg_from_row(row)
+                        for row in connection.execute(
+                            """
+                            SELECT * FROM execution_command_legs
+                            WHERE command_id = ?
+                            """,
+                            (checked_command,),
+                        ).fetchall()
+                    )
+                }
+                for index, role in enumerate(_ROLES):
+                    venue = result.legs[index]
+                    leg = legs[role]
+                    if venue.requested_size != leg.requested_quantity:
+                        raise StateConflict("response requested size differs from command")
+                    if venue.state is LegSubmissionState.ERROR:
+                        status = "rejected"
+                    elif venue.state is LegSubmissionState.RESTING:
+                        status = "resting"
+                    elif venue.fully_filled:
+                        status = "filled"
+                    else:
+                        status = "partially_filled"
+                    legs[role] = self._update_leg_locked(
+                        connection,
+                        leg,
+                        status=status,
+                        cumulative_filled=venue.filled_size,
+                        venue_oid=venue.oid,
+                        at=checked_at,
+                    )
+                entry_result = result.legs[0]
+                stop_result = result.legs[1]
+                entry_has_fill = entry_result.filled_size > ZERO
+                entry_partial = entry_result.partially_filled
+                stop_resting = stop_result.state is LegSubmissionState.RESTING
+                if entry_partial or (entry_has_fill and not stop_resting):
+                    plan_row = connection.execute(
+                        """
+                        SELECT instrument FROM execution_plans
+                        WHERE plan_hash = (
+                            SELECT plan_hash FROM execution_commands
+                            WHERE command_id = ?
+                        )
+                        """,
+                        (checked_command,),
+                    ).fetchone()
+                    if plan_row is None:
+                        raise StorageError("hazardous response command plan is missing")
+                    entry_leg = legs["entry"]
+                    signed_position = (
+                        entry_result.filled_size
+                        if entry_leg.side == Side.BUY.value
+                        else -entry_result.filled_size
+                    )
+                    provisional_protection = self._upsert_protection_locked(
+                        connection,
+                        command_id=checked_command,
+                        instrument=str(plan_row["instrument"]),
+                        signed_position=signed_position,
+                        protected_quantity=ZERO,
+                        stop_cloid=legs["protective_stop"].cloid,
+                        observed_at=checked_at,
+                        failed=entry_has_fill and not stop_resting,
+                    )
+                    incident_code = (
+                        "PROTECTION_SUBMISSION_FAILED"
+                        if entry_has_fill and not stop_resting
+                        else "ENTRY_PARTIAL_FILL"
+                    )
+                    self._open_incident_locked(
+                        connection,
+                        incident_id=_record_hash(
+                            "incident-id",
+                            {
+                                "command_id": checked_command,
+                                "response_hash": response_hash,
+                                "code": incident_code,
+                            },
+                        ),
+                        command_id=checked_command,
+                        code=incident_code,
+                        severity="critical",
+                        at=checked_at,
+                        details={
+                            "provisional": True,
+                            "entry_filled_quantity": _decimal_text(
+                                entry_result.filled_size,
+                                field="entry_filled_quantity",
+                            ),
+                            "entry_partial": entry_partial,
+                            "stop_response_state": stop_result.state.value,
+                            "protection_state": provisional_protection.state,
+                            "new_risk_halted": True,
+                        },
+                    )
+            connection.execute(
+                """
+                UPDATE execution_attempts SET
+                    state = 'response_received', response_hash = ?,
+                    transport_evidence_hash = ?, updated_at = ?, record_hash = ?
+                WHERE attempt_id = ? AND state = 'prepared'
+                """,
+                (
+                    response_hash,
+                    transport_evidence.evidence_hash,
+                    _time_text(checked_at, field="updated_at"),
+                    self._attempt_hash_from_values(
+                        attempt.attempt_id,
+                        attempt.command_id,
+                        attempt.worker_id,
+                        attempt.fencing_token,
+                        attempt.preflight_hash,
+                        attempt.signed_evidence_hash,
+                        transport_evidence.evidence_hash,
+                        attempt.nonce,
+                        attempt.action_hash,
+                        attempt.wire_hash,
+                        "response_received",
+                        response_hash,
+                        attempt.prepared_at,
+                        checked_at,
+                    ),
+                    attempt.attempt_id,
+                ),
+            )
+            self._set_outbox_locked(
+                connection,
+                outbox_row,
+                state="reconciling",
+                at=checked_at,
+                worker_id=None,
+                fencing_token=token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=attempt.attempt_id,
+                attempt_count=current.attempt_count,
+            )
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            command = self._set_command_state_locked(
+                connection, command_row, state="reconciling", at=checked_at
+            )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="submission_response_recorded",
+                occurred_at=checked_at,
+                payload={
+                    "batch": result.as_dict(),
+                    "transport_evidence_hash": transport_evidence.evidence_hash,
+                    "transport_attempt_hash": (
+                        transport_evidence.transport_attempt_hash
+                    ),
+                    "detail_code": transport_evidence.detail_code,
+                },
+            )
+            if provisional_protection is not None:
+                self._append_event_locked(
+                    connection,
+                    command_id=checked_command,
+                    event_type="provisional_protection_failure",
+                    occurred_at=checked_at,
+                    payload={
+                        "state": provisional_protection.state,
+                        "signed_position_quantity": _decimal_text(
+                            provisional_protection.signed_position_quantity,
+                            field="signed_position_quantity",
+                        ),
+                        "protected_quantity": "0",
+                        "requires_immediate_reconciliation": True,
+                    },
+                )
+            return command
+
+    def claim_reconciliation(
+        self,
+        command_id: str,
+        worker_id: str,
+        *,
+        at: datetime,
+        lease_seconds: int,
+    ) -> OutboxRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        checked_at = _utc(at, field="at")
+        lease = _positive_int(lease_seconds, field="lease_seconds", maximum=3_600)
+        expires = checked_at + timedelta(seconds=lease)
+        with self._transaction() as connection:
+            self._normalize_expired_claims_locked(connection, at=checked_at)
+            row = connection.execute(
+                "SELECT * FROM execution_outbox WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            if row is None:
+                raise RecordNotFound("reconciliation command is not registered")
+            current = self._outbox_from_row(row)
+            if current.state not in {"submitted_unknown", "reconciling"}:
+                raise StateConflict("command is not eligible for reconciliation")
+            if (
+                current.worker_id is not None
+                and current.lease_expires_at is not None
+                and checked_at < current.lease_expires_at
+            ):
+                if current.worker_id == checked_worker:
+                    return current
+                raise StateConflict("reconciliation is claimed by another worker")
+            claimed = self._set_outbox_locked(
+                connection,
+                row,
+                state="reconciling",
+                at=checked_at,
+                worker_id=checked_worker,
+                fencing_token=current.fencing_token + 1,
+                claimed_at=checked_at,
+                lease_expires_at=expires,
+                current_attempt_id=current.current_attempt_id,
+                attempt_count=current.attempt_count,
+            )
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("outbox references missing command")
+            command = self._command_from_row(command_row)
+            if command.state != "reconciling":
+                self._set_command_state_locked(
+                    connection, command_row, state="reconciling", at=checked_at
+                )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="reconciliation_claimed",
+                occurred_at=checked_at,
+                payload={
+                    "worker_id": checked_worker,
+                    "fencing_token": claimed.fencing_token,
+                    "lease_expires_at": _time_text(
+                        expires, field="lease_expires_at"
+                    ),
+                },
+            )
+            return claimed
+
+    # -- venue/account reconciliation ---------------------------------
+
+    def _put_fill_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        command_id: str,
+        fill: VenueFill,
+        observed_at: datetime,
+        legs: Mapping[str, LegRecord],
+    ) -> None:
+        if fill.role not in legs or legs[fill.role].cloid != fill.cloid:
+            raise StateConflict("fill does not match a command leg")
+        if fill.occurred_at > observed_at:
+            raise ValidationError("fill cannot postdate reconciliation observation")
+        payload = {"command_id": command_id, **fill.as_dict()}
+        payload_json, content_hash = _canonical_payload(payload)
+        material = {
+            "fill_id": fill.fill_id,
+            "command_id": command_id,
+            "role": fill.role,
+            "cloid": fill.cloid,
+            "quantity": _decimal_text(fill.quantity, field="quantity"),
+            "price": _decimal_text(fill.price, field="price"),
+            "fee": _decimal_text(fill.fee, field="fee"),
+            "occurred_at": _time_text(fill.occurred_at, field="occurred_at"),
+            "content_hash": content_hash,
+            "payload_json": payload_json,
+        }
+        record_hash = _record_hash("fill", material)
+        existing = connection.execute(
+            "SELECT * FROM execution_fills WHERE fill_id = ?", (fill.fill_id,)
+        ).fetchone()
+        if existing is not None:
+            if existing["record_hash"] == record_hash:
+                return
+            raise StateConflict("fill ID is already bound to different content")
+        connection.execute(
+            """
+            INSERT INTO execution_fills (
+                fill_id, command_id, role, cloid, quantity, price, fee,
+                occurred_at, payload_json, content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fill.fill_id,
+                command_id,
+                fill.role,
+                fill.cloid,
+                _decimal_text(fill.quantity, field="quantity"),
+                _decimal_text(fill.price, field="price"),
+                _decimal_text(fill.fee, field="fee"),
+                _time_text(fill.occurred_at, field="occurred_at"),
+                payload_json,
+                content_hash,
+                record_hash,
+            ),
+        )
+
+    @staticmethod
+    def _position_material(
+        instrument: str,
+        quantity: Decimal,
+        snapshot_hash: str,
+        observed_at: datetime,
+        revision: int,
+    ) -> dict[str, object]:
+        return {
+            "instrument": instrument,
+            "signed_quantity": _decimal_text(
+                quantity, field="signed_position_quantity"
+            ),
+            "account_snapshot_hash": snapshot_hash,
+            "observed_at": _time_text(observed_at, field="observed_at"),
+            "revision": revision,
+        }
+
+    @classmethod
+    def _position_from_row(cls, row: Mapping[str, Any]) -> PositionRecord:
+        record = PositionRecord(
+            instrument=_stored_text(
+                row["instrument"], field="instrument", maximum=64
+            ),
+            signed_quantity=_decimal(
+                row["signed_quantity"], field="signed_quantity"
+            ),
+            account_snapshot_hash=_stored_hash(
+                row["account_snapshot_hash"], field="account_snapshot_hash"
+            ),
+            observed_at=_parse_time(row["observed_at"], field="position observed_at"),
+            revision=int(row["revision"]),
+        )
+        expected = _record_hash(
+            "position",
+            cls._position_material(
+                record.instrument,
+                record.signed_quantity,
+                record.account_snapshot_hash,
+                record.observed_at,
+                record.revision,
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="position record_hash") != expected:
+            raise StorageError("persisted position record hash does not match")
+        return record
+
+    def _upsert_position_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        instrument: str,
+        quantity: Decimal,
+        snapshot_hash: str,
+        observed_at: datetime,
+    ) -> PositionRecord:
+        row = connection.execute(
+            "SELECT * FROM execution_positions WHERE instrument = ?", (instrument,)
+        ).fetchone()
+        revision = 1
+        if row is not None:
+            current = self._position_from_row(row)
+            if observed_at < current.observed_at:
+                raise StateConflict("position snapshot time cannot move backwards")
+            if observed_at == current.observed_at:
+                if (
+                    current.signed_quantity == quantity
+                    and current.account_snapshot_hash == snapshot_hash
+                ):
+                    return current
+                raise StateConflict("same-time position snapshot is contradictory")
+            revision = current.revision + 1
+        material = self._position_material(
+            instrument, quantity, snapshot_hash, observed_at, revision
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_positions (
+                instrument, signed_quantity, account_snapshot_hash, observed_at,
+                revision, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(instrument) DO UPDATE SET
+                signed_quantity = excluded.signed_quantity,
+                account_snapshot_hash = excluded.account_snapshot_hash,
+                observed_at = excluded.observed_at,
+                revision = excluded.revision,
+                record_hash = excluded.record_hash
+            """,
+            (
+                instrument,
+                _decimal_text(quantity, field="signed_quantity"),
+                snapshot_hash,
+                _time_text(observed_at, field="observed_at"),
+                revision,
+                _record_hash("position", material),
+            ),
+        )
+        return self._position_from_row(
+            connection.execute(
+                "SELECT * FROM execution_positions WHERE instrument = ?",
+                (instrument,),
+            ).fetchone()
+        )
+
+    @staticmethod
+    def _protection_material(
+        command_id: str,
+        instrument: str,
+        state: str,
+        signed_position: Decimal,
+        protected_quantity: Decimal,
+        stop_cloid: str,
+        observed_at: datetime,
+        revision: int,
+    ) -> dict[str, object]:
+        return {
+            "command_id": command_id,
+            "instrument": instrument,
+            "state": state,
+            "signed_position_quantity": _decimal_text(
+                signed_position, field="signed_position_quantity"
+            ),
+            "protected_quantity": _decimal_text(
+                protected_quantity, field="protected_quantity"
+            ),
+            "stop_cloid": stop_cloid,
+            "observed_at": _time_text(observed_at, field="observed_at"),
+            "revision": revision,
+        }
+
+    @classmethod
+    def _protection_from_row(cls, row: Mapping[str, Any]) -> ProtectionRecord:
+        state = _stored_text(row["state"], field="protection state", maximum=32)
+        if state not in _PROTECTION_STATES:
+            raise StorageError("persisted protection state is unsupported")
+        record = ProtectionRecord(
+            command_id=_stored_text(
+                row["command_id"], field="command_id", maximum=128
+            ),
+            instrument=_stored_text(
+                row["instrument"], field="instrument", maximum=64
+            ),
+            state=state,
+            signed_position_quantity=_decimal(
+                row["signed_position_quantity"], field="signed_position_quantity"
+            ),
+            protected_quantity=_decimal(
+                row["protected_quantity"],
+                field="protected_quantity",
+                nonnegative=True,
+            ),
+            stop_cloid=_stored_text(
+                row["stop_cloid"], field="stop_cloid", maximum=128
+            ),
+            observed_at=_parse_time(
+                row["observed_at"], field="protection observed_at"
+            ),
+            revision=int(row["revision"]),
+        )
+        expected = _record_hash(
+            "protection",
+            cls._protection_material(
+                record.command_id,
+                record.instrument,
+                record.state,
+                record.signed_position_quantity,
+                record.protected_quantity,
+                record.stop_cloid,
+                record.observed_at,
+                record.revision,
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="protection record_hash") != expected:
+            raise StorageError("persisted protection hash does not match")
+        return record
+
+    def _upsert_protection_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        command_id: str,
+        instrument: str,
+        signed_position: Decimal,
+        protected_quantity: Decimal,
+        stop_cloid: str,
+        observed_at: datetime,
+        failed: bool,
+    ) -> ProtectionRecord:
+        absolute_position = abs(signed_position)
+        if failed and absolute_position > ZERO:
+            state = "failed"
+        elif absolute_position == ZERO and protected_quantity == ZERO:
+            state = "flat"
+        elif protected_quantity == absolute_position:
+            state = "protected"
+        elif protected_quantity < absolute_position:
+            state = "under_protected"
+        else:
+            state = "over_protected"
+        row = connection.execute(
+            "SELECT * FROM execution_protection WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        revision = 1
+        if row is not None:
+            current = self._protection_from_row(row)
+            if observed_at < current.observed_at:
+                raise StateConflict("protection observation cannot move backwards")
+            revision = current.revision + 1
+        material = self._protection_material(
+            command_id,
+            instrument,
+            state,
+            signed_position,
+            protected_quantity,
+            stop_cloid,
+            observed_at,
+            revision,
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_protection (
+                command_id, instrument, state, signed_position_quantity,
+                protected_quantity, stop_cloid, observed_at, revision,
+                record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(command_id) DO UPDATE SET
+                state = excluded.state,
+                signed_position_quantity = excluded.signed_position_quantity,
+                protected_quantity = excluded.protected_quantity,
+                stop_cloid = excluded.stop_cloid,
+                observed_at = excluded.observed_at,
+                revision = excluded.revision,
+                record_hash = excluded.record_hash
+            """,
+            (
+                command_id,
+                instrument,
+                state,
+                _decimal_text(signed_position, field="signed_position_quantity"),
+                _decimal_text(protected_quantity, field="protected_quantity"),
+                stop_cloid,
+                _time_text(observed_at, field="observed_at"),
+                revision,
+                _record_hash("protection", material),
+            ),
+        )
+        return self._protection_from_row(
+            connection.execute(
+                "SELECT * FROM execution_protection WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+        )
+
+    def reconcile(
+        self,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        reconciliation_id: str,
+        account_snapshot_hash: str,
+        observed_at: datetime,
+        complete: bool,
+        legs: Sequence[LegReconciliation],
+        signed_position_quantity: Decimal | str | int,
+        protected_quantity: Decimal | str | int,
+        fills: Sequence[VenueFill] = (),
+    ) -> CommandRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_id = _text(
+            reconciliation_id, field="reconciliation_id", maximum=128
+        )
+        snapshot_hash = _hash(
+            account_snapshot_hash, field="account_snapshot_hash"
+        )
+        checked_at = _utc(observed_at, field="observed_at")
+        if type(complete) is not bool:
+            raise TypeError("complete must be bool")
+        leg_values = tuple(legs)
+        if not leg_values or any(
+            not isinstance(value, LegReconciliation) for value in leg_values
+        ):
+            raise TypeError("legs must contain LegReconciliation records")
+        if len({value.role for value in leg_values}) != len(leg_values):
+            raise ValidationError("reconciliation repeats a leg role")
+        if complete and {value.role for value in leg_values} != set(_ROLES):
+            raise ValidationError("complete reconciliation requires all three legs")
+        signed_position = _decimal(
+            signed_position_quantity, field="signed_position_quantity"
+        )
+        protected = _decimal(
+            protected_quantity, field="protected_quantity", nonnegative=True
+        )
+        fill_values = tuple(fills)
+        if any(not isinstance(value, VenueFill) for value in fill_values):
+            raise TypeError("fills must contain VenueFill records")
+        payload = {
+            "command_id": checked_command,
+            "reconciliation_id": checked_id,
+            "account_snapshot_hash": snapshot_hash,
+            "observed_at": _time_text(checked_at, field="observed_at"),
+            "complete": complete,
+            "legs": [
+                value.as_dict()
+                for value in sorted(
+                    leg_values, key=lambda item: _ROLES.index(item.role)
+                )
+            ],
+            "signed_position_quantity": _decimal_text(
+                signed_position, field="signed_position_quantity"
+            ),
+            "protected_quantity": _decimal_text(
+                protected, field="protected_quantity"
+            ),
+            "fills": [value.as_dict() for value in sorted(fill_values, key=lambda x: x.fill_id)],
+        }
+        payload_json, content_hash = _canonical_payload(payload)
+        reconciliation_material = {
+            "reconciliation_id": checked_id,
+            "command_id": checked_command,
+            "account_snapshot_hash": snapshot_hash,
+            "complete": complete,
+            "observed_at": _time_text(checked_at, field="observed_at"),
+            "content_hash": content_hash,
+            "payload_json": payload_json,
+        }
+        reconciliation_hash = _record_hash(
+            "reconciliation", reconciliation_material
+        )
+        with self._transaction() as connection:
+            _, outbox_row = self._require_claim_locked(
+                connection,
+                command_id=checked_command,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                allowed_states=frozenset({"reconciling"}),
+            )
+            existing = connection.execute(
+                """
+                SELECT * FROM execution_reconciliations
+                WHERE reconciliation_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["record_hash"] == reconciliation_hash:
+                    return self._command_from_row(
+                        connection.execute(
+                            "SELECT * FROM execution_commands WHERE command_id = ?",
+                            (checked_command,),
+                        ).fetchone()
+                    )
+                raise StateConflict("reconciliation ID is already bound differently")
+            command_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            command = self._command_from_row(command_row)
+            if command.state != "reconciling":
+                raise StateConflict("command is not in reconciliation state")
+            current_legs = {
+                leg.role: leg
+                for leg in (
+                    self._leg_from_row(row)
+                    for row in connection.execute(
+                        """
+                        SELECT * FROM execution_command_legs
+                        WHERE command_id = ?
+                        """,
+                        (checked_command,),
+                    ).fetchall()
+                )
+            }
+            if set(current_legs) != set(_ROLES):
+                raise StorageError("command is missing protected legs")
+            for update in leg_values:
+                current_leg = current_legs[update.role]
+                if current_leg.cloid != update.cloid:
+                    raise StateConflict("reconciliation CLOID differs from command")
+                current_legs[update.role] = self._update_leg_locked(
+                    connection,
+                    current_leg,
+                    status=update.status,
+                    cumulative_filled=update.cumulative_filled,
+                    venue_oid=update.venue_oid,
+                    at=checked_at,
+                )
+            for fill in fill_values:
+                self._put_fill_locked(
+                    connection,
+                    command_id=checked_command,
+                    fill=fill,
+                    observed_at=checked_at,
+                    legs=current_legs,
+                )
+            plan = connection.execute(
+                "SELECT instrument FROM execution_plans WHERE plan_hash = ?",
+                (command.plan_hash,),
+            ).fetchone()
+            if plan is None:
+                raise StorageError("command plan is missing")
+            instrument = str(plan["instrument"])
+            self._upsert_position_locked(
+                connection,
+                instrument=instrument,
+                quantity=signed_position,
+                snapshot_hash=snapshot_hash,
+                observed_at=checked_at,
+            )
+            stop_leg = current_legs["protective_stop"]
+            protection_failed = (
+                stop_leg.status in {"rejected", "expired", "absent"}
+                and signed_position != ZERO
+            )
+            protection = self._upsert_protection_locked(
+                connection,
+                command_id=checked_command,
+                instrument=instrument,
+                signed_position=signed_position,
+                protected_quantity=protected,
+                stop_cloid=stop_leg.cloid,
+                observed_at=checked_at,
+                failed=protection_failed,
+            )
+            entry_side = current_legs["entry"].side
+            direction_conflict = (
+                signed_position > ZERO and entry_side != Side.BUY.value
+            ) or (signed_position < ZERO and entry_side != Side.SELL.value)
+            if protection.state in {
+                "failed",
+                "under_protected",
+                "over_protected",
+            }:
+                code = {
+                    "failed": "PROTECTION_FAILED",
+                    "under_protected": "POSITION_UNDER_PROTECTED",
+                    "over_protected": "POSITION_OVER_PROTECTED",
+                }[protection.state]
+                self._open_incident_locked(
+                    connection,
+                    incident_id=_record_hash(
+                        "incident-id",
+                        {
+                            "command_id": checked_command,
+                            "reconciliation_id": checked_id,
+                            "code": code,
+                        },
+                    ),
+                    command_id=checked_command,
+                    code=code,
+                    severity="critical" if protection.state == "failed" else "high",
+                    at=checked_at,
+                    details={
+                        "signed_position_quantity": _decimal_text(
+                            signed_position, field="signed_position_quantity"
+                        ),
+                        "protected_quantity": _decimal_text(
+                            protected, field="protected_quantity"
+                        ),
+                    },
+                )
+            if direction_conflict:
+                self._open_incident_locked(
+                    connection,
+                    incident_id=_record_hash(
+                        "incident-id",
+                        {
+                            "command_id": checked_command,
+                            "reconciliation_id": checked_id,
+                            "code": "POSITION_DIRECTION_CONTRADICTION",
+                        },
+                    ),
+                    command_id=checked_command,
+                    code="POSITION_DIRECTION_CONTRADICTION",
+                    severity="critical",
+                    at=checked_at,
+                    details={"entry_side": entry_side},
+                )
+            connection.execute(
+                """
+                INSERT INTO execution_reconciliations (
+                    reconciliation_id, command_id, account_snapshot_hash,
+                    complete, observed_at, payload_json, content_hash,
+                    record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checked_id,
+                    checked_command,
+                    snapshot_hash,
+                    int(complete),
+                    _time_text(checked_at, field="observed_at"),
+                    payload_json,
+                    content_hash,
+                    reconciliation_hash,
+                ),
+            )
+            terminal = (
+                complete
+                and signed_position == ZERO
+                and protected == ZERO
+                and all(
+                    leg.status in _TERMINAL_LEG_STATES
+                    for leg in current_legs.values()
+                )
+            )
+            if terminal:
+                current_loss, current_notional, exposure_revision, _ = (
+                    self._read_exposure_locked(connection)
+                )
+                next_loss = decimal_subtract(
+                    current_loss,
+                    command.reserved_loss,
+                    field="reconciled reserved loss",
+                )
+                next_notional = decimal_subtract(
+                    current_notional,
+                    command.reserved_notional,
+                    field="reconciled reserved notional",
+                )
+                self._write_exposure_locked(
+                    connection,
+                    loss=next_loss,
+                    notional=next_notional,
+                    previous_revision=exposure_revision,
+                    at=checked_at,
+                )
+                command = self._set_command_state_locked(
+                    connection,
+                    command_row,
+                    state="terminal",
+                    at=checked_at,
+                    terminal=True,
+                )
+                self._set_outbox_locked(
+                    connection,
+                    outbox_row,
+                    state="terminal",
+                    at=checked_at,
+                    worker_id=None,
+                    fencing_token=token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=self._outbox_from_row(
+                        outbox_row
+                    ).current_attempt_id,
+                    attempt_count=self._outbox_from_row(outbox_row).attempt_count,
+                )
+                ticket = connection.execute(
+                    "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                    (command.ticket_hash,),
+                ).fetchone()
+                if ticket is None:
+                    raise StorageError("terminal command ticket is missing")
+                terminal_ticket = self._ticket_material(ticket, state="terminal")
+                connection.execute(
+                    """
+                    UPDATE execution_tickets SET state = 'terminal', record_hash = ?
+                    WHERE ticket_hash = ? AND state = 'consumed'
+                    """,
+                    (_record_hash("ticket", terminal_ticket), command.ticket_hash),
+                )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type=(
+                    "reconciliation_terminal" if terminal else "reconciliation_recorded"
+                ),
+                occurred_at=checked_at,
+                payload={
+                    "reconciliation_id": checked_id,
+                    "account_snapshot_hash": snapshot_hash,
+                    "complete": complete,
+                    "terminal": terminal,
+                    "position": _decimal_text(
+                        signed_position, field="signed_position_quantity"
+                    ),
+                    "protection_state": protection.state,
+                },
+            )
+            return command
+
+    # -- incidents and reconciled reads -------------------------------
+
+    @staticmethod
+    def _incident_material(
+        incident_id: str,
+        command_id: str | None,
+        code: str,
+        severity: str,
+        state: str,
+        opened_at: datetime,
+        updated_at: datetime,
+        revision: int,
+        details_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            "incident_id": incident_id,
+            "command_id": command_id,
+            "code": code,
+            "severity": severity,
+            "state": state,
+            "opened_at": _time_text(opened_at, field="opened_at"),
+            "updated_at": _time_text(updated_at, field="updated_at"),
+            "revision": revision,
+            "details_json": details_json,
+            "content_hash": content_hash,
+        }
+
+    @classmethod
+    def _incident_from_row(cls, row: Mapping[str, Any]) -> IncidentRecord:
+        details_json = str(row["details_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="incident content_hash"
+        )
+        details = _decode_payload(
+            details_json,
+            content_hash,
+            field="incident",
+            maximum=_MAX_DETAILS_BYTES,
+        )
+        if not isinstance(details, dict):
+            raise StorageError("persisted incident details are not an object")
+        state = _stored_text(row["state"], field="incident state", maximum=16)
+        severity = _stored_text(
+            row["severity"], field="incident severity", maximum=16
+        )
+        if state not in _INCIDENT_STATES or severity not in _INCIDENT_SEVERITIES:
+            raise StorageError("persisted incident state is unsupported")
+        record = IncidentRecord(
+            incident_id=_stored_text(
+                row["incident_id"], field="incident_id", maximum=128
+            ),
+            command_id=(
+                None
+                if row["command_id"] is None
+                else _stored_text(
+                    row["command_id"], field="command_id", maximum=128
+                )
+            ),
+            code=_stored_text(row["code"], field="incident code", maximum=128),
+            severity=severity,
+            state=state,
+            opened_at=_parse_time(row["opened_at"], field="incident opened_at"),
+            updated_at=_parse_time(row["updated_at"], field="incident updated_at"),
+            revision=int(row["revision"]),
+            details=details,
+        )
+        expected = _record_hash(
+            "incident",
+            cls._incident_material(
+                record.incident_id,
+                record.command_id,
+                record.code,
+                record.severity,
+                record.state,
+                record.opened_at,
+                record.updated_at,
+                record.revision,
+                details_json,
+                content_hash,
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="incident record_hash") != expected:
+            raise StorageError("persisted incident record hash does not match")
+        return record
+
+    def _open_incident_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        incident_id: str,
+        command_id: str | None,
+        code: str,
+        severity: str,
+        at: datetime,
+        details: Mapping[str, Any],
+    ) -> IncidentRecord:
+        checked_id = _text(incident_id, field="incident_id", maximum=128)
+        checked_code = _text(code, field="incident code", maximum=128)
+        if severity not in _INCIDENT_SEVERITIES:
+            raise ValidationError("incident severity is invalid")
+        details_json, content_hash = _canonical_payload(
+            dict(details), maximum=_MAX_DETAILS_BYTES
+        )
+        existing = connection.execute(
+            "SELECT * FROM execution_incidents WHERE incident_id = ?", (checked_id,)
+        ).fetchone()
+        if existing is not None:
+            return self._incident_from_row(existing)
+        material = self._incident_material(
+            checked_id,
+            command_id,
+            checked_code,
+            severity,
+            "open",
+            at,
+            at,
+            1,
+            details_json,
+            content_hash,
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_incidents (
+                incident_id, command_id, code, severity, state, opened_at,
+                updated_at, revision, details_json, content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, 'open', ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                checked_id,
+                command_id,
+                checked_code,
+                severity,
+                _time_text(at, field="opened_at"),
+                _time_text(at, field="updated_at"),
+                details_json,
+                content_hash,
+                _record_hash("incident", material),
+            ),
+        )
+        record = self._incident_from_row(
+            connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (checked_id,),
+            ).fetchone()
+        )
+        self._append_event_locked(
+            connection,
+            command_id=command_id,
+            event_type="incident_opened",
+            occurred_at=at,
+            payload={
+                "incident_id": checked_id,
+                "code": checked_code,
+                "severity": severity,
+            },
+        )
+        return record
+
+    def record_incident(
+        self,
+        *,
+        incident_id: str,
+        command_id: str | None,
+        code: str,
+        severity: str,
+        at: datetime,
+        details: Mapping[str, Any] | None = None,
+    ) -> IncidentRecord:
+        checked_command = (
+            None
+            if command_id is None
+            else _text(command_id, field="command_id", maximum=128)
+        )
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            if checked_command is not None and connection.execute(
+                "SELECT 1 FROM execution_commands WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone() is None:
+                raise RecordNotFound("incident command is not registered")
+            return self._open_incident_locked(
+                connection,
+                incident_id=incident_id,
+                command_id=checked_command,
+                code=code,
+                severity=severity,
+                at=checked_at,
+                details={} if details is None else details,
+            )
+
+    def update_incident_state(
+        self,
+        incident_id: str,
+        *,
+        expected_revision: int,
+        state: str,
+        at: datetime,
+    ) -> IncidentRecord:
+        checked_id = _text(incident_id, field="incident_id", maximum=128)
+        expected_revision = _positive_int(
+            expected_revision, field="expected_revision"
+        )
+        if state not in _INCIDENT_STATES - {"open"}:
+            raise ValidationError("incident update state must be contained or closed")
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (checked_id,),
+            ).fetchone()
+            if row is None:
+                raise RecordNotFound("incident is not registered")
+            current = self._incident_from_row(row)
+            if current.revision != expected_revision:
+                raise StateConflict("incident compare-and-swap revision is stale")
+            if current.state == "closed":
+                raise StateConflict("closed incident cannot transition")
+            if current.state == "contained" and state != "closed":
+                raise StateConflict("contained incident can transition only to closed")
+            if checked_at < current.updated_at:
+                raise StateConflict("incident time cannot move backwards")
+            details_json, content_hash = _canonical_payload(
+                dict(current.details), maximum=_MAX_DETAILS_BYTES
+            )
+            revision = current.revision + 1
+            material = self._incident_material(
+                current.incident_id,
+                current.command_id,
+                current.code,
+                current.severity,
+                state,
+                current.opened_at,
+                checked_at,
+                revision,
+                details_json,
+                content_hash,
+            )
+            connection.execute(
+                """
+                UPDATE execution_incidents SET
+                    state = ?, updated_at = ?, revision = ?, record_hash = ?
+                WHERE incident_id = ? AND revision = ?
+                """,
+                (
+                    state,
+                    _time_text(checked_at, field="updated_at"),
+                    revision,
+                    _record_hash("incident", material),
+                    checked_id,
+                    current.revision,
+                ),
+            )
+            record = self._incident_from_row(
+                connection.execute(
+                    "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                    (checked_id,),
+                ).fetchone()
+            )
+            self._append_event_locked(
+                connection,
+                command_id=record.command_id,
+                event_type=f"incident_{state}",
+                occurred_at=checked_at,
+                payload={"incident_id": checked_id, "code": record.code},
+            )
+            return record
+
+    def list_incidents(
+        self, command_id: str | None = None
+    ) -> tuple[IncidentRecord, ...]:
+        connection = self._connect()
+        try:
+            if command_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM execution_incidents ORDER BY opened_at, incident_id"
+                ).fetchall()
+            else:
+                checked = _text(command_id, field="command_id", maximum=128)
+                rows = connection.execute(
+                    """
+                    SELECT * FROM execution_incidents
+                    WHERE command_id = ? ORDER BY opened_at, incident_id
+                    """,
+                    (checked,),
+                ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._incident_from_row(row) for row in rows)
+
+    def get_position(self, instrument: str) -> PositionRecord:
+        checked = _text(instrument, field="instrument", maximum=64)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_positions WHERE instrument = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("position has not been reconciled")
+        return self._position_from_row(row)
+
+    def get_protection(self, command_id: str) -> ProtectionRecord:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_protection WHERE command_id = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("protection has not been reconciled")
+        return self._protection_from_row(row)
+
+    def list_fills(self, command_id: str) -> tuple[VenueFill, ...]:
+        checked = _text(command_id, field="command_id", maximum=128)
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT * FROM execution_fills
+                WHERE command_id = ? ORDER BY occurred_at, fill_id
+                """,
+                (checked,),
+            ).fetchall()
+        finally:
+            connection.close()
+        result: list[VenueFill] = []
+        for row in rows:
+            payload_json = str(row["payload_json"])
+            content_hash = _stored_hash(
+                row["content_hash"], field="fill content_hash"
+            )
+            _decode_payload(payload_json, content_hash, field="fill")
+            material = {
+                "fill_id": str(row["fill_id"]),
+                "command_id": str(row["command_id"]),
+                "role": str(row["role"]),
+                "cloid": str(row["cloid"]),
+                "quantity": str(row["quantity"]),
+                "price": str(row["price"]),
+                "fee": str(row["fee"]),
+                "occurred_at": str(row["occurred_at"]),
+                "content_hash": content_hash,
+                "payload_json": payload_json,
+            }
+            if _stored_hash(row["record_hash"], field="fill record_hash") != _record_hash(
+                "fill", material
+            ):
+                raise StorageError("persisted fill record hash does not match")
+            result.append(
+                VenueFill(
+                    fill_id=str(row["fill_id"]),
+                    role=str(row["role"]),
+                    cloid=str(row["cloid"]),
+                    quantity=Decimal(str(row["quantity"])),
+                    price=Decimal(str(row["price"])),
+                    fee=Decimal(str(row["fee"])),
+                    occurred_at=_parse_time(
+                        row["occurred_at"], field="fill occurred_at"
+                    ),
+                )
+            )
+        return tuple(result)
+
+
+__all__ = (
+    "AttemptRecord",
+    "CommandRecord",
+    "DispatchPreflight",
+    "EXECUTION_SCHEMA_VERSION",
+    "EventRecord",
+    "ExecutionStore",
+    "IncidentRecord",
+    "LegRecord",
+    "LegReconciliation",
+    "OutboxRecord",
+    "PositionRecord",
+    "ProtectionRecord",
+    "SignedEnvelopeEvidence",
+    "TransportOutcomeEvidence",
+    "TrustedApproval",
+    "VenueFill",
+)

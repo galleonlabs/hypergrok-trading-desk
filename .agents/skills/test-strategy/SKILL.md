@@ -5,7 +5,7 @@ description: Design, run, or review leakage-resistant evaluations of a fully spe
 
 # Test Strategy
 
-1. Call `get_harness_status` to determine whether immutable historical data, a trial registry, and a deterministic test runner are available. If a required capability is absent, return a reproducible test plan or review supplied artifacts; do not claim a run occurred.
+1. Call `get_harness_status`. For the installed candidate-v0 rule, resolve a tracked 4h asset and call `validate_candidate_profitability`; for any other strategy, return a reproducible preregistration/test plan unless a matching runner exists.
 2. Require a frozen thesis version before outcomes are inspected. Register the primary metric, minimum useful effect, parameter family, multiplicity correction, sample-size plan, stopping rule, and untouched holdout.
 3. Use immutable point-in-time data with source and content hashes, completed observations, explicit calendars and bar alignment, delistings and symbol changes, and no forward-filled signal prices. `get_market_brief` is current context, not a historical test dataset.
 4. Simulate only next-observable decisions and include spread, fees, slippage, funding or borrow, latency, liquidity, rejected orders, and capacity assumptions appropriate to the strategy.

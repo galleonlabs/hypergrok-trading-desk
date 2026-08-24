@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / ".agents" / "skills"
 PLUGIN_SKILLS = ROOT / "plugins" / "trading-desk" / "skills"
 EXPECTED_SKILLS = [
+    "assess-asset",
     "brief-market",
     "operate-trading-desk",
     "scan-signals",

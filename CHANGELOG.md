@@ -1,9 +1,24 @@
 # Changelog
 
-## Unreleased — Harness foundation
+## Unreleased — Codex research desk and guarded execution primitives
+
+- Added strict Hyperliquid candle history, account/metadata reads, signed-position and protective-order reconciliation.
+- Added tracked assets, immutable research storage, a fenced always-on research node, heartbeats, launchd/systemd templates, and restart/backup guidance.
+- Added descriptive TA plus a separately frozen EMA/Donchian/ATR registered strategy with buy/sell/nothing/unavailable assessment.
+- Added sourced sentiment snapshots; explicit browser evidence is stored without raw text and is forbidden for unattended use.
+- Added costed chronological backtests, deterministic block-bootstrap gates, an append-only prospective shadow ledger, drift checks, and TA-only versus sentiment comparison.
+- Recorded the first ETH candidate-v0 historical result as `REJECTED`; no profitability claim or deployment promotion was created.
+- Added mandatory-stop/TP risk plans, flat-account risk compilation, local testnet-only approval tokens, and a deterministic paper OMS with partial-fill emergency flatten behavior.
+- Added exact Hyperliquid three-leg wire construction, persistent nonce allocation, pinned optional SDK signing, one-shot transport, strict response parsing, and mainnet-disabled signer policy. No live adapter or model-facing execution tool is enabled.
+- Added an isolated execution store with single-use approvals, aggregate reservation, one active plan per instrument, fenced claims, fresh dispatch attestations, persisted pre-send nonce/action/wire hashes, a no-retry dispatcher, immutable fills/positions/protection/incidents, and risk release only after complete flat reconciliation.
+- Added typed recovery builders and signer-vector tests for bounded reduce-only IOC close, owned-CLOID cancel, and same-original-nonce noop fencing. Public recovery signing/submission is hard-disabled until the same durable recovery outbox exists; broad exchange actions remain impossible.
+- Expanded the Codex/ChatGPT plugin to six skills and eleven bounded research tools; three tools write only local research state. OpenCode mirrors the same interface with those writes set to `ask`.
+- Added an independent disposition of `SMA-outfits` as a draft hypothesis catalog rather than evidence or executable strategy.
+
+## Harness foundation
 
 - Replaced the Grok Bot prompt/plugin runtime with an agent-neutral deterministic harness foundation.
-- Added a ChatGPT/Codex-first `trading-desk` plugin with five agent-neutral skills and a byte-identical OpenCode mirror.
+- Added a ChatGPT/Codex-first `trading-desk` plugin with agent-neutral skills and a byte-identical OpenCode mirror.
 - Added a model-neutral read-only tool service plus MCP 2.0 stdio and loopback Streamable HTTP adapters.
 - Added explicit closed MCP input/output schemas, server-side duplicate validation, and a self-contained generated plugin runtime for cached installs.
 - Added an allowlisted public Hyperliquid market brief with exact decimals, source/receipt timestamps, freshness gates, and 5/10/25 bps depth.

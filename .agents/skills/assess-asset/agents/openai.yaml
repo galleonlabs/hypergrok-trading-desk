@@ -1,0 +1,6 @@
+interface:
+  display_name: "Assess Asset"
+  short_description: "Track and assess a market setup"
+  default_prompt: "Use $assess-asset to track an asset, gather TA and sentiment evidence, and report buy, sell, nothing, or unavailable."
+policy:
+  allow_implicit_invocation: true

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trading-harness"
-version = "0.1.0.dev0"
-description = "Fail-closed foundation for a deterministic trading research harness"
+version = "0.2.0.dev0"
+description = "Codex-first deterministic trading research and execution harness"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
@@ -22,6 +22,7 @@ classifiers = [
 
 [project.optional-dependencies]
 mcp = ["mcp==2.0.0"]
+execution = ["hyperliquid-python-sdk==0.24.0"]
 
 [project.scripts]
 trading-harness = "trading_harness.cli:main"

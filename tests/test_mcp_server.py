@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr
+from datetime import timedelta
 from io import StringIO
 import asyncio
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import tomllib
 import unittest
 from unittest.mock import patch
 
 from trading_harness import mcp_server
 from trading_harness.tool_api import ToolService
+from trading_harness.research_api import ResearchService
+from trading_harness.research_store import ResearchStore
 from tests.test_market_data import FixtureTransport, fixture_brief
+from tests.test_node import AT, history_reader
+from tests.test_research_api import evidence, iso
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +61,7 @@ class FakeMCPServer:
 
 class MCPAdapterTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("mcp"), "optional mcp runtime")
-    def test_registers_exactly_the_read_only_service_surface(self) -> None:
+    def test_registers_exactly_the_bounded_research_service_surface(self) -> None:
         server = mcp_server.build_mcp_server(
             service=ToolService(market_brief_reader=lambda *_args, **_kwargs: {})
         )
@@ -66,8 +72,16 @@ class MCPAdapterTests(unittest.TestCase):
         self.assertEqual(
             set(by_name),
             {
+                "analyze_asset",
+                "get_latest_sentiment",
+                "get_node_status",
                 "get_harness_status",
                 "get_market_brief",
+                "list_tracked_assets",
+                "pause_tracked_asset",
+                "record_manual_sentiment",
+                "track_asset",
+                "validate_candidate_profitability",
                 "validate_trade_intent",
             },
         )
@@ -79,7 +93,7 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertEqual(tool.output_schema, definition.output_schema)
             self.assertIsNotNone(tool.annotations)
             self.assertEqual(tool.annotations.title, definition.title)
-            self.assertTrue(tool.annotations.read_only_hint)
+            self.assertEqual(tool.annotations.read_only_hint, definition.read_only)
             self.assertFalse(tool.annotations.destructive_hint)
             self.assertEqual(
                 tool.annotations.idempotent_hint,
@@ -102,6 +116,9 @@ class MCPAdapterTests(unittest.TestCase):
         status = asyncio.run(server.call_tool("get_harness_status", {}))
         self.assertFalse(status.is_error)
         self.assertFalse(status.structured_content["venue_writes_enabled"])
+        self.assertTrue(
+            status.structured_content["research"]["local_state_writes_enabled"]
+        )
 
     @unittest.skipUnless(importlib.util.find_spec("mcp"), "optional mcp runtime")
     def test_real_mcp_validation_does_not_echo_unknown_arguments_or_enum(self) -> None:
@@ -167,6 +184,58 @@ class MCPAdapterTests(unittest.TestCase):
             set(brief["book"]["depth"]),
             {"5bps", "10bps", "25bps"},
         )
+
+    @unittest.skipUnless(importlib.util.find_spec("mcp"), "optional mcp runtime")
+    def test_real_mcp_research_write_and_analysis_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            research = ResearchService(
+                ResearchStore(Path(directory) / "research.sqlite3"),
+                clock=lambda: AT,
+                history_reader=history_reader,
+                analysis_bars=1001,
+                validation_bars=1001,
+            )
+            server = mcp_server.build_mcp_server(
+                service=ToolService(research_service=research)
+            )
+            tracked = asyncio.run(
+                server.call_tool(
+                    "track_asset",
+                    {
+                        "asset_id": "eth",
+                        "symbol": "ETH",
+                        "network": "testnet",
+                        "sentiment_query": "$ETH OR Ethereum",
+                    },
+                )
+            )
+            recorded = asyncio.run(
+                server.call_tool(
+                    "record_manual_sentiment",
+                    {
+                        "asset_id": "eth",
+                        "window_start": iso(AT - timedelta(hours=4)),
+                        "window_end": iso(AT),
+                        "evidence": evidence(),
+                        "excluded_count": 0,
+                        "collection_complete": True,
+                    },
+                )
+            )
+            analyzed = asyncio.run(
+                server.call_tool("analyze_asset", {"asset_id": "eth"})
+            )
+
+        self.assertFalse(tracked.is_error, tracked)
+        self.assertFalse(tracked.structured_content["order_submitted"])
+        self.assertFalse(recorded.is_error, recorded)
+        self.assertFalse(recorded.structured_content["unattended_eligible"])
+        self.assertFalse(analyzed.is_error, analyzed)
+        self.assertEqual(
+            analyzed.structured_content["registered_signal"]["direction"],
+            "buy",
+        )
+        self.assertFalse(analyzed.structured_content["venue_writes_enabled"])
 
     def test_main_reports_missing_optional_runtime_without_traceback(self) -> None:
         stderr = StringIO()
@@ -244,7 +313,7 @@ class MCPAdapterTests(unittest.TestCase):
 
 
 class PluginWiringTests(unittest.TestCase):
-    def test_manifest_points_to_local_read_only_mcp_config(self) -> None:
+    def test_manifest_points_to_local_bounded_research_mcp_config(self) -> None:
         manifest = json.loads(
             (PLUGIN / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
@@ -252,7 +321,7 @@ class PluginWiringTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "trading-desk")
         self.assertEqual(manifest["mcpServers"], "./.mcp.json")
         self.assertIn("Read", manifest["interface"]["capabilities"])
-        self.assertNotIn("Write", manifest["interface"]["capabilities"])
+        self.assertIn("Write", manifest["interface"]["capabilities"])
 
     def test_mcp_config_launches_only_the_checked_in_stdio_server(self) -> None:
         config = json.loads((PLUGIN / ".mcp.json").read_text(encoding="utf-8"))
@@ -271,6 +340,10 @@ class PluginWiringTests(unittest.TestCase):
         self.assertEqual(
             project["project"]["optional-dependencies"]["mcp"],
             ["mcp==2.0.0"],
+        )
+        self.assertEqual(
+            project["project"]["optional-dependencies"]["execution"],
+            ["hyperliquid-python-sdk==0.24.0"],
         )
         self.assertEqual(
             project["project"]["scripts"]["trading-harness-mcp"],

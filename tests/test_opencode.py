@@ -23,7 +23,7 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = json.loads((ROOT / "opencode.json").read_text(encoding="utf-8"))
 
-    def test_config_is_model_neutral_and_uses_only_local_read_tools(self) -> None:
+    def test_config_is_model_neutral_and_uses_only_local_bounded_tools(self) -> None:
         self.assertEqual("https://opencode.ai/config.json", self.config["$schema"])
         self.assertNotIn("model", self.config)
         self.assertNotIn("provider", self.config)
@@ -71,6 +71,7 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             {
                 "*": "deny",
+                "assess-asset": "allow",
                 "operate-trading-desk": "allow",
                 "brief-market": "allow",
                 "validate-thesis": "allow",
@@ -87,8 +88,16 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             {
                 "trading_desk_*": "deny",
+                "trading_desk_analyze_asset": "allow",
+                "trading_desk_get_latest_sentiment": "allow",
+                "trading_desk_get_node_status": "allow",
                 "trading_desk_get_harness_status": "allow",
                 "trading_desk_get_market_brief": "allow",
+                "trading_desk_list_tracked_assets": "allow",
+                "trading_desk_pause_tracked_asset": "ask",
+                "trading_desk_record_manual_sentiment": "ask",
+                "trading_desk_track_asset": "ask",
+                "trading_desk_validate_candidate_profitability": "allow",
                 "trading_desk_validate_trade_intent": "allow",
             },
             mcp_permissions,
@@ -103,16 +112,21 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
         self.assertEqual("deny", plan["edit"])
         self.assertEqual("deny", plan["bash"])
         self.assertEqual(skills, plan["skill"])
+        plan_mcp = {
+            key: value
+            for key, value in plan.items()
+            if key.startswith("trading_desk_")
+        }
         self.assertEqual(
-            mcp_permissions,
+            plan_mcp,
             {
                 key: value
-                for key, value in plan.items()
-                if key.startswith("trading_desk_")
+                for key, value in mcp_permissions.items()
+                if value == "allow" or key == "trading_desk_*"
             },
         )
         plan_order = list(plan)
-        for tool_name in set(mcp_permissions) - {"trading_desk_*"}:
+        for tool_name in set(plan_mcp) - {"trading_desk_*"}:
             self.assertLess(
                 plan_order.index("trading_desk_*"),
                 plan_order.index(tool_name),

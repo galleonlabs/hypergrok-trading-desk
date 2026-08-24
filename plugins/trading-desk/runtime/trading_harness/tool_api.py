@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 from typing import Any
 
@@ -21,6 +22,9 @@ from .canonical import (
 )
 from .domain import SemanticIntent
 from .executor import disabled_executor
+from .node import default_state_database
+from .research_api import ResearchService
+from .research_store import ResearchStore
 
 
 JsonObject = dict[str, Any]
@@ -200,12 +204,13 @@ _STATUS_OUTPUT_SCHEMA: JsonObject = {
         "execution",
         "exposed_tools",
         "market_data",
+        "research",
         "venue_writes_enabled",
         "credential_loading_enabled",
     ],
     "properties": {
         "component": {"type": "string", "const": "trading-harness"},
-        "mode": {"type": "string", "const": "read_only"},
+        "mode": {"type": "string", "const": "research_only"},
         "ok": {"type": "boolean"},
         "execution": {
             "type": "object",
@@ -228,14 +233,46 @@ _STATUS_OUTPUT_SCHEMA: JsonObject = {
             "items": {
                 "type": "string",
                 "enum": [
+                    "analyze_asset",
+                    "get_latest_sentiment",
+                    "get_node_status",
                     "get_harness_status",
                     "get_market_brief",
+                    "list_tracked_assets",
+                    "pause_tracked_asset",
+                    "record_manual_sentiment",
+                    "track_asset",
                     "validate_trade_intent",
+                    "validate_candidate_profitability",
                 ],
             },
-            "minItems": 3,
-            "maxItems": 3,
+            "minItems": 11,
+            "maxItems": 11,
             "uniqueItems": True,
+        },
+        "research": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "asset_tracking",
+                "enabled",
+                "local_state_writes_enabled",
+                "manual_browser_unattended_eligible",
+                "registered_strategy",
+            ],
+            "properties": {
+                "asset_tracking": {"type": "boolean", "const": True},
+                "enabled": {"type": "boolean", "const": True},
+                "local_state_writes_enabled": {"type": "boolean", "const": True},
+                "manual_browser_unattended_eligible": {
+                    "type": "boolean",
+                    "const": False,
+                },
+                "registered_strategy": {
+                    "type": "string",
+                    "const": "candidate-v0/1",
+                },
+            },
         },
         "market_data": {
             "type": "object",
@@ -540,6 +577,341 @@ _INTENT_OUTPUT_SCHEMA: JsonObject = {
     ]
 }
 
+_HASH_SCHEMA: JsonObject = {
+    "type": "string",
+    "minLength": 64,
+    "maxLength": 64,
+    "pattern": "^[0-9a-f]{64}$",
+}
+_TRACKED_ASSET_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema_version",
+        "asset_id",
+        "venue",
+        "market_data_network",
+        "execution_environment",
+        "symbol",
+        "interval",
+        "poll_seconds",
+        "technical_profile_version",
+        "sentiment_policy_version",
+        "sentiment_query",
+        "sentiment_query_version",
+        "status",
+        "revision",
+        "created_at",
+        "updated_at",
+        "config_hash",
+    ],
+    "properties": {
+        "schema_version": {"type": "string", "const": "tracked_asset.v1"},
+        "asset_id": _text_schema(128),
+        "venue": {"type": "string", "const": "hyperliquid"},
+        "market_data_network": {"type": "string", "enum": ["mainnet", "testnet"]},
+        "execution_environment": {"type": "string", "const": "shadow"},
+        "symbol": {
+            **_text_schema(64),
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+        },
+        "interval": {"type": "string", "const": "4h"},
+        "poll_seconds": {"type": "integer", "minimum": 10, "maximum": 86400},
+        "technical_profile_version": _text_schema(64),
+        "sentiment_policy_version": _text_schema(64),
+        "sentiment_query": _text_schema(1024),
+        "sentiment_query_version": _text_schema(64),
+        "status": {"type": "string", "enum": ["active", "paused"]},
+        "revision": {"type": "integer", "minimum": 1},
+        "created_at": deepcopy(_TIMESTAMP_SCHEMA),
+        "updated_at": deepcopy(_TIMESTAMP_SCHEMA),
+        "config_hash": deepcopy(_HASH_SCHEMA),
+    },
+}
+_LOCAL_WRITE_OUTPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "tracked_asset",
+        "local_state_updated",
+        "trade_authority_created",
+        "order_submitted",
+    ],
+    "properties": {
+        "tracked_asset": deepcopy(_TRACKED_ASSET_SCHEMA),
+        "local_state_updated": {"type": "boolean"},
+        "trade_authority_created": {"type": "boolean", "const": False},
+        "order_submitted": {"type": "boolean", "const": False},
+    },
+}
+_EVIDENCE_INPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "evidence_id",
+        "post_id",
+        "source_url",
+        "author_hash",
+        "content_hash",
+        "cluster_hash",
+        "published_at",
+        "observed_at",
+        "polarity",
+    ],
+    "properties": {
+        "evidence_id": _text_schema(256),
+        "post_id": _text_schema(256),
+        "source_url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^https://(?:www\\.)?(?:x\\.com|twitter\\.com)/.+$",
+        },
+        "author_hash": deepcopy(_HASH_SCHEMA),
+        "content_hash": deepcopy(_HASH_SCHEMA),
+        "cluster_hash": deepcopy(_HASH_SCHEMA),
+        "published_at": deepcopy(_TIMESTAMP_SCHEMA),
+        "observed_at": deepcopy(_TIMESTAMP_SCHEMA),
+        "polarity": {
+            "type": "string",
+            "enum": ["-1", "-0.5", "0", "0.5", "1"],
+            "description": "Manual research polarity from -1 through 1; never unattended authority.",
+        },
+    },
+}
+_SENTIMENT_WRITE_OUTPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "snapshot",
+        "record_hash",
+        "local_state_updated",
+        "unattended_eligible",
+        "order_submitted",
+    ],
+    "properties": {
+        "snapshot": {
+            "type": "object",
+            "required": [
+                "method",
+                "eligible_for_unattended_use",
+                "raw_post_text_stored",
+                "artifact_hash",
+            ],
+            "properties": {
+                "method": {"type": "string", "const": "manual_browser"},
+                "eligible_for_unattended_use": {
+                    "type": "boolean",
+                    "const": False,
+                },
+                "raw_post_text_stored": {"type": "boolean", "const": False},
+                "artifact_hash": deepcopy(_HASH_SCHEMA),
+            },
+        },
+        "record_hash": deepcopy(_HASH_SCHEMA),
+        "local_state_updated": {"type": "boolean", "const": True},
+        "unattended_eligible": {"type": "boolean", "const": False},
+        "order_submitted": {"type": "boolean", "const": False},
+    },
+}
+_LATEST_SENTIMENT_OUTPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["found", "asset_id", "snapshot"],
+    "properties": {
+        "found": {"type": "boolean"},
+        "asset_id": _text_schema(128),
+        "snapshot": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "required": [
+                        "method",
+                        "expires_at",
+                        "label",
+                        "available",
+                        "eligible_for_unattended_use",
+                        "artifact_hash",
+                        "raw_post_text_stored",
+                    ],
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "enum": [
+                                "manual_browser",
+                                "x_api",
+                                "compliant_provider",
+                            ],
+                        },
+                        "expires_at": deepcopy(_TIMESTAMP_SCHEMA),
+                        "label": {
+                            "type": "string",
+                            "enum": ["bullish", "bearish", "neutral", "unknown"],
+                        },
+                        "available": {"type": "boolean"},
+                        "eligible_for_unattended_use": {"type": "boolean"},
+                        "artifact_hash": deepcopy(_HASH_SCHEMA),
+                        "raw_post_text_stored": {"type": "boolean", "const": False},
+                    },
+                },
+            ]
+        },
+        "record_hash": deepcopy(_HASH_SCHEMA),
+    },
+}
+_ANALYSIS_OUTPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema_version",
+        "asset",
+        "observed_at",
+        "history",
+        "descriptive_technical",
+        "registered_signal",
+        "sentiment",
+        "assessment",
+        "profitability_attested",
+        "venue_writes_enabled",
+        "order_submitted",
+    ],
+    "properties": {
+        "schema_version": {"type": "string", "const": "asset_analysis.v1"},
+        "asset": deepcopy(_TRACKED_ASSET_SCHEMA),
+        "observed_at": deepcopy(_TIMESTAMP_SCHEMA),
+        "history": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "data_hash",
+                "completed_candles",
+                "coverage_complete",
+                "truncated",
+            ],
+            "properties": {
+                "data_hash": deepcopy(_HASH_SCHEMA),
+                "completed_candles": {"type": "integer", "minimum": 1001},
+                "coverage_complete": {"type": "boolean", "const": True},
+                "truncated": {"type": "boolean", "const": False},
+            },
+        },
+        "descriptive_technical": {
+            "type": "object",
+            "required": ["bias", "executable", "evidence_status"],
+            "properties": {
+                "bias": {"type": "string", "enum": ["buy", "sell", "nothing"]},
+                "executable": {"type": "boolean", "const": False},
+                "evidence_status": {
+                    "type": "string",
+                    "const": "research_candidate",
+                },
+            },
+        },
+        "registered_signal": {
+            "type": "object",
+            "required": [
+                "strategy_hash",
+                "signal_hash",
+                "expires_at",
+                "direction",
+                "reason",
+            ],
+            "properties": {
+                "strategy_hash": deepcopy(_HASH_SCHEMA),
+                "signal_hash": deepcopy(_HASH_SCHEMA),
+                "expires_at": deepcopy(_TIMESTAMP_SCHEMA),
+                "direction": {
+                    "type": "string",
+                    "enum": ["buy", "sell", "nothing"],
+                },
+                "reason": {"type": "string", "minLength": 1, "maxLength": 128},
+            },
+        },
+        "sentiment": deepcopy(_LATEST_SENTIMENT_OUTPUT_SCHEMA),
+        "assessment": {
+            "type": "object",
+            "required": [
+                "verdict",
+                "reason_codes",
+                "eligible_for_risk_quote",
+                "eligible_to_trade",
+                "approval_created",
+                "order_submitted",
+            ],
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["buy", "sell", "nothing", "unavailable"],
+                },
+                "reason_codes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                },
+                "eligible_for_risk_quote": {"type": "boolean"},
+                "eligible_to_trade": {"type": "boolean", "const": False},
+                "approval_created": {"type": "boolean", "const": False},
+                "order_submitted": {"type": "boolean", "const": False},
+            },
+        },
+        "profitability_attested": {"type": "boolean", "const": False},
+        "venue_writes_enabled": {"type": "boolean", "const": False},
+        "order_submitted": {"type": "boolean", "const": False},
+    },
+}
+_VALIDATION_SUMMARY_OUTPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema_version",
+        "asset_id",
+        "strategy_hash",
+        "data_hash",
+        "artifact_hash",
+        "historical_status",
+        "historical_reasons",
+        "trade_count",
+        "expectancy_r",
+        "lower_95_r",
+        "profit_factor",
+        "max_drawdown_r",
+        "stress_expectancy_r",
+        "shadow_required",
+        "deployment_qualified",
+        "profit_guaranteed",
+        "order_submitted",
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "string",
+            "const": "candidate_validation_summary.v1",
+        },
+        "asset_id": _text_schema(128),
+        "strategy_hash": deepcopy(_HASH_SCHEMA),
+        "data_hash": deepcopy(_HASH_SCHEMA),
+        "artifact_hash": deepcopy(_HASH_SCHEMA),
+        "historical_status": {
+            "type": "string",
+            "enum": ["PASS", "REJECTED", "INCONCLUSIVE"],
+        },
+        "historical_reasons": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 128},
+        },
+        "trade_count": {"type": "integer", "minimum": 0},
+        "expectancy_r": deepcopy(_EXACT_DECIMAL_SCHEMA),
+        "lower_95_r": {"anyOf": [deepcopy(_EXACT_DECIMAL_SCHEMA), {"type": "null"}]},
+        "profit_factor": {"anyOf": [deepcopy(_EXACT_DECIMAL_SCHEMA), {"type": "null"}]},
+        "max_drawdown_r": deepcopy(_EXACT_DECIMAL_SCHEMA),
+        "stress_expectancy_r": deepcopy(_EXACT_DECIMAL_SCHEMA),
+        "shadow_required": {"type": "boolean", "const": True},
+        "deployment_qualified": {"type": "boolean", "const": False},
+        "profit_guaranteed": {"type": "boolean", "const": False},
+        "order_submitted": {"type": "boolean", "const": False},
+    },
+}
+
 
 TOOL_CATALOG: tuple[ToolDefinition, ...] = (
     ToolDefinition(
@@ -579,6 +951,175 @@ TOOL_CATALOG: tuple[ToolDefinition, ...] = (
         },
         output_schema=_MARKET_OUTPUT_SCHEMA,
         open_world=True,
+    ),
+    ToolDefinition(
+        name="track_asset",
+        title="Track a Hyperliquid asset",
+        description=(
+            "Create an idempotent local 4-hour research tracker. This writes "
+            "only the harness research database and cannot authorize or submit a trade."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["asset_id", "symbol", "network", "sentiment_query"],
+            "properties": {
+                "asset_id": _text_schema(128),
+                "symbol": {
+                    **_text_schema(64),
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+                },
+                "network": {"type": "string", "enum": ["mainnet", "testnet"]},
+                "sentiment_query": _text_schema(1024),
+                "poll_seconds": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 86400,
+                    "default": 60,
+                },
+            },
+        },
+        output_schema=deepcopy(_LOCAL_WRITE_OUTPUT_SCHEMA),
+        read_only=False,
+    ),
+    ToolDefinition(
+        name="pause_tracked_asset",
+        title="Pause a tracked asset",
+        description=(
+            "Pause one local tracker using its exact compare-and-swap revision. "
+            "This cannot cancel an exchange order or change a position."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["asset_id", "expected_revision"],
+            "properties": {
+                "asset_id": _text_schema(128),
+                "expected_revision": {"type": "integer", "minimum": 1},
+            },
+        },
+        output_schema=deepcopy(_LOCAL_WRITE_OUTPUT_SCHEMA),
+        read_only=False,
+    ),
+    ToolDefinition(
+        name="list_tracked_assets",
+        title="List tracked assets",
+        description="Read the versioned local asset-tracking registry.",
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+            "maxProperties": 0,
+        },
+        output_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["count", "assets", "venue_writes_enabled"],
+            "properties": {
+                "count": {"type": "integer", "minimum": 0},
+                "assets": {
+                    "type": "array",
+                    "items": deepcopy(_TRACKED_ASSET_SCHEMA),
+                    "maxItems": 10000,
+                },
+                "venue_writes_enabled": {"type": "boolean", "const": False},
+            },
+        },
+    ),
+    ToolDefinition(
+        name="record_manual_sentiment",
+        title="Record manual X sentiment evidence",
+        description=(
+            "Store source IDs, hashes, timestamps and bounded manual polarities "
+            "from an explicit browser research session. Raw post text and browser "
+            "credentials are forbidden; this evidence is never unattended authority."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "asset_id",
+                "window_start",
+                "window_end",
+                "evidence",
+                "excluded_count",
+                "collection_complete",
+            ],
+            "properties": {
+                "asset_id": _text_schema(128),
+                "window_start": deepcopy(_TIMESTAMP_SCHEMA),
+                "window_end": deepcopy(_TIMESTAMP_SCHEMA),
+                "evidence": {
+                    "type": "array",
+                    "items": deepcopy(_EVIDENCE_INPUT_SCHEMA),
+                    "maxItems": 100,
+                },
+                "excluded_count": {"type": "integer", "minimum": 0},
+                "collection_complete": {"type": "boolean"},
+            },
+        },
+        output_schema=deepcopy(_SENTIMENT_WRITE_OUTPUT_SCHEMA),
+        read_only=False,
+    ),
+    ToolDefinition(
+        name="get_latest_sentiment",
+        title="Get latest sentiment evidence",
+        description="Read and integrity-check the latest local sentiment snapshot.",
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["asset_id"],
+            "properties": {"asset_id": _text_schema(128)},
+        },
+        output_schema=deepcopy(_LATEST_SENTIMENT_OUTPUT_SCHEMA),
+    ),
+    ToolDefinition(
+        name="analyze_asset",
+        title="Analyze a tracked asset now",
+        description=(
+            "Fetch strict completed candles, calculate descriptive TA and the frozen "
+            "registered buy/sell/nothing signal, then combine the latest sentiment. "
+            "The result cannot authorize or submit a trade."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["asset_id"],
+            "properties": {"asset_id": _text_schema(128)},
+        },
+        output_schema=deepcopy(_ANALYSIS_OUTPUT_SCHEMA),
+        open_world=True,
+    ),
+    ToolDefinition(
+        name="validate_candidate_profitability",
+        title="Validate registered candidate historically",
+        description=(
+            "Run the frozen costed candidate-v0 historical evaluation. A PASS still "
+            "requires prospective shadow evidence and never guarantees profit."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["asset_id"],
+            "properties": {"asset_id": _text_schema(128)},
+        },
+        output_schema=deepcopy(_VALIDATION_SUMMARY_OUTPUT_SCHEMA),
+        open_world=True,
+    ),
+    ToolDefinition(
+        name="get_node_status",
+        title="Get always-on node status",
+        description=(
+            "Read the fenced local node runtime, lease and component heartbeats. "
+            "Research-only nodes always keep new venue risk halted."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"node_id": _text_schema(128)},
+            "maxProperties": 1,
+        },
+        output_schema={"type": "object"},
     ),
     ToolDefinition(
         name="validate_trade_intent",
@@ -781,9 +1322,28 @@ class ToolService:
         *,
         market_brief_reader: MarketBriefReader | None = None,
         market_transport: object | None = None,
+        research_service: ResearchService | None = None,
+        research_store_path: str | Path | None = None,
     ) -> None:
+        if research_service is not None and not isinstance(
+            research_service, ResearchService
+        ):
+            raise TypeError("research_service must be ResearchService or None")
         self._market_brief_reader = market_brief_reader or _default_market_brief_reader
         self._market_transport = market_transport
+        self._research_service = research_service
+        self._research_store_path = (
+            default_state_database()
+            if research_store_path is None
+            else Path(research_store_path)
+        )
+
+    def _research(self) -> ResearchService:
+        if self._research_service is None:
+            self._research_service = ResearchService(
+                ResearchStore(self._research_store_path)
+            )
+        return self._research_service
 
     @property
     def catalog(self) -> tuple[JsonObject, ...]:
@@ -798,7 +1358,7 @@ class ToolService:
         )
         return {
             "component": "trading-harness",
-            "mode": "read_only",
+            "mode": "research_only",
             "ok": safe,
             "execution": execution.as_dict(),
             "exposed_tools": sorted(_TOOL_NAMES),
@@ -807,6 +1367,13 @@ class ToolService:
                 "credentials_required": False,
                 "enabled": True,
                 "networks": ["mainnet", "testnet"],
+            },
+            "research": {
+                "asset_tracking": True,
+                "enabled": True,
+                "local_state_writes_enabled": True,
+                "manual_browser_unattended_eligible": False,
+                "registered_strategy": "candidate-v0/1",
             },
             "venue_writes_enabled": False,
             "credential_loading_enabled": False,
@@ -857,6 +1424,79 @@ class ToolService:
             "instrument": parsed.instrument,
         }
 
+    @staticmethod
+    def _canonical_result(value: object) -> JsonObject:
+        converted = canonical_data(value)
+        if not isinstance(converted, dict):
+            raise TypeError("research service must return an object")
+        return converted
+
+    def track_asset(
+        self,
+        asset_id: object,
+        symbol: object,
+        network: object,
+        sentiment_query: object,
+        poll_seconds: object = 60,
+    ) -> JsonObject:
+        return self._canonical_result(
+            self._research().track_asset(
+                asset_id=asset_id,
+                symbol=symbol,
+                network=network,
+                sentiment_query=sentiment_query,
+                poll_seconds=poll_seconds,
+            )
+        )
+
+    def pause_tracked_asset(
+        self,
+        asset_id: object,
+        expected_revision: object,
+    ) -> JsonObject:
+        return self._canonical_result(
+            self._research().pause_asset(
+                asset_id=asset_id,
+                expected_revision=expected_revision,
+            )
+        )
+
+    def list_tracked_assets(self) -> JsonObject:
+        return self._canonical_result(self._research().list_assets())
+
+    def record_manual_sentiment(
+        self,
+        *,
+        asset_id: object,
+        window_start: object,
+        window_end: object,
+        evidence: object,
+        excluded_count: object,
+        collection_complete: object,
+    ) -> JsonObject:
+        return self._canonical_result(
+            self._research().record_manual_sentiment(
+                asset_id=asset_id,
+                window_start=window_start,
+                window_end=window_end,
+                evidence=evidence,
+                excluded_count=excluded_count,
+                collection_complete=collection_complete,
+            )
+        )
+
+    def get_latest_sentiment(self, asset_id: object) -> JsonObject:
+        return self._canonical_result(self._research().latest_sentiment(asset_id))
+
+    def analyze_asset(self, asset_id: object) -> JsonObject:
+        return self._canonical_result(self._research().analyze_asset(asset_id))
+
+    def validate_candidate_profitability(self, asset_id: object) -> JsonObject:
+        return self._canonical_result(self._research().validate_candidate(asset_id))
+
+    def get_node_status(self, node_id: object = "trading-desk-research") -> JsonObject:
+        return self._canonical_result(self._research().get_node_status(node_id))
+
     def invoke(
         self,
         tool_name: str,
@@ -877,12 +1517,70 @@ class ToolService:
             if set(supplied) != {"symbol", "network"}:
                 raise ToolInputError("get_market_brief requires exactly symbol and network")
             return self.get_market_brief(supplied["symbol"], supplied["network"])
-        if set(supplied) != {"intent"}:
-            raise ToolInputError("validate_trade_intent requires exactly intent")
-        intent = supplied["intent"]
-        if not isinstance(intent, Mapping):
-            return _intent_failure("invalid_object", "intent must be an object")
-        return self.validate_trade_intent(intent)
+        if tool_name == "validate_trade_intent":
+            if set(supplied) != {"intent"}:
+                raise ToolInputError("validate_trade_intent requires exactly intent")
+            intent = supplied["intent"]
+            if not isinstance(intent, Mapping):
+                return _intent_failure("invalid_object", "intent must be an object")
+            return self.validate_trade_intent(intent)
+        if tool_name == "track_asset":
+            if not {"asset_id", "symbol", "network", "sentiment_query"}.issubset(
+                supplied
+            ) or set(supplied) - {
+                "asset_id",
+                "symbol",
+                "network",
+                "sentiment_query",
+                "poll_seconds",
+            }:
+                raise ToolInputError("track_asset arguments are invalid")
+            return self.track_asset(
+                supplied["asset_id"],
+                supplied["symbol"],
+                supplied["network"],
+                supplied["sentiment_query"],
+                supplied.get("poll_seconds", 60),
+            )
+        if tool_name == "pause_tracked_asset":
+            if set(supplied) != {"asset_id", "expected_revision"}:
+                raise ToolInputError(
+                    "pause_tracked_asset requires asset_id and expected_revision"
+                )
+            return self.pause_tracked_asset(
+                supplied["asset_id"], supplied["expected_revision"]
+            )
+        if tool_name == "list_tracked_assets":
+            if supplied:
+                raise ToolInputError("list_tracked_assets accepts no arguments")
+            return self.list_tracked_assets()
+        if tool_name == "record_manual_sentiment":
+            required = {
+                "asset_id",
+                "window_start",
+                "window_end",
+                "evidence",
+                "excluded_count",
+                "collection_complete",
+            }
+            if set(supplied) != required:
+                raise ToolInputError("record_manual_sentiment arguments are invalid")
+            return self.record_manual_sentiment(**supplied)
+        if tool_name in {
+            "get_latest_sentiment",
+            "analyze_asset",
+            "validate_candidate_profitability",
+        }:
+            if set(supplied) != {"asset_id"}:
+                raise ToolInputError(f"{tool_name} requires exactly asset_id")
+            return getattr(self, tool_name)(supplied["asset_id"])
+        if tool_name == "get_node_status":
+            if set(supplied) - {"node_id"}:
+                raise ToolInputError("get_node_status accepts only node_id")
+            return self.get_node_status(
+                supplied.get("node_id", "trading-desk-research")
+            )
+        raise ToolInputError("unknown tool")
 
 
 __all__ = (

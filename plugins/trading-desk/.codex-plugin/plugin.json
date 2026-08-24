@@ -1,7 +1,7 @@
 {
   "name": "trading-desk",
-  "version": "0.1.0",
-  "description": "Read-only market research and trade-intent validation for the deterministic trading harness.",
+  "version": "0.2.0",
+  "description": "Asset tracking, deterministic market research, sentiment evidence, and validation for the trading harness.",
   "author": {
     "name": "JawnDiego",
     "url": "https://github.com/jawndiego"
@@ -19,18 +19,19 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Trading Desk",
-    "shortDescription": "Research markets and validate trade intents safely.",
-    "longDescription": "A ChatGPT and Codex interface to public market briefs, harness status, and deterministic trade-intent validation. It cannot load credentials, authorize trades, or write to a venue.",
+    "shortDescription": "Track and assess markets through deterministic research.",
+    "longDescription": "A ChatGPT and Codex interface for local asset tracking, completed-candle TA, manual or API sentiment evidence, registered buy/sell/nothing signals, costed profitability validation, public market briefs, and intent hashing. Local research records may be written; credentials, trade authorization, signing, and venue writes remain unavailable.",
     "developerName": "JawnDiego",
     "category": "Finance",
     "capabilities": [
-      "Read"
+      "Read",
+      "Write"
     ],
     "websiteURL": "https://github.com/jawndiego/hypergrok-trading-desk",
     "defaultPrompt": [
-      "Brief me on ETH using live public market data.",
-      "Check that this trading harness is fail-closed.",
-      "Validate and hash this proposed trade intent."
+      "Track ETH and assess whether the registered setup is buy, sell, or nothing.",
+      "Record this manual X sentiment sample and analyze ETH.",
+      "Run the costed historical validation for the registered candidate."
     ]
   }
 }

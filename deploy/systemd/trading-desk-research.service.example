@@ -1,0 +1,34 @@
+[Unit]
+Description=Trading Desk credential-free research node
+Documentation=file:__REVIEWED_REPO_DIR__/docs/always_on_operation.md
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=__REVIEWED_RESEARCH_USER__
+Group=__REVIEWED_RESEARCH_GROUP__
+WorkingDirectory=__REVIEWED_REPO_DIR__
+ExecStart=__REVIEWED_VENV_BIN__/trading-harness node run --state-db __REVIEWED_STATE_DIR__/research.sqlite3 --node-id trading-desk-research --poll-seconds 1 --history-bars 1200
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+
+StandardOutput=append:__REVIEWED_LOG_DIR__/research.stdout.log
+StandardError=append:__REVIEWED_LOG_DIR__/research.stderr.log
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=__REVIEWED_STATE_DIR__ __REVIEWED_LOG_DIR__
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

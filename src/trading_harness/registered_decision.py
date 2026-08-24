@@ -313,6 +313,7 @@ def build_registered_assessment(
     profitability: ProfitabilityAttestation | None,
     at: datetime,
     strategy: RegisteredStrategy = CANDIDATE_V0,
+    attended: bool = False,
 ) -> RegisteredOpportunityAssessment:
     """Combine exact registered evidence while preserving abstention."""
 
@@ -324,6 +325,8 @@ def build_registered_assessment(
         raise TypeError("profitability must be ProfitabilityAttestation or None")
     if not isinstance(strategy, RegisteredStrategy):
         raise TypeError("strategy must be RegisteredStrategy")
+    if type(attended) is not bool:
+        raise TypeError("attended must be bool")
     checked_id = _text(assessment_id, "assessment_id")
     checked_asset = _text(asset_id, "asset_id")
     checked_at = _utc(at, "at")
@@ -378,7 +381,11 @@ def build_registered_assessment(
     elif not profitability.is_active(checked_at):
         reasons.append("profitability_not_qualified")
     if sentiment.method is CollectionMethod.MANUAL_BROWSER:
-        reasons.append("manual_sentiment_not_unattended")
+        reasons.append(
+            "manual_sentiment_requires_attended_approval"
+            if attended
+            else "manual_sentiment_not_unattended"
+        )
 
     directional = verdict in {RegisteredVerdict.BUY, RegisteredVerdict.SELL}
     reference: Decimal | None = None
@@ -410,7 +417,15 @@ def build_registered_assessment(
     eligible = (
         directional
         and qualified
-        and sentiment.eligible_for_unattended_use
+        and (
+            sentiment.eligible_for_unattended_use
+            or (
+                attended
+                and sentiment.method is CollectionMethod.MANUAL_BROWSER
+                and sentiment.available
+                and sentiment.is_fresh(checked_at)
+            )
+        )
         and checked_at < expires
     )
     if directional and not eligible:

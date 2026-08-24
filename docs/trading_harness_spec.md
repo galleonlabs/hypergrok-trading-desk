@@ -1,6 +1,6 @@
 # Agent-Assisted Trading Harness Specification
 
-Status: Draft v0.3 — research implementation and disabled execution primitives
+Status: Draft v0.4 — research implementation and unqualified TESTNET execution boundary
 Decision date: 2026-08-24
 Upstream source: [`galleonlabs/hypergrok-trading-desk`](https://github.com/galleonlabs/hypergrok-trading-desk)
 Working fork: [`jawndiego/hypergrok-trading-desk`](https://github.com/jawndiego/hypergrok-trading-desk)
@@ -12,7 +12,7 @@ Current-main disposition matrix: [`hypergrok_audit_matrix.md`](hypergrok_audit_m
 
 Fork HyperGrok for provenance, operating procedures, role prompts, and Hyperliquid reference material. Do not treat it as the production execution foundation.
 
-The capital-bearing path will be implemented as a deterministic harness with typed interfaces, hard risk invariants, an isolated signer, durable state, independent reconciliation, and fault-tested recovery. Agents may research, validate theses, explain evidence, and draft proposals. Agents may not hold exchange credentials or directly mutate exchange state.
+The capital-bearing path is a deterministic TESTNET harness with typed interfaces, hard risk invariants, an isolated signer, durable state, independent reconciliation, and fault-tested recovery. It is not live-qualified. Agents may research, validate theses, explain evidence, and draft proposals. Agents may not hold exchange credentials or directly mutate exchange state.
 
 Use two trust zones inside the fork:
 
@@ -541,7 +541,12 @@ Generic cancel-all is forbidden while positions remain if it would remove protec
 
 Grants are capability-, environment-, account-, and thesis-version-specific, reversible, expiring, and recorded. Mainnet is never inferred from successful testnet operation. Testnet validates mechanics; it does not establish mainnet liquidity or execution quality. Infrastructure qualification may use synthetic strategies, but strategy-specific exchange activity requires the corresponding thesis and deployment grant.
 
-The current foundation implements only local `infrastructure_testnet` simulation admission and ships no venue adapter. Every strategy, shadow, mainnet, and systematic grant type is modeled for schema planning but must be rejected by persistence/admission until its evidence, governance, attestation, and execution milestones are implemented.
+The current foundation implements local `infrastructure_testnet` admission and
+an isolated Hyperliquid TESTNET writer/recovery boundary, but no live
+qualification or model-facing execution grant. Strategy-specific admission
+still requires a qualified profitability/shadow attestation. Every mainnet and
+systematic grant remains rejected until its evidence, governance, attestation,
+qualification, and deployment milestones are implemented.
 
 ## 9. Fork and Audit Plan
 

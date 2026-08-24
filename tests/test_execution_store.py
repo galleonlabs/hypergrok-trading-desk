@@ -13,6 +13,7 @@ import unittest
 import trading_harness.execution_store as execution_store_module
 
 from trading_harness.analysis import TechnicalBias, TechnicalSnapshot
+from trading_harness.canonical import canonical_json, domain_hash
 from trading_harness.assessment import (
     ProfitabilityGate,
     ProfitabilityStatus,
@@ -30,7 +31,11 @@ from trading_harness.execution_store import (
     DispatchPreflight,
     ExecutionStore,
     LegReconciliation,
+    NoopFenceResponseEvidence,
+    RecoveryPermit,
+    RecoveryReconciliationProof,
     SignedEnvelopeEvidence,
+    SignedRecoveryEvidence,
     TransportOutcomeEvidence,
     TrustedApproval,
     VenueFill,
@@ -370,7 +375,11 @@ class ExecutionStoreTestCase(unittest.TestCase):
             command_id=command_id,
             attempt_id=attempt_id,
             signed_evidence_hash=signed.evidence_hash,
-            endpoint=signed.endpoint,
+            endpoint=getattr(
+                signed,
+                "endpoint",
+                "https://api.hyperliquid-testnet.xyz/exchange",
+            ),
             attempted_at_ms=int((NOW + timedelta(seconds=2)).timestamp() * 1_000),
             outcome=outcome,
             http_status=200 if outcome == "response_received" else None,
@@ -380,6 +389,169 @@ class ExecutionStoreTestCase(unittest.TestCase):
             send_count=1,
             retry_performed=False,
             venue_write_attempted=True,
+        )
+
+    def recovery_parent(
+        self,
+        *,
+        unknown: bool = False,
+        incident_id: str = "recovery-incident",
+    ):
+        if unknown:
+            self.prepare_unknown()
+        else:
+            self.admit_one()
+        incident = self.store.record_incident(
+            incident_id=incident_id,
+            command_id="command-1",
+            code="RECOVERY_REQUIRED",
+            severity="critical",
+            at=NOW + timedelta(seconds=5),
+        )
+        attempt = self.store.get_attempt("command-1") if unknown else None
+        return incident, attempt
+
+    def make_recovery_permit(
+        self,
+        *,
+        kind: str,
+        incident_id: str = "recovery-incident",
+        permit_id: str | None = None,
+        attempt=None,
+    ) -> RecoveryPermit:
+        if kind == "reduce_only_close":
+            recovery_material = {
+                "kind": kind,
+                "original_signed_position": "1",
+                "close_size": "1",
+                "action": {"type": "order"},
+            }
+        elif kind == "cancel_by_cloid":
+            recovery_material = {
+                "kind": kind,
+                "requests": [{"cloid": "0x" + "d" * 32}],
+                "action": {"type": "cancelByCloid"},
+            }
+        else:
+            recovery_material = {
+                "kind": kind,
+                "attempt_id": None if attempt is None else attempt.attempt_id,
+                "preflight_hash": None if attempt is None else attempt.preflight_hash,
+                "original_nonce": None if attempt is None else attempt.nonce,
+                "action": {"type": "noop"},
+            }
+        recovery_hash = domain_hash(
+            "trading-harness/hyperliquid-recovery-action/v1",
+            recovery_material,
+        )
+        return RecoveryPermit(
+            permit_id=permit_id or f"permit-{kind}",
+            token_hash=digest(f"token-{permit_id or kind}"),
+            parent_command_id="command-1",
+            incident_id=incident_id,
+            kind=kind,
+            environment=Environment.TESTNET,
+            account_id="testnet-account",
+            source_hash=digest(f"source-{kind}"),
+            preflight_hash=(None if attempt is None else attempt.preflight_hash),
+            recovery_hash=recovery_hash,
+            recovery_material=recovery_material,
+            safety_policy_hash=digest("account-safety-policy"),
+            original_attempt_id=(None if attempt is None else attempt.attempt_id),
+            original_nonce=(None if attempt is None else attempt.nonce),
+            issuer_id="safety-authority",
+            audience="recovery-worker",
+            issued_at=NOW + timedelta(seconds=6),
+            expires_at=NOW + timedelta(seconds=16),
+        )
+
+    def queue_recovery_fixture(
+        self,
+        *,
+        kind: str = "reduce_only_close",
+        unknown: bool = False,
+        incident_id: str = "recovery-incident",
+        recovery_command_id: str | None = None,
+    ):
+        incident, attempt = self.recovery_parent(
+            unknown=unknown, incident_id=incident_id
+        )
+        permit = self.make_recovery_permit(
+            kind=kind, incident_id=incident_id, attempt=attempt
+        )
+        self.store.register_recovery_permit(permit)
+        command = self.store.queue_recovery(
+            recovery_command_id=(
+                recovery_command_id or f"recovery-command-{kind}"
+            ),
+            permit_id=permit.permit_id,
+            token_hash=permit.token_hash,
+            audience=permit.audience,
+            at=NOW + timedelta(seconds=7),
+        )
+        return incident, permit, command
+
+    def make_signed_recovery(
+        self,
+        command,
+        *,
+        signing_authority_hash: str,
+        nonce: int = 888,
+    ) -> SignedRecoveryEvidence:
+        return SignedRecoveryEvidence(
+            recovery_command_id=command.recovery_command_id,
+            incident_id=command.incident_id,
+            kind=command.kind,
+            source_hash=command.source_hash,
+            recovery_hash=command.recovery_hash,
+            signing_authority_hash=signing_authority_hash,
+            safety_policy_hash=command.safety_policy_hash,
+            nonce=nonce,
+            wire_hash=digest(f"wire-{command.recovery_command_id}"),
+            action_hash=digest(f"action-{command.recovery_command_id}"),
+            signature_hash=digest("recovery-signature"),
+            envelope_hash=digest("recovery-envelope"),
+            signer_binding_hash=digest("recovery-signer-binding"),
+            expires_after_ms=int(
+                (NOW + timedelta(seconds=15)).timestamp() * 1_000
+            ),
+            signed_at_ms=int((NOW + timedelta(seconds=8)).timestamp() * 1_000),
+        )
+
+    def make_recovery_proof(
+        self,
+        command,
+        *,
+        observed_at: datetime,
+        complete: bool,
+        success: bool,
+    ) -> RecoveryReconciliationProof:
+        affected = (
+            ("0x" + "d" * 32,)
+            if command.kind == "cancel_by_cloid"
+            else ()
+        )
+        return RecoveryReconciliationProof(
+            recovery_command_id=command.recovery_command_id,
+            kind=command.kind,
+            account_snapshot_hash=digest(
+                f"recovery-account-{command.recovery_command_id}-{observed_at}"
+            ),
+            observed_at=observed_at,
+            signed_position_quantity=Decimal("0"),
+            protected_quantity=Decimal("0"),
+            open_order_cloids=(),
+            affected_cloids=affected,
+            resolved_original_nonce=(
+                command.original_nonce
+                if command.kind == "noop_fence" and success
+                else None
+            ),
+            resolved_original_outcome=(
+                "fenced" if command.kind == "noop_fence" and success else None
+            ),
+            complete=complete,
+            success=success,
         )
 
 
@@ -411,7 +583,7 @@ class MigrationAndIdentityTests(ExecutionStoreTestCase):
             }
         finally:
             connection.close()
-        self.assertEqual([1, 2, 3], [row[0] for row in migrations])
+        self.assertEqual([1, 2, 3, 4, 5], [row[0] for row in migrations])
         self.assertTrue(all(len(row[1]) == 64 for row in migrations))
         self.assertIn("commands", tables)
         self.assertIn("execution_commands", tables)
@@ -551,7 +723,7 @@ class MigrationAndIdentityTests(ExecutionStoreTestCase):
             ).fetchone()
         finally:
             connection.close()
-        self.assertEqual([1, 2, 3], versions)
+        self.assertEqual([1, 2, 3, 4, 5], versions)
         self.assertIn("preflight_hash", columns)
         self.assertIn("signed_evidence_hash", columns)
         self.assertIn("transport_evidence_hash", columns)
@@ -1497,6 +1669,460 @@ class ResponseAndReconciliationTests(ExecutionStoreTestCase):
         )
         self.assertEqual("closed", closed.state)
         self.assertTrue(self.store.verify_event_chain())
+
+
+class RecoveryLifecycleTests(ExecutionStoreTestCase):
+    def test_expired_queued_recovery_terminalizes_unsent_and_allows_replacement(self) -> None:
+        incident, permit, command = self.queue_recovery_fixture()
+
+        claimed = self.store.claim_next_recovery(
+            "late-worker",
+            at=permit.expires_at,
+            lease_seconds=10,
+        )
+
+        self.assertIsNone(claimed)
+        self.assertEqual(
+            "terminal",
+            self.store.get_recovery_command(command.recovery_command_id).state,
+        )
+        self.assertEqual(
+            "terminal",
+            self.store.get_recovery_outbox(command.recovery_command_id).state,
+        )
+        with self.assertRaises(RecordNotFound):
+            self.store.get_recovery_attempt(command.recovery_command_id)
+        self.assertEqual("open", self.store.list_incidents("command-1")[0].state)
+
+        replacement = self.make_recovery_permit(
+            kind="reduce_only_close",
+            incident_id=incident.incident_id,
+            permit_id="replacement-close-permit",
+        )
+        replacement = replace(
+            replacement,
+            issued_at=permit.expires_at,
+            expires_at=permit.expires_at + timedelta(seconds=10),
+        )
+        self.store.register_recovery_permit(replacement)
+        queued = self.store.queue_recovery(
+            recovery_command_id="replacement-close-command",
+            permit_id=replacement.permit_id,
+            token_hash=replacement.token_hash,
+            audience=replacement.audience,
+            at=permit.expires_at + timedelta(milliseconds=1),
+        )
+        self.assertEqual("queued", queued.state)
+
+    def test_permit_is_single_use_exact_and_recovery_blocks_entry_dispatch(self) -> None:
+        _, permit, command = self.queue_recovery_fixture()
+        self.assertEqual("consumed", self.store.get_recovery_permit_state(permit.permit_id))
+        self.assertEqual("queued", command.state)
+        with self.assertRaises(StateConflict):
+            self.store.claim_next(
+                "entry-dispatcher",
+                at=NOW + timedelta(seconds=8),
+                lease_seconds=5,
+            )
+        with self.assertRaises(AdmissionDenied):
+            self.store.queue_recovery(
+                recovery_command_id="replay-recovery",
+                permit_id=permit.permit_id,
+                token_hash=permit.token_hash,
+                audience=permit.audience,
+                at=NOW + timedelta(seconds=8),
+            )
+
+    def test_permit_rejects_foreign_expired_and_noncritical_incident(self) -> None:
+        self.admit_one()
+        warning = self.store.record_incident(
+            incident_id="warning-incident",
+            command_id="command-1",
+            code="WARNING",
+            severity="warning",
+            at=NOW + timedelta(seconds=5),
+        )
+        permit = self.make_recovery_permit(
+            kind="reduce_only_close", incident_id=warning.incident_id
+        )
+        with self.assertRaises(StateConflict):
+            self.store.register_recovery_permit(permit)
+        critical = self.store.record_incident(
+            incident_id="critical-incident",
+            command_id="command-1",
+            code="CRITICAL",
+            severity="critical",
+            at=NOW + timedelta(seconds=5),
+        )
+        foreign = replace(
+            self.make_recovery_permit(
+                kind="reduce_only_close", incident_id=critical.incident_id
+            ),
+            account_id="foreign-account",
+        )
+        with self.assertRaises(ValidationError):
+            self.store.register_recovery_permit(foreign)
+        expired = replace(
+            self.make_recovery_permit(
+                kind="reduce_only_close",
+                incident_id=critical.incident_id,
+                permit_id="expired-permit",
+            ),
+            issued_at=NOW + timedelta(seconds=5),
+            expires_at=NOW + timedelta(seconds=6),
+        )
+        self.store.register_recovery_permit(expired)
+        with self.assertRaises(AdmissionDenied) as caught:
+            self.store.queue_recovery(
+                recovery_command_id="expired-recovery",
+                permit_id=expired.permit_id,
+                token_hash=expired.token_hash,
+                audience=expired.audience,
+                at=NOW + timedelta(seconds=6),
+            )
+        self.assertEqual("RECOVERY_PERMIT_EXPIRED", caught.exception.code)
+
+    def test_recovery_commands_are_serialized_account_wide(self) -> None:
+        self.admit_one()
+        incidents = []
+        for value in ("close", "cancel"):
+            incidents.append(
+                self.store.record_incident(
+                    incident_id=f"incident-{value}",
+                    command_id="command-1",
+                    code=f"RECOVERY_{value.upper()}",
+                    severity="critical",
+                    at=NOW + timedelta(seconds=5),
+                )
+            )
+        close = self.make_recovery_permit(
+            kind="reduce_only_close",
+            incident_id=incidents[0].incident_id,
+            permit_id="permit-close",
+        )
+        cancel = self.make_recovery_permit(
+            kind="cancel_by_cloid",
+            incident_id=incidents[1].incident_id,
+            permit_id="permit-cancel",
+        )
+        self.store.register_recovery_permit(close)
+        command = self.store.queue_recovery(
+            recovery_command_id="recovery-close",
+            permit_id=close.permit_id,
+            token_hash=close.token_hash,
+            audience=close.audience,
+            at=NOW + timedelta(seconds=7),
+        )
+        self.assertEqual(2, command.priority)
+        self.store.register_recovery_permit(cancel)
+        with self.assertRaises(StateConflict):
+            self.store.queue_recovery(
+                recovery_command_id="recovery-cancel",
+                permit_id=cancel.permit_id,
+                token_hash=cancel.token_hash,
+                audience=cancel.audience,
+                at=NOW + timedelta(seconds=7),
+            )
+
+    def test_unknown_attempt_requires_terminal_noop_before_close(self) -> None:
+        incident, attempt = self.recovery_parent(unknown=True)
+        assert attempt is not None
+        close = self.make_recovery_permit(
+            kind="reduce_only_close", incident_id=incident.incident_id
+        )
+        with self.assertRaises(StateConflict):
+            self.store.register_recovery_permit(close)
+        noop = self.make_recovery_permit(
+            kind="noop_fence", incident_id=incident.incident_id, attempt=attempt
+        )
+        self.store.register_recovery_permit(noop)
+        command = self.store.queue_recovery(
+            recovery_command_id="recovery-noop",
+            permit_id=noop.permit_id,
+            token_hash=noop.token_hash,
+            audience=noop.audience,
+            at=NOW + timedelta(seconds=7),
+        )
+        claim = self.store.claim_next_recovery(
+            "recovery-worker", at=NOW + timedelta(seconds=8), lease_seconds=10
+        )
+        assert claim is not None
+        signing_authority = self.store.require_recovery_signing_authority(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=8, milliseconds=1),
+        )
+        self.assertEqual(attempt.nonce, signing_authority.original_nonce)
+        wrong = self.make_signed_recovery(
+            command,
+            signing_authority_hash=signing_authority.authority_hash,
+            nonce=attempt.nonce + 1,
+        )
+        with self.assertRaises(StateConflict):
+            self.store.prepare_recovery_attempt(
+                command.recovery_command_id,
+                "recovery-worker",
+                claim.fencing_token,
+                attempt_id="noop-attempt-wrong",
+                signed_evidence=wrong,
+                at=NOW + timedelta(seconds=9),
+            )
+        signed = self.make_signed_recovery(
+            command,
+            signing_authority_hash=signing_authority.authority_hash,
+            nonce=attempt.nonce,
+        )
+        recovery_attempt = self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="noop-attempt",
+            signed_evidence=signed,
+            at=NOW + timedelta(seconds=9),
+        )
+        submission_authority = self.store.require_recovery_submission_authority(
+            command.recovery_command_id,
+            recovery_attempt.attempt_id,
+            signed.evidence_hash,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=9, milliseconds=1),
+        )
+        self.assertEqual(signed.nonce, submission_authority.nonce)
+        noop_body = {"status": "ok", "response": {"type": "default"}}
+        noop_response_hash = domain_hash(
+            "trading-harness/hyperliquid-submission-response/v1",
+            noop_body,
+        )
+        transport = self.make_transport_evidence(
+            recovery_attempt.attempt_id,
+            signed,
+            command_id=command.recovery_command_id,
+            outcome="response_received",
+            response_hash=noop_response_hash,
+        )
+        noop_response = NoopFenceResponseEvidence(
+            recovery_command_id=command.recovery_command_id,
+            attempt_id=recovery_attempt.attempt_id,
+            signed_evidence_hash=signed.evidence_hash,
+            transport_evidence_hash=transport.evidence_hash,
+            nonce=signed.nonce,
+            response_json=canonical_json(noop_body),
+            response_hash=noop_response_hash,
+            parsed_at=NOW + timedelta(seconds=10),
+        )
+        self.store.record_recovery_outcome(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            transport_evidence=transport,
+            noop_response=noop_response,
+            at=NOW + timedelta(seconds=10),
+        )
+        self.assertEqual(
+            noop_response,
+            self.store.get_noop_fence_response(command.recovery_command_id),
+        )
+        recon_claim = self.store.claim_recovery_reconciliation(
+            command.recovery_command_id,
+            "reconciler",
+            at=NOW + timedelta(seconds=11),
+            lease_seconds=10,
+        )
+        self.store.reconcile_recovery(
+            command.recovery_command_id,
+            "reconciler",
+            recon_claim.fencing_token,
+            reconciliation_id="noop-reconciliation",
+            proof=self.make_recovery_proof(
+                command,
+                observed_at=NOW + timedelta(seconds=12),
+                complete=True,
+                success=True,
+            ),
+            incident_resolution=None,
+        )
+        close_after_fence = replace(
+            close,
+            permit_id="permit-close-after-fence",
+            token_hash=digest("close-after-fence"),
+        )
+        self.store.register_recovery_permit(close_after_fence)
+
+    def test_recovery_attempt_response_and_reconciliation_retain_parent_risk(self) -> None:
+        incident, permit, command = self.queue_recovery_fixture()
+        claim = self.store.claim_next_recovery(
+            "recovery-worker", at=NOW + timedelta(seconds=8), lease_seconds=10
+        )
+        assert claim is not None
+        signing_authority = self.store.require_recovery_signing_authority(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=8, milliseconds=1),
+        )
+        self.assertEqual(command.recovery_hash, signing_authority.recovery_hash)
+        with self.assertRaises(StateConflict):
+            self.store.require_recovery_signing_authority(
+                command.recovery_command_id,
+                "recovery-worker",
+                claim.fencing_token,
+                at=NOW + timedelta(seconds=8, milliseconds=2),
+            )
+        signed = self.make_signed_recovery(
+            command,
+            signing_authority_hash=signing_authority.authority_hash,
+        )
+        attempt = self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="recovery-attempt",
+            signed_evidence=signed,
+            at=NOW + timedelta(seconds=9),
+        )
+        self.store.require_recovery_submission_authority(
+            command.recovery_command_id,
+            attempt.attempt_id,
+            signed.evidence_hash,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=9, milliseconds=1),
+        )
+        with self.assertRaises(StateConflict):
+            self.store.require_recovery_submission_authority(
+                command.recovery_command_id,
+                attempt.attempt_id,
+                signed.evidence_hash,
+                "recovery-worker",
+                claim.fencing_token,
+                at=NOW + timedelta(seconds=9, milliseconds=2),
+            )
+        transport = self.make_transport_evidence(
+            attempt.attempt_id,
+            signed,
+            command_id=command.recovery_command_id,
+            outcome="response_received",
+            response_hash=digest("recovery-response"),
+        )
+        state = self.store.record_recovery_outcome(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            transport_evidence=transport,
+            at=NOW + timedelta(seconds=10),
+        )
+        self.assertEqual("reconciling", state.state)
+        self.assertEqual(
+            transport,
+            self.store.get_recovery_transport_evidence(
+                command.recovery_command_id
+            ),
+        )
+        recon_claim = self.store.claim_recovery_reconciliation(
+            command.recovery_command_id,
+            "reconciler",
+            at=NOW + timedelta(seconds=11),
+            lease_seconds=10,
+        )
+        incomplete = self.store.reconcile_recovery(
+            command.recovery_command_id,
+            "reconciler",
+            recon_claim.fencing_token,
+            reconciliation_id="recovery-incomplete",
+            proof=self.make_recovery_proof(
+                command,
+                observed_at=NOW + timedelta(seconds=12),
+                complete=False,
+                success=False,
+            ),
+            incident_resolution=None,
+        )
+        self.assertEqual("reconciling", incomplete.state)
+        adversarial = replace(
+            self.make_recovery_proof(
+                command,
+                observed_at=NOW + timedelta(seconds=12, milliseconds=500),
+                complete=True,
+                success=True,
+            ),
+            signed_position_quantity=Decimal("999"),
+            proof_hash="",
+        )
+        with self.assertRaises(StateConflict):
+            self.store.reconcile_recovery(
+                command.recovery_command_id,
+                "reconciler",
+                recon_claim.fencing_token,
+                reconciliation_id="recovery-adversarial",
+                proof=adversarial,
+                incident_resolution=None,
+            )
+        terminal = self.store.reconcile_recovery(
+            command.recovery_command_id,
+            "reconciler",
+            recon_claim.fencing_token,
+            reconciliation_id="recovery-complete",
+            proof=self.make_recovery_proof(
+                command,
+                observed_at=NOW + timedelta(seconds=13),
+                complete=True,
+                success=True,
+            ),
+            incident_resolution="contained",
+        )
+        self.assertEqual("terminal", terminal.state)
+        self.assertEqual("contained", self.store.list_incidents("command-1")[0].state)
+        self.assertGreater(self.store.get_reserved_exposure()[0], Decimal("0"))
+        self.assertEqual("consumed", self.store.get_recovery_permit_state(permit.permit_id))
+
+    def test_recovery_crash_after_prepare_becomes_unknown_without_retry(self) -> None:
+        _, _, command = self.queue_recovery_fixture()
+        claim = self.store.claim_next_recovery(
+            "recovery-worker", at=NOW + timedelta(seconds=8), lease_seconds=5
+        )
+        assert claim is not None
+        signing_authority = self.store.require_recovery_signing_authority(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=8, milliseconds=1),
+        )
+        signed = self.make_signed_recovery(
+            command,
+            signing_authority_hash=signing_authority.authority_hash,
+        )
+        self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="recovery-attempt",
+            signed_evidence=signed,
+            at=NOW + timedelta(seconds=9),
+        )
+        self.assertIsNone(
+            self.store.claim_next_recovery(
+                "replacement", at=NOW + timedelta(seconds=14), lease_seconds=5
+            )
+        )
+        self.assertEqual(
+            "submitted_unknown",
+            self.store.get_recovery_command(command.recovery_command_id).state,
+        )
+        self.assertEqual(
+            "unknown",
+            self.store.get_recovery_attempt(command.recovery_command_id).state,
+        )
+        with self.assertRaises(StateConflict):
+            self.store.prepare_recovery_attempt(
+                command.recovery_command_id,
+                "recovery-worker",
+                claim.fencing_token,
+                attempt_id="retry",
+                signed_evidence=signed,
+                at=NOW + timedelta(seconds=14),
+            )
 
 
 class TamperDetectionTests(ExecutionStoreTestCase):

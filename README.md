@@ -1,15 +1,16 @@
 # Trading Harness
 
-> **LIVE TRADING IS NOT ENABLED.** The repository now contains reviewed paper,
-> wire, signer, nonce, transport, account-read and reconciliation primitives,
-> but no Codex/MCP tool or default runtime can sign or submit an order.
+> **NO LIVE ACCOUNT IS CONFIGURED OR QUALIFIED.** The repository contains an
+> armed, TESTNET-only execution boundary, but no Codex/MCP tool can reach it
+> and mainnet is compiled off.  Invoking the isolated worker with a provisioned
+> API wallet can submit real Hyperliquid testnet actions.
 
 This fork is becoming a Codex-first, agent-runtime-neutral trading desk for
 Hyperliquid. It can track an asset, ingest completed candles, calculate
 deterministic TA, record sourced sentiment evidence, classify the registered
 setup as buy/sell/nothing/unavailable, and evaluate a strategy after costs.
-Capital-bearing actions remain behind a separate, unfinished qualification
-path.
+Capital-bearing actions remain behind a separate local approval, isolated
+credential, and live-qualification path.
 
 Profitability is a revocable evidence gate, not a product promise. The first
 registered ETH strategy was tested honestly and rejected; the harness will
@@ -23,20 +24,22 @@ abstain instead of relabelling a failed backtest as an opportunity.
 | Local asset registry and always-on research node | Implemented; credential-free |
 | Descriptive EMA/RSI/ATR TA | Implemented; research only |
 | Registered EMA/Donchian/ATR buy/sell/nothing signal | Implemented |
-| Manual X sentiment evidence | Implemented for explicit browser research; never unattended |
+| Manual X sentiment evidence | Implemented for explicit browser research; attended approval only |
 | Unattended sentiment | Requires an official X API or compliant provider |
 | Costed historical validation and prospective shadow ledger | Implemented |
 | Mandatory-stop risk ticket and exact three-leg plan | Implemented |
 | Local paper OMS/protection watchdog | Implemented |
-| Approval/reservation/outbox/preflight/dispatcher persistence | Implemented; not exposed |
-| Read-only account/metadata/reconciliation | Implemented |
-| Hyperliquid exact wire, durable nonce, isolated signing and one-shot entry transport | Implemented as disabled primitives |
-| Reduce-only close/cancel/noop recovery | Typed and signer-tested, but public signing/submission hard-disabled until durable recovery outbox exists |
-| Live Hyperliquid testnet | **Not qualified or enabled** |
-| Live Hyperliquid mainnet | **Disabled** |
+| Approval/reservation/outbox/preflight/dispatcher persistence | Implemented; local isolated boundary, not MCP |
+| Read-only account/metadata/reconciliation | Implemented with typed, hash-checked coordinators |
+| Hyperliquid exact wire, durable nonce, isolated signing and one-shot entry transport | Implemented and armed for TESTNET only |
+| Reduce-only close/cancel/same-nonce recovery | Implemented with durable permit, outbox, dispatch and reconciliation |
+| Isolated credential provider | macOS Keychain reader implemented; no env/file key loader |
+| Live Hyperliquid testnet | **Code armed; no account configured; not live-qualified** |
+| Live Hyperliquid mainnet | **Hard-disabled in store, signer and transport** |
 
-The only shipped default executor remains disabled. Environment variables
-cannot turn venue writes on.
+The research/MCP executor remains disabled. Environment variables cannot turn
+venue writes on. The TESTNET signer is reachable only through the separate
+durable execution path with an exact account, policy, permit and claim.
 
 ## Honest strategy result
 
@@ -79,7 +82,7 @@ mandatory-stop risk ticket (not trade authority)
 trusted local approval + atomic execution store (not MCP/chat)
         |
         v
-isolated signer process + one-shot transport (disabled pending testnet)
+isolated signer process + one-shot TESTNET transport
         |
         v
 independent reconciliation + protection watchdog
@@ -117,7 +120,8 @@ Manual X research uses the user's visible signed-in browser session only for
 an explicit request. X forbids non-API website scripting, so the always-on node
 does not automate the website. It stores post IDs/URLs/hashes/timestamps and
 bounded polarity—not raw text, cookies, or tokens—and marks the result
-unusable for unattended trading.
+unusable for unattended trading. It may support a fresh, attended risk quote,
+but the exact ticket still requires the separate local approval authority.
 
 OpenCode consumes the same plugin tools and byte-identical skill mirror through
 [`opencode.json`](opencode.json). Its local research writes require review;
@@ -176,7 +180,7 @@ the local server has no user-authentication layer. ChatGPT requires a reviewed
 authenticated HTTPS deployment or secure tunnel; doing that still does not
 enable exchange writes.
 
-### Execution development only
+### Isolated TESTNET execution environment
 
 The isolated signing boundary lazily accepts exactly the official
 `hyperliquid-python-sdk==0.24.0`:
@@ -187,10 +191,23 @@ source .venv-execution/bin/activate
 python -m pip install -e '.[execution]'
 ```
 
-No key loader is included. A wallet object must be injected by a separate OS
-identity/process, and testnet/mainnet require separate accounts, API wallets,
-databases, policies and qualification. Installing the extra does not enable a
-venue path.
+The isolated process can load one expected API-wallet key from macOS Keychain;
+it rejects environment variables and plaintext key files and verifies the
+derived signer address. Use a dedicated non-login OS identity so the
+research/MCP/Codex identity cannot read that Keychain item. Installing the
+extra alone does not configure an account or invoke a venue write.
+
+The execution path now includes:
+
+- live account/book send-time preflight and exact three-leg entry construction;
+- persist-before-send entry and recovery dispatchers with one-shot transport;
+- HMAC-authenticated testnet approvals and short-lived recovery permits;
+- reduce-only close, role-aware cancel and same-original-nonce fencing;
+- canonical noop response persistence and restart-safe reconciliation;
+- automatic risk release only after a fresh flat, terminal account proof.
+
+There is intentionally no execution MCP tool. A chat message is not a trusted
+approval, and the model process never receives the wallet object.
 
 ## Testnet before mainnet
 

@@ -15,13 +15,15 @@ Run the research node under a dedicated, non-administrator OS identity. That
 identity may read the installed application and write only its research state
 and log directories. It must not have a Hyperliquid private key, API wallet,
 X bearer token, browser profile, approval key, signer socket, shell startup
-file containing credentials, or access to a future execution database.
+file containing credentials, or access to the execution database.
 
-The future signer/executor is a separate deployment, not another argument to
-this service. Provision it under a different non-login OS identity with its
-own reviewed binary, state directory, credential boundary, egress policy and
-service definition. ChatGPT, Codex, OpenCode, the MCP process and the research
-node must not be members of the signer's credential group.
+The TESTNET signer/executor is a separate deployment, not another argument to
+this service. Its code boundary exists, but its supervisor definition is
+withheld until live qualification. Provision it under a different non-login
+OS identity with its own reviewed binary, state directory, credential
+boundary, egress policy and service definition. ChatGPT, Codex, OpenCode, the
+MCP process and the research node must not be members of the signer's
+credential group.
 
 Testnet and mainnet execution must use separate:
 
@@ -32,7 +34,7 @@ Testnet and mainnet execution must use separate:
 - state, logs, monitoring and incident records.
 
 Do not select mainnet with an environment variable such as `NETWORK=mainnet`
-or by editing the research service. A future execution service must bind its
+or by editing the research service. The execution service must bind its
 network, account, database and signer identity in a separately reviewed,
 environment-specific configuration and deployment grant. Success on testnet
 does not authorize mainnet.
@@ -123,7 +125,7 @@ session data.
 
 For this macOS layout, use a local state path such as
 `/var/db/trading-desk/research/research.sqlite3` and a log directory such as
-`/var/log/trading-desk/research`. Do not share either with a future signer.
+`/var/log/trading-desk/research`. Do not share either with the isolated executor.
 
 ## Linux/systemd alternative
 
@@ -192,7 +194,7 @@ sqlite3 /absolute/backup/research-YYYYMMDDTHHMMSSZ.sqlite3 "PRAGMA integrity_che
 
 `PRAGMA integrity_check` must return `ok`. Store backups outside the live state
 directory with access limited to the research backup operator. Do not put
-future signer keys, authorization tokens or browser/X credentials in this
+executor keys, authorization tokens or browser/X credentials in this
 backup set.
 
 For a restore drill: stop the service, preserve the failed database and WAL
@@ -230,7 +232,8 @@ recovery technique.
 This deployment proves only that the read-only research node can run and
 recover continuously. Paper profitability, Hyperliquid testnet mechanics and
 mainnet canary authority are separate gates. Do not add a private key or an
-execution command to either example template. When a signer is eventually
-qualified, deploy it under the separately reviewed identity and storage model
-described above, with testnet and mainnet remaining physically and logically
-separate.
+execution command to either research template. The isolated TESTNET worker
+uses its own execution/nonce databases and macOS Keychain item; install a
+service definition for it only after the live checklist in
+`docs/testnet_qualification.md` passes. Mainnet remains a separate future
+deployment and is hard-disabled in this build.

@@ -143,6 +143,23 @@ class RegisteredAssessmentTests(unittest.TestCase):
         self.assertFalse(manual.eligible_for_risk_quote)
         self.assertIn("manual_sentiment_not_unattended", manual.reason_codes)
 
+        attended = build_registered_assessment(
+            assessment_id="manual-attended",
+            asset_id="ETH-PERP",
+            signal=SIGNAL,
+            sentiment=sentiment(method=CollectionMethod.MANUAL_BROWSER),
+            profitability=attestation(),
+            at=AT,
+            attended=True,
+        )
+        self.assertIs(attended.verdict, RegisteredVerdict.BUY)
+        self.assertTrue(attended.eligible_for_risk_quote)
+        self.assertFalse(attended.eligible_to_trade)
+        self.assertIn(
+            "manual_sentiment_requires_attended_approval",
+            attended.reason_codes,
+        )
+
     def test_opposing_sentiment_vetoes_and_removes_bracket(self) -> None:
         result = build_registered_assessment(
             assessment_id="veto",

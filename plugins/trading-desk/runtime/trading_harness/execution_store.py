@@ -59,6 +59,19 @@ _COMMAND_STATES = frozenset(
 )
 _OUTBOX_STATES = _COMMAND_STATES
 _ATTEMPT_STATES = frozenset({"prepared", "response_received", "unknown"})
+_RECOVERY_ATTEMPT_STATES = frozenset(
+    {"prepared", "sending", "response_received", "unknown"}
+)
+_RECOVERY_COMMAND_STATES = frozenset(
+    {
+        "queued",
+        "claimed",
+        "signing",
+        "submitted_unknown",
+        "reconciling",
+        "terminal",
+    }
+)
 _LEG_STATES = frozenset(
     {
         "queued",
@@ -82,6 +95,20 @@ _PROTECTION_STATES = frozenset(
 _INCIDENT_STATES = frozenset({"open", "contained", "closed"})
 _INCIDENT_SEVERITIES = frozenset({"warning", "high", "critical"})
 _MAX_PREFLIGHT_LIFETIME_SECONDS = 30
+_RECOVERY_KINDS = frozenset(
+    {"reduce_only_close", "cancel_by_cloid", "noop_fence"}
+)
+_RECOVERY_PRIORITY = {
+    "noop_fence": 0,
+    "cancel_by_cloid": 1,
+    "reduce_only_close": 2,
+}
+_MAX_RECOVERY_PERMIT_SECONDS = 15
+_SUBMISSION_RESPONSE_HASH_DOMAIN = (
+    "trading-harness/hyperliquid-submission-response/v1"
+)
+_NOOP_DEFAULT_RESPONSE = {"status": "ok", "response": {"type": "default"}}
+_NOOP_DEFAULT_RESPONSE_JSON = canonical_json(_NOOP_DEFAULT_RESPONSE)
 
 
 def _utc(value: datetime, *, field: str) -> datetime:
@@ -589,8 +616,232 @@ _SCHEMA_V3 = _Migration(
     ),
 )
 
-_MIGRATIONS = (_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3)
-EXECUTION_SCHEMA_VERSION = 3
+_SCHEMA_V4 = _Migration(
+    4,
+    "durable_recovery_commands",
+    (
+        """
+        CREATE TABLE execution_recovery_permits (
+            permit_id TEXT PRIMARY KEY,
+            token_hash TEXT NOT NULL UNIQUE,
+            parent_command_id TEXT NOT NULL REFERENCES execution_commands(command_id),
+            incident_id TEXT NOT NULL REFERENCES execution_incidents(incident_id),
+            kind TEXT NOT NULL CHECK (
+                kind IN ('reduce_only_close', 'cancel_by_cloid', 'noop_fence')
+            ),
+            environment TEXT NOT NULL CHECK (environment = 'testnet'),
+            account_id TEXT NOT NULL,
+            source_hash TEXT NOT NULL,
+            preflight_hash TEXT,
+            recovery_hash TEXT NOT NULL,
+            recovery_material_json TEXT NOT NULL,
+            recovery_material_hash TEXT NOT NULL,
+            safety_policy_hash TEXT NOT NULL,
+            original_attempt_id TEXT,
+            original_nonce INTEGER,
+            issuer_id TEXT NOT NULL,
+            audience TEXT NOT NULL,
+            issued_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('issued', 'consumed', 'revoked')),
+            recovery_command_id TEXT UNIQUE,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_recovery_commands (
+            recovery_command_id TEXT PRIMARY KEY,
+            permit_id TEXT NOT NULL UNIQUE REFERENCES execution_recovery_permits(permit_id),
+            parent_command_id TEXT NOT NULL REFERENCES execution_commands(command_id),
+            incident_id TEXT NOT NULL REFERENCES execution_incidents(incident_id),
+            kind TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            source_hash TEXT NOT NULL,
+            preflight_hash TEXT,
+            recovery_hash TEXT NOT NULL,
+            recovery_material_json TEXT NOT NULL,
+            recovery_material_hash TEXT NOT NULL,
+            safety_policy_hash TEXT NOT NULL,
+            original_attempt_id TEXT,
+            original_nonce INTEGER,
+            state TEXT NOT NULL CHECK (
+                state IN (
+                    'queued', 'claimed', 'signing', 'submitted_unknown',
+                    'reconciling', 'terminal'
+                )
+            ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            terminal_at TEXT,
+            revision INTEGER NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_recovery_outbox (
+            recovery_command_id TEXT PRIMARY KEY
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            state TEXT NOT NULL CHECK (
+                state IN (
+                    'queued', 'claimed', 'signing', 'submitted_unknown',
+                    'reconciling', 'terminal'
+                )
+            ),
+            worker_id TEXT,
+            fencing_token INTEGER NOT NULL,
+            claimed_at TEXT,
+            lease_expires_at TEXT,
+            current_attempt_id TEXT,
+            attempt_count INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_signed_recovery_evidence (
+            evidence_hash TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            incident_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            source_hash TEXT NOT NULL,
+            recovery_hash TEXT NOT NULL,
+            signing_authority_hash TEXT NOT NULL,
+            safety_policy_hash TEXT NOT NULL,
+            nonce INTEGER NOT NULL,
+            wire_hash TEXT NOT NULL,
+            action_hash TEXT NOT NULL,
+            signature_hash TEXT NOT NULL,
+            envelope_hash TEXT NOT NULL,
+            signer_binding_hash TEXT NOT NULL,
+            expires_after_ms INTEGER NOT NULL,
+            signed_at_ms INTEGER NOT NULL,
+            recorded_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_recovery_signing_authorities (
+            authority_hash TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            worker_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            issued_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_recovery_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            worker_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            signed_evidence_hash TEXT NOT NULL
+                REFERENCES execution_signed_recovery_evidence(evidence_hash),
+            transport_evidence_hash TEXT,
+            nonce INTEGER NOT NULL,
+            action_hash TEXT NOT NULL,
+            wire_hash TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (
+                state IN ('prepared', 'sending', 'response_received', 'unknown')
+            ),
+            prepared_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_recovery_transport_evidence (
+            evidence_hash TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            attempt_id TEXT NOT NULL UNIQUE REFERENCES execution_recovery_attempts(attempt_id),
+            signed_evidence_hash TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            attempted_at_ms INTEGER NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN ('response_received', 'unknown')),
+            http_status INTEGER,
+            detail_code TEXT NOT NULL,
+            response_hash TEXT,
+            transport_attempt_hash TEXT,
+            send_count INTEGER,
+            retry_performed INTEGER NOT NULL CHECK (retry_performed = 0),
+            venue_write_attempted INTEGER,
+            evidence_basis TEXT NOT NULL CHECK (
+                evidence_basis IN ('transport_result', 'claim_expiry')
+            ),
+            recorded_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE execution_recovery_reconciliations (
+            reconciliation_id TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            account_snapshot_hash TEXT NOT NULL,
+            success INTEGER NOT NULL CHECK (success IN (0, 1)),
+            complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+            incident_resolution TEXT CHECK (
+                incident_resolution IN ('contained', 'closed')
+            ),
+            observed_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_execution_recovery_priority
+        ON execution_recovery_outbox (state, recovery_command_id)
+        """,
+    ),
+)
+
+_SCHEMA_V5 = _Migration(
+    5,
+    "durable_noop_fence_response",
+    (
+        """
+        CREATE TABLE execution_noop_fence_responses (
+            evidence_hash TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            attempt_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_attempts(attempt_id),
+            signed_evidence_hash TEXT NOT NULL,
+            transport_evidence_hash TEXT NOT NULL UNIQUE
+                REFERENCES execution_recovery_transport_evidence(evidence_hash),
+            nonce INTEGER NOT NULL CHECK (nonce >= 0),
+            response_json TEXT NOT NULL,
+            response_hash TEXT NOT NULL,
+            parsed_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+    ),
+)
+
+_MIGRATIONS = (
+    _SCHEMA_V1,
+    _SCHEMA_V2,
+    _SCHEMA_V3,
+    _SCHEMA_V4,
+    _SCHEMA_V5,
+)
+EXECUTION_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -873,6 +1124,486 @@ class TransportOutcomeEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class NoopFenceResponseEvidence:
+    """Durable proof that Hyperliquid accepted the exact same-nonce noop."""
+
+    recovery_command_id: str
+    attempt_id: str
+    signed_evidence_hash: str
+    transport_evidence_hash: str
+    nonce: int
+    response_json: str
+    response_hash: str
+    parsed_at: datetime
+    evidence_hash: str = ""
+
+    def __post_init__(self) -> None:
+        for field in ("recovery_command_id", "attempt_id"):
+            object.__setattr__(
+                self,
+                field,
+                _text(getattr(self, field), field=field, maximum=128),
+            )
+        for field in (
+            "signed_evidence_hash",
+            "transport_evidence_hash",
+            "response_hash",
+        ):
+            object.__setattr__(
+                self,
+                field,
+                _hash(getattr(self, field), field=field),
+            )
+        _nonnegative_int(self.nonce, field="nonce")
+        if self.response_json != _NOOP_DEFAULT_RESPONSE_JSON:
+            raise ValidationError(
+                "noop fence response must be the exact canonical default success"
+            )
+        expected_response_hash = domain_hash(
+            _SUBMISSION_RESPONSE_HASH_DOMAIN,
+            _NOOP_DEFAULT_RESPONSE,
+        )
+        if self.response_hash != expected_response_hash:
+            raise ValidationError("noop fence response hash differs from canonical body")
+        object.__setattr__(
+            self,
+            "parsed_at",
+            _utc(self.parsed_at, field="parsed_at"),
+        )
+        expected = _record_hash("noop-fence-response-evidence", self.payload())
+        if self.evidence_hash:
+            if _hash(self.evidence_hash, field="evidence_hash") != expected:
+                raise ValidationError("noop fence evidence hash differs")
+        object.__setattr__(self, "evidence_hash", expected)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "noop_fence_response_evidence.v1",
+            "recovery_command_id": self.recovery_command_id,
+            "attempt_id": self.attempt_id,
+            "signed_evidence_hash": self.signed_evidence_hash,
+            "transport_evidence_hash": self.transport_evidence_hash,
+            "nonce": self.nonce,
+            "response_json": self.response_json,
+            "response_hash": self.response_hash,
+            "parsed_at": _time_text(self.parsed_at, field="parsed_at"),
+        }
+
+    def as_dict(self) -> dict[str, object]:
+        return {**self.payload(), "evidence_hash": self.evidence_hash}
+
+
+@dataclass(frozen=True, slots=True)
+class NoopFenceResolution:
+    parent_command_id: str
+    recovery_command_id: str
+    incident_id: str
+    original_attempt_id: str
+    original_nonce: int
+    response_evidence_hash: str
+    proof_hash: str
+    account_snapshot_hash: str
+    observed_at: datetime
+    resolution_hash: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": "noop_fence_resolution.v1",
+            "parent_command_id": self.parent_command_id,
+            "recovery_command_id": self.recovery_command_id,
+            "incident_id": self.incident_id,
+            "original_attempt_id": self.original_attempt_id,
+            "original_nonce": self.original_nonce,
+            "response_evidence_hash": self.response_evidence_hash,
+            "proof_hash": self.proof_hash,
+            "account_snapshot_hash": self.account_snapshot_hash,
+            "observed_at": _time_text(self.observed_at, field="observed_at"),
+            "resolution_hash": self.resolution_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryPermit:
+    permit_id: str
+    token_hash: str
+    parent_command_id: str
+    incident_id: str
+    kind: str
+    environment: Environment
+    account_id: str
+    source_hash: str
+    preflight_hash: str | None
+    recovery_hash: str
+    recovery_material: Mapping[str, Any]
+    safety_policy_hash: str
+    original_attempt_id: str | None
+    original_nonce: int | None
+    issuer_id: str
+    audience: str
+    issued_at: datetime
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        for field, maximum in (
+            ("permit_id", 128),
+            ("parent_command_id", 128),
+            ("incident_id", 128),
+            ("account_id", 256),
+            ("issuer_id", 256),
+            ("audience", 256),
+        ):
+            object.__setattr__(
+                self, field, _text(getattr(self, field), field=field, maximum=maximum)
+            )
+        if self.kind not in _RECOVERY_KINDS:
+            raise ValidationError("recovery permit kind is invalid")
+        for field in (
+            "token_hash",
+            "source_hash",
+            "recovery_hash",
+            "safety_policy_hash",
+        ):
+            object.__setattr__(self, field, _hash(getattr(self, field), field=field))
+        if self.preflight_hash is not None:
+            object.__setattr__(
+                self,
+                "preflight_hash",
+                _hash(self.preflight_hash, field="preflight_hash"),
+            )
+        if not isinstance(self.recovery_material, Mapping):
+            raise TypeError("recovery_material must be a mapping")
+        material_json, _ = _canonical_payload(dict(self.recovery_material))
+        material = json.loads(material_json)
+        if not isinstance(material, dict):
+            raise ValidationError("recovery_material must encode an object")
+        if material.get("kind") != self.kind:
+            raise ValidationError("recovery material kind differs from permit")
+        if domain_hash(
+            "trading-harness/hyperliquid-recovery-action/v1", material
+        ) != self.recovery_hash:
+            raise ValidationError("recovery material hash differs from recovery_hash")
+        object.__setattr__(self, "recovery_material", material)
+        if not isinstance(self.environment, Environment):
+            try:
+                object.__setattr__(self, "environment", Environment(self.environment))
+            except (TypeError, ValueError) as error:
+                raise ValidationError("recovery permit environment is invalid") from error
+        if self.environment is not Environment.TESTNET:
+            raise ValidationError("recovery permits are testnet-only")
+        issued = _utc(self.issued_at, field="issued_at")
+        expires = _utc(self.expires_at, field="expires_at")
+        if not issued < expires <= issued + timedelta(
+            seconds=_MAX_RECOVERY_PERMIT_SECONDS
+        ):
+            raise ValidationError("recovery permit expiry is outside short bound")
+        object.__setattr__(self, "issued_at", issued)
+        object.__setattr__(self, "expires_at", expires)
+        if self.kind == "noop_fence":
+            if (
+                self.original_attempt_id is None
+                or self.original_nonce is None
+                or self.preflight_hash is None
+            ):
+                raise ValidationError(
+                    "noop permit requires original attempt, nonce, and preflight"
+                )
+            object.__setattr__(
+                self,
+                "original_attempt_id",
+                _text(
+                    self.original_attempt_id,
+                    field="original_attempt_id",
+                    maximum=128,
+                ),
+            )
+            _nonnegative_int(self.original_nonce, field="original_nonce")
+        elif self.original_attempt_id is not None or self.original_nonce is not None:
+            raise ValidationError("only noop permits bind an original attempt nonce")
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryCommand:
+    recovery_command_id: str
+    permit_id: str
+    parent_command_id: str
+    incident_id: str
+    kind: str
+    priority: int
+    source_hash: str
+    preflight_hash: str | None
+    recovery_hash: str
+    recovery_material_json: str
+    recovery_material_hash: str
+    safety_policy_hash: str
+    original_attempt_id: str | None
+    original_nonce: int | None
+    state: str
+    created_at: datetime
+    updated_at: datetime
+    terminal_at: datetime | None
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryOutbox:
+    recovery_command_id: str
+    state: str
+    worker_id: str | None
+    fencing_token: int
+    claimed_at: datetime | None
+    lease_expires_at: datetime | None
+    current_attempt_id: str | None
+    attempt_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryAttempt:
+    attempt_id: str
+    recovery_command_id: str
+    worker_id: str
+    fencing_token: int
+    signed_evidence_hash: str
+    transport_evidence_hash: str | None
+    nonce: int
+    action_hash: str
+    wire_hash: str
+    state: str
+    prepared_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RecoverySigningAuthority:
+    recovery_command_id: str
+    permit_id: str
+    parent_command_id: str
+    incident_id: str
+    kind: str
+    source_hash: str
+    preflight_hash: str | None
+    recovery_hash: str
+    safety_policy_hash: str
+    original_attempt_id: str | None
+    original_nonce: int | None
+    worker_id: str
+    fencing_token: int
+    permit_expires_at: datetime
+    lease_expires_at: datetime
+    authority_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecoverySubmissionAuthority:
+    recovery_command_id: str
+    attempt_id: str
+    signed_evidence_hash: str
+    nonce: int
+    action_hash: str
+    wire_hash: str
+    worker_id: str
+    fencing_token: int
+    lease_expires_at: datetime
+    authority_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryReconciliationProof:
+    recovery_command_id: str
+    kind: str
+    account_snapshot_hash: str
+    observed_at: datetime
+    signed_position_quantity: Decimal
+    protected_quantity: Decimal
+    open_order_cloids: tuple[str, ...]
+    affected_cloids: tuple[str, ...]
+    resolved_original_nonce: int | None
+    resolved_original_outcome: str | None
+    complete: bool
+    success: bool
+    proof_hash: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "recovery_command_id",
+            _text(
+                self.recovery_command_id,
+                field="recovery_command_id",
+                maximum=128,
+            ),
+        )
+        if self.kind not in _RECOVERY_KINDS:
+            raise ValidationError("recovery proof kind is invalid")
+        object.__setattr__(
+            self,
+            "account_snapshot_hash",
+            _hash(self.account_snapshot_hash, field="account_snapshot_hash"),
+        )
+        object.__setattr__(self, "observed_at", _utc(self.observed_at, field="observed_at"))
+        object.__setattr__(
+            self,
+            "signed_position_quantity",
+            _decimal(self.signed_position_quantity, field="signed_position_quantity"),
+        )
+        object.__setattr__(
+            self,
+            "protected_quantity",
+            _decimal(
+                self.protected_quantity,
+                field="protected_quantity",
+                nonnegative=True,
+            ),
+        )
+        for field in ("open_order_cloids", "affected_cloids"):
+            values = tuple(getattr(self, field))
+            if len(values) != len(set(values)):
+                raise ValidationError(f"{field} contains duplicates")
+            for value in values:
+                if (
+                    not isinstance(value, str)
+                    or len(value) != 34
+                    or not value.startswith("0x")
+                    or any(character not in _HASH_CHARS for character in value[2:])
+                ):
+                    raise ValidationError(f"{field} contains invalid CLOID")
+            object.__setattr__(self, field, tuple(sorted(values)))
+        if self.resolved_original_nonce is not None:
+            _nonnegative_int(
+                self.resolved_original_nonce, field="resolved_original_nonce"
+            )
+        if self.resolved_original_outcome not in {
+            None,
+            "accepted",
+            "rejected",
+            "absent",
+            "fenced",
+        }:
+            raise ValidationError("resolved_original_outcome is invalid")
+        if type(self.complete) is not bool or type(self.success) is not bool:
+            raise TypeError("complete and success must be bool")
+        if self.kind == "noop_fence" and self.success and (
+            self.resolved_original_nonce is None
+            or self.resolved_original_outcome is None
+        ):
+            raise ValidationError("successful noop proof must resolve original nonce")
+        if self.kind != "noop_fence" and (
+            self.resolved_original_nonce is not None
+            or self.resolved_original_outcome is not None
+        ):
+            raise ValidationError("only noop proof may resolve an original nonce")
+        if self.kind == "cancel_by_cloid" and self.success:
+            if not self.affected_cloids or set(self.affected_cloids) & set(
+                self.open_order_cloids
+            ):
+                raise ValidationError("cancel proof does not show affected CLOIDs absent")
+        expected = _record_hash("recovery-reconciliation-proof", self.payload())
+        if self.proof_hash:
+            if _hash(self.proof_hash, field="proof_hash") != expected:
+                raise ValidationError("recovery proof hash differs")
+        object.__setattr__(self, "proof_hash", expected)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "recovery_reconciliation_proof.v1",
+            "recovery_command_id": self.recovery_command_id,
+            "kind": self.kind,
+            "account_snapshot_hash": self.account_snapshot_hash,
+            "observed_at": _time_text(self.observed_at, field="observed_at"),
+            "signed_position_quantity": _decimal_text(
+                self.signed_position_quantity, field="signed_position_quantity"
+            ),
+            "protected_quantity": _decimal_text(
+                self.protected_quantity, field="protected_quantity"
+            ),
+            "open_order_cloids": list(self.open_order_cloids),
+            "affected_cloids": list(self.affected_cloids),
+            "resolved_original_nonce": self.resolved_original_nonce,
+            "resolved_original_outcome": self.resolved_original_outcome,
+            "complete": self.complete,
+            "success": self.success,
+        }
+
+    def as_dict(self) -> dict[str, object]:
+        return {**self.payload(), "proof_hash": self.proof_hash}
+
+
+@dataclass(frozen=True, slots=True)
+class SignedRecoveryEvidence:
+    recovery_command_id: str
+    incident_id: str
+    kind: str
+    source_hash: str
+    recovery_hash: str
+    signing_authority_hash: str
+    safety_policy_hash: str
+    nonce: int
+    wire_hash: str
+    action_hash: str
+    signature_hash: str
+    envelope_hash: str
+    signer_binding_hash: str
+    expires_after_ms: int
+    signed_at_ms: int
+    evidence_hash: str = ""
+
+    def __post_init__(self) -> None:
+        for field in ("recovery_command_id", "incident_id"):
+            object.__setattr__(
+                self,
+                field,
+                _text(getattr(self, field), field=field, maximum=128),
+            )
+        if self.kind not in _RECOVERY_KINDS:
+            raise ValidationError("signed recovery kind is invalid")
+        for field in (
+            "source_hash",
+            "recovery_hash",
+            "signing_authority_hash",
+            "safety_policy_hash",
+            "wire_hash",
+            "action_hash",
+            "signature_hash",
+            "envelope_hash",
+            "signer_binding_hash",
+        ):
+            object.__setattr__(self, field, _hash(getattr(self, field), field=field))
+        for field in ("nonce", "expires_after_ms", "signed_at_ms"):
+            _nonnegative_int(getattr(self, field), field=field)
+        if self.signed_at_ms >= self.expires_after_ms:
+            raise ValidationError("signed recovery evidence is already expired")
+        expected = _record_hash("signed-recovery-evidence", self.payload())
+        if self.evidence_hash:
+            if _hash(self.evidence_hash, field="evidence_hash") != expected:
+                raise ValidationError("signed recovery evidence hash differs")
+        object.__setattr__(self, "evidence_hash", expected)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "signed_recovery_evidence.v1",
+            "recovery_command_id": self.recovery_command_id,
+            "incident_id": self.incident_id,
+            "kind": self.kind,
+            "source_hash": self.source_hash,
+            "recovery_hash": self.recovery_hash,
+            "signing_authority_hash": self.signing_authority_hash,
+            "safety_policy_hash": self.safety_policy_hash,
+            "nonce": self.nonce,
+            "wire_hash": self.wire_hash,
+            "action_hash": self.action_hash,
+            "signature_hash": self.signature_hash,
+            "envelope_hash": self.envelope_hash,
+            "signer_binding_hash": self.signer_binding_hash,
+            "expires_after_ms": self.expires_after_ms,
+            "signed_at_ms": self.signed_at_ms,
+        }
+
+    def as_dict(self) -> dict[str, object]:
+        return {**self.payload(), "evidence_hash": self.evidence_hash}
+
+
+@dataclass(frozen=True, slots=True)
 class TrustedApproval:
     approval_id: str
     ticket_hash: str
@@ -1111,6 +1842,15 @@ _REQUIRED_TABLES = frozenset(
         "execution_dispatch_preflights",
         "execution_signed_envelopes",
         "execution_transport_outcomes",
+        "execution_recovery_permits",
+        "execution_recovery_commands",
+        "execution_recovery_outbox",
+        "execution_signed_recovery_evidence",
+        "execution_recovery_signing_authorities",
+        "execution_recovery_attempts",
+        "execution_recovery_transport_evidence",
+        "execution_noop_fence_responses",
+        "execution_recovery_reconciliations",
         "execution_reconciliations",
         "execution_fills",
         "execution_positions",
@@ -2152,6 +2892,16 @@ class ExecutionStore:
                     raise AdmissionDenied(
                         "ACCOUNT_CRITICAL_INCIDENT_ACTIVE",
                         "critical account incident blocks new risk",
+                    )
+                if connection.execute(
+                    """
+                    SELECT 1 FROM execution_recovery_commands
+                    WHERE state != 'terminal' LIMIT 1
+                    """
+                ).fetchone() is not None:
+                    raise AdmissionDenied(
+                        "ACCOUNT_RECOVERY_ACTIVE",
+                        "active recovery command blocks new risk",
                     )
                 active_command = connection.execute(
                     """
@@ -3655,6 +4405,13 @@ class ExecutionStore:
                 """
             ).fetchone() is not None:
                 raise StateConflict("critical account incident blocks new dispatch")
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_recovery_commands
+                WHERE state != 'terminal' LIMIT 1
+                """
+            ).fetchone() is not None:
+                return None
             if connection.execute(
                 """
                 SELECT 1 FROM execution_commands
@@ -5442,6 +6199,11 @@ class ExecutionStore:
             if row is None:
                 raise RecordNotFound("incident is not registered")
             current = self._incident_from_row(row)
+            if current.severity == "critical":
+                raise StateConflict(
+                    "critical incidents may transition only through complete "
+                    "recovery reconciliation"
+                )
             if current.revision != expected_revision:
                 raise StateConflict("incident compare-and-swap revision is stale")
             if current.state == "closed":
@@ -5597,6 +6359,2693 @@ class ExecutionStore:
             )
         return tuple(result)
 
+    # -- durable account-safety recovery commands --------------------
+
+    @staticmethod
+    def _recovery_permit_material(
+        permit: RecoveryPermit,
+        *,
+        state: str,
+        recovery_command_id: str | None,
+        updated_at: datetime,
+    ) -> dict[str, object]:
+        recovery_material_json, recovery_material_hash = _canonical_payload(
+            dict(permit.recovery_material)
+        )
+        return {
+            "permit_id": permit.permit_id,
+            "token_hash": permit.token_hash,
+            "parent_command_id": permit.parent_command_id,
+            "incident_id": permit.incident_id,
+            "kind": permit.kind,
+            "environment": permit.environment.value,
+            "account_id": permit.account_id,
+            "source_hash": permit.source_hash,
+            "preflight_hash": permit.preflight_hash,
+            "recovery_hash": permit.recovery_hash,
+            "recovery_material_json": recovery_material_json,
+            "recovery_material_hash": recovery_material_hash,
+            "safety_policy_hash": permit.safety_policy_hash,
+            "original_attempt_id": permit.original_attempt_id,
+            "original_nonce": permit.original_nonce,
+            "issuer_id": permit.issuer_id,
+            "audience": permit.audience,
+            "issued_at": _time_text(permit.issued_at, field="issued_at"),
+            "expires_at": _time_text(permit.expires_at, field="expires_at"),
+            "state": state,
+            "recovery_command_id": recovery_command_id,
+            "updated_at": _time_text(updated_at, field="updated_at"),
+        }
+
+    @classmethod
+    def _recovery_permit_from_row(cls, row: Mapping[str, Any]) -> RecoveryPermit:
+        permit = RecoveryPermit(
+            permit_id=str(row["permit_id"]),
+            token_hash=str(row["token_hash"]),
+            parent_command_id=str(row["parent_command_id"]),
+            incident_id=str(row["incident_id"]),
+            kind=str(row["kind"]),
+            environment=Environment(str(row["environment"])),
+            account_id=str(row["account_id"]),
+            source_hash=str(row["source_hash"]),
+            preflight_hash=(
+                None if row["preflight_hash"] is None else str(row["preflight_hash"])
+            ),
+            recovery_hash=str(row["recovery_hash"]),
+            recovery_material=json.loads(str(row["recovery_material_json"])),
+            safety_policy_hash=str(row["safety_policy_hash"]),
+            original_attempt_id=(
+                None
+                if row["original_attempt_id"] is None
+                else str(row["original_attempt_id"])
+            ),
+            original_nonce=(
+                None if row["original_nonce"] is None else int(row["original_nonce"])
+            ),
+            issuer_id=str(row["issuer_id"]),
+            audience=str(row["audience"]),
+            issued_at=_parse_time(row["issued_at"], field="permit issued_at"),
+            expires_at=_parse_time(row["expires_at"], field="permit expires_at"),
+        )
+        expected = _record_hash(
+            "recovery-permit",
+            cls._recovery_permit_material(
+                permit,
+                state=str(row["state"]),
+                recovery_command_id=(
+                    None
+                    if row["recovery_command_id"] is None
+                    else str(row["recovery_command_id"])
+                ),
+                updated_at=_parse_time(
+                    row["updated_at"], field="permit updated_at"
+                ),
+            ),
+        )
+        if _stored_hash(row["record_hash"], field="permit record_hash") != expected:
+            raise StorageError("persisted recovery permit hash does not match")
+        return permit
+
+    def register_recovery_permit(self, permit: RecoveryPermit) -> RecoveryPermit:
+        if not isinstance(permit, RecoveryPermit):
+            raise TypeError("permit must be RecoveryPermit")
+        if permit.environment is not self.environment or permit.account_id != self.account_id:
+            raise ValidationError("recovery permit scope differs from execution store")
+        with self._transaction() as connection:
+            incident_row = connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (permit.incident_id,),
+            ).fetchone()
+            if incident_row is None:
+                raise RecordNotFound("recovery permit incident is not persisted")
+            incident = self._incident_from_row(incident_row)
+            if (
+                incident.command_id != permit.parent_command_id
+                or incident.severity != "critical"
+                or incident.state != "open"
+            ):
+                raise StateConflict("recovery requires its bound open critical incident")
+            parent = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (permit.parent_command_id,),
+            ).fetchone()
+            if parent is None:
+                raise RecordNotFound("recovery parent command is missing")
+            self._command_from_row(parent)
+            parent_attempt = connection.execute(
+                "SELECT * FROM execution_attempts WHERE command_id = ?",
+                (permit.parent_command_id,),
+            ).fetchone()
+            unknown_attempt = False
+            if parent_attempt is not None:
+                unknown_attempt = (
+                    self._attempt_from_row(parent_attempt).state == "unknown"
+                )
+            if unknown_attempt and permit.kind != "noop_fence":
+                fenced = connection.execute(
+                    """
+                    SELECT 1
+                    FROM execution_recovery_commands AS command
+                    JOIN execution_recovery_reconciliations AS reconciliation
+                      ON reconciliation.recovery_command_id = command.recovery_command_id
+                    WHERE command.parent_command_id = ?
+                      AND command.kind = 'noop_fence'
+                      AND command.state = 'terminal'
+                      AND reconciliation.complete = 1
+                      AND reconciliation.success = 1
+                    LIMIT 1
+                    """,
+                    (permit.parent_command_id,),
+                ).fetchone()
+                if fenced is None:
+                    raise StateConflict(
+                        "unknown parent attempt requires terminal noop-fence "
+                        "reconciliation before cancel or close"
+                    )
+            if permit.kind == "noop_fence":
+                if parent_attempt is None:
+                    raise StateConflict("noop recovery requires persisted unknown attempt")
+                attempt = self._attempt_from_row(parent_attempt)
+                if (
+                    attempt.state != "unknown"
+                    or attempt.attempt_id != permit.original_attempt_id
+                    or attempt.nonce != permit.original_nonce
+                    or attempt.preflight_hash != permit.preflight_hash
+                ):
+                    raise StateConflict("noop permit differs from original unknown attempt")
+            elif permit.preflight_hash is not None and parent_attempt is not None:
+                attempt = self._attempt_from_row(parent_attempt)
+                if attempt.preflight_hash != permit.preflight_hash:
+                    raise StateConflict("recovery permit preflight differs from parent")
+            existing = connection.execute(
+                "SELECT * FROM execution_recovery_permits WHERE permit_id = ?",
+                (permit.permit_id,),
+            ).fetchone()
+            record_hash = _record_hash(
+                "recovery-permit",
+                self._recovery_permit_material(
+                    permit,
+                    state="issued",
+                    recovery_command_id=None,
+                    updated_at=permit.issued_at,
+                ),
+            )
+            if existing is not None:
+                current = self._recovery_permit_from_row(existing)
+                if current == permit and existing["record_hash"] == record_hash:
+                    return current
+                raise StateConflict("recovery permit ID is already bound differently")
+            connection.execute(
+                """
+                INSERT INTO execution_recovery_permits (
+                    permit_id, token_hash, parent_command_id, incident_id, kind,
+                    environment, account_id, source_hash, preflight_hash,
+                    recovery_hash, safety_policy_hash, original_attempt_id,
+                    recovery_material_json, recovery_material_hash,
+                    original_nonce, issuer_id, audience, issued_at, expires_at,
+                    state, recovery_command_id, updated_at, record_hash
+                ) VALUES (
+                    ?, ?, ?, ?, ?, 'testnet',
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    'issued', NULL, ?, ?
+                )
+                """,
+                (
+                    permit.permit_id,
+                    permit.token_hash,
+                    permit.parent_command_id,
+                    permit.incident_id,
+                    permit.kind,
+                    permit.account_id,
+                    permit.source_hash,
+                    permit.preflight_hash,
+                    permit.recovery_hash,
+                    permit.safety_policy_hash,
+                    permit.original_attempt_id,
+                    canonical_json(dict(permit.recovery_material)),
+                    hashlib.sha256(
+                        canonical_json(dict(permit.recovery_material)).encode("utf-8")
+                    ).hexdigest(),
+                    permit.original_nonce,
+                    permit.issuer_id,
+                    permit.audience,
+                    _time_text(permit.issued_at, field="issued_at"),
+                    _time_text(permit.expires_at, field="expires_at"),
+                    _time_text(permit.issued_at, field="updated_at"),
+                    record_hash,
+                ),
+            )
+            self._append_event_locked(
+                connection,
+                command_id=permit.parent_command_id,
+                event_type="recovery_permit_registered",
+                occurred_at=permit.issued_at,
+                payload={
+                    "permit_id": permit.permit_id,
+                    "incident_id": permit.incident_id,
+                    "kind": permit.kind,
+                    "recovery_hash": permit.recovery_hash,
+                },
+            )
+            return permit
+
+    @staticmethod
+    def _recovery_command_material(record: RecoveryCommand) -> dict[str, object]:
+        return {
+            "recovery_command_id": record.recovery_command_id,
+            "permit_id": record.permit_id,
+            "parent_command_id": record.parent_command_id,
+            "incident_id": record.incident_id,
+            "kind": record.kind,
+            "priority": record.priority,
+            "source_hash": record.source_hash,
+            "preflight_hash": record.preflight_hash,
+            "recovery_hash": record.recovery_hash,
+            "recovery_material_json": record.recovery_material_json,
+            "recovery_material_hash": record.recovery_material_hash,
+            "safety_policy_hash": record.safety_policy_hash,
+            "original_attempt_id": record.original_attempt_id,
+            "original_nonce": record.original_nonce,
+            "state": record.state,
+            "created_at": _time_text(record.created_at, field="created_at"),
+            "updated_at": _time_text(record.updated_at, field="updated_at"),
+            "terminal_at": (
+                None
+                if record.terminal_at is None
+                else _time_text(record.terminal_at, field="terminal_at")
+            ),
+            "revision": record.revision,
+        }
+
+    @classmethod
+    def _recovery_command_from_row(cls, row: Mapping[str, Any]) -> RecoveryCommand:
+        record = RecoveryCommand(
+            recovery_command_id=str(row["recovery_command_id"]),
+            permit_id=str(row["permit_id"]),
+            parent_command_id=str(row["parent_command_id"]),
+            incident_id=str(row["incident_id"]),
+            kind=str(row["kind"]),
+            priority=int(row["priority"]),
+            source_hash=str(row["source_hash"]),
+            preflight_hash=(
+                None if row["preflight_hash"] is None else str(row["preflight_hash"])
+            ),
+            recovery_hash=str(row["recovery_hash"]),
+            recovery_material_json=str(row["recovery_material_json"]),
+            recovery_material_hash=str(row["recovery_material_hash"]),
+            safety_policy_hash=str(row["safety_policy_hash"]),
+            original_attempt_id=(
+                None
+                if row["original_attempt_id"] is None
+                else str(row["original_attempt_id"])
+            ),
+            original_nonce=(
+                None if row["original_nonce"] is None else int(row["original_nonce"])
+            ),
+            state=str(row["state"]),
+            created_at=_parse_time(row["created_at"], field="recovery created_at"),
+            updated_at=_parse_time(row["updated_at"], field="recovery updated_at"),
+            terminal_at=_optional_time(
+                row["terminal_at"], field="recovery terminal_at"
+            ),
+            revision=int(row["revision"]),
+        )
+        if (
+            record.kind not in _RECOVERY_KINDS
+            or record.state not in _RECOVERY_COMMAND_STATES
+            or record.priority != _RECOVERY_PRIORITY[record.kind]
+        ):
+            raise StorageError("persisted recovery command state is invalid")
+        calculated_material_hash = hashlib.sha256(
+            record.recovery_material_json.encode("utf-8")
+        ).hexdigest()
+        if calculated_material_hash != _stored_hash(
+            record.recovery_material_hash,
+            field="recovery_material_hash",
+        ):
+            raise StorageError("persisted recovery material content hash differs")
+        try:
+            recovery_material = json.loads(record.recovery_material_json)
+        except ValueError as error:
+            raise StorageError("persisted recovery material is invalid JSON") from error
+        if canonical_json(recovery_material) != record.recovery_material_json:
+            raise StorageError("persisted recovery material is not canonical")
+        if domain_hash(
+            "trading-harness/hyperliquid-recovery-action/v1", recovery_material
+        ) != record.recovery_hash:
+            raise StorageError("persisted recovery material hash differs")
+        if _stored_hash(row["record_hash"], field="recovery command hash") != _record_hash(
+            "recovery-command", cls._recovery_command_material(record)
+        ):
+            raise StorageError("persisted recovery command hash does not match")
+        return record
+
+    def queue_recovery(
+        self,
+        *,
+        recovery_command_id: str,
+        permit_id: str,
+        token_hash: str,
+        audience: str,
+        at: datetime,
+    ) -> RecoveryCommand:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_permit = _text(permit_id, field="permit_id", maximum=128)
+        checked_token = _hash(token_hash, field="token_hash")
+        checked_audience = _text(audience, field="audience", maximum=256)
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_recovery_permits WHERE permit_id = ?",
+                (checked_permit,),
+            ).fetchone()
+            if row is None:
+                raise AdmissionDenied("RECOVERY_PERMIT_NOT_FOUND", "permit missing")
+            permit = self._recovery_permit_from_row(row)
+            if row["state"] != "issued":
+                raise AdmissionDenied("RECOVERY_PERMIT_USED", "permit is not issued")
+            if row["token_hash"] != checked_token or row["audience"] != checked_audience:
+                raise AdmissionDenied("RECOVERY_PERMIT_TOKEN_MISMATCH", "permit differs")
+            if not permit.issued_at <= checked_at < permit.expires_at:
+                raise AdmissionDenied("RECOVERY_PERMIT_EXPIRED", "permit is inactive")
+            incident_row = connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (permit.incident_id,),
+            ).fetchone()
+            if incident_row is None:
+                raise StorageError("recovery permit incident disappeared")
+            incident = self._incident_from_row(incident_row)
+            if incident.state != "open" or incident.severity != "critical":
+                raise AdmissionDenied(
+                    "RECOVERY_INCIDENT_INACTIVE", "incident is not open critical"
+                )
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_recovery_commands
+                WHERE state != 'terminal' LIMIT 1
+                """,
+            ).fetchone() is not None:
+                raise StateConflict("account already has an active recovery command")
+            permit_material = self._recovery_permit_material(
+                permit,
+                state="consumed",
+                recovery_command_id=checked_id,
+                updated_at=checked_at,
+            )
+            connection.execute(
+                """
+                UPDATE execution_recovery_permits SET
+                    state = 'consumed', recovery_command_id = ?, updated_at = ?,
+                    record_hash = ? WHERE permit_id = ? AND state = 'issued'
+                """,
+                (
+                    checked_id,
+                    _time_text(checked_at, field="updated_at"),
+                    _record_hash("recovery-permit", permit_material),
+                    permit.permit_id,
+                ),
+            )
+            command = RecoveryCommand(
+                recovery_command_id=checked_id,
+                permit_id=permit.permit_id,
+                parent_command_id=permit.parent_command_id,
+                incident_id=permit.incident_id,
+                kind=permit.kind,
+                priority=_RECOVERY_PRIORITY[permit.kind],
+                source_hash=permit.source_hash,
+                preflight_hash=permit.preflight_hash,
+                recovery_hash=permit.recovery_hash,
+                recovery_material_json=canonical_json(dict(permit.recovery_material)),
+                recovery_material_hash=hashlib.sha256(
+                    canonical_json(dict(permit.recovery_material)).encode("utf-8")
+                ).hexdigest(),
+                safety_policy_hash=permit.safety_policy_hash,
+                original_attempt_id=permit.original_attempt_id,
+                original_nonce=permit.original_nonce,
+                state="queued",
+                created_at=checked_at,
+                updated_at=checked_at,
+                terminal_at=None,
+                revision=1,
+            )
+            connection.execute(
+                """
+                INSERT INTO execution_recovery_commands (
+                    recovery_command_id, permit_id, parent_command_id,
+                    incident_id, kind, priority, source_hash, preflight_hash,
+                    recovery_hash, recovery_material_json,
+                    recovery_material_hash, safety_policy_hash, original_attempt_id,
+                    original_nonce, state, created_at, updated_at, terminal_at,
+                    revision, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          'queued', ?, ?, NULL, 1, ?)
+                """,
+                (
+                    command.recovery_command_id,
+                    command.permit_id,
+                    command.parent_command_id,
+                    command.incident_id,
+                    command.kind,
+                    command.priority,
+                    command.source_hash,
+                    command.preflight_hash,
+                    command.recovery_hash,
+                    command.recovery_material_json,
+                    command.recovery_material_hash,
+                    command.safety_policy_hash,
+                    command.original_attempt_id,
+                    command.original_nonce,
+                    _time_text(checked_at, field="created_at"),
+                    _time_text(checked_at, field="updated_at"),
+                    _record_hash(
+                        "recovery-command", self._recovery_command_material(command)
+                    ),
+                ),
+            )
+            outbox_material = {
+                "recovery_command_id": checked_id,
+                "state": "queued",
+                "worker_id": None,
+                "fencing_token": 0,
+                "claimed_at": None,
+                "lease_expires_at": None,
+                "current_attempt_id": None,
+                "attempt_count": 0,
+                "created_at": _time_text(checked_at, field="created_at"),
+                "updated_at": _time_text(checked_at, field="updated_at"),
+            }
+            connection.execute(
+                """
+                INSERT INTO execution_recovery_outbox (
+                    recovery_command_id, state, worker_id, fencing_token,
+                    claimed_at, lease_expires_at, current_attempt_id,
+                    attempt_count, created_at, updated_at, record_hash
+                ) VALUES (?, 'queued', NULL, 0, NULL, NULL, NULL, 0, ?, ?, ?)
+                """,
+                (
+                    checked_id,
+                    _time_text(checked_at, field="created_at"),
+                    _time_text(checked_at, field="updated_at"),
+                    _record_hash("recovery-outbox", outbox_material),
+                ),
+            )
+            self._append_event_locked(
+                connection,
+                command_id=permit.parent_command_id,
+                event_type="recovery_command_queued",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": checked_id,
+                    "kind": permit.kind,
+                    "priority": command.priority,
+                    "incident_id": permit.incident_id,
+                },
+            )
+            return command
+
+    @staticmethod
+    def _recovery_outbox_material(record: RecoveryOutbox) -> dict[str, object]:
+        return {
+            "recovery_command_id": record.recovery_command_id,
+            "state": record.state,
+            "worker_id": record.worker_id,
+            "fencing_token": record.fencing_token,
+            "claimed_at": (
+                None
+                if record.claimed_at is None
+                else _time_text(record.claimed_at, field="claimed_at")
+            ),
+            "lease_expires_at": (
+                None
+                if record.lease_expires_at is None
+                else _time_text(record.lease_expires_at, field="lease_expires_at")
+            ),
+            "current_attempt_id": record.current_attempt_id,
+            "attempt_count": record.attempt_count,
+            "created_at": _time_text(record.created_at, field="created_at"),
+            "updated_at": _time_text(record.updated_at, field="updated_at"),
+        }
+
+    @classmethod
+    def _recovery_outbox_from_row(cls, row: Mapping[str, Any]) -> RecoveryOutbox:
+        record = RecoveryOutbox(
+            recovery_command_id=str(row["recovery_command_id"]),
+            state=str(row["state"]),
+            worker_id=(None if row["worker_id"] is None else str(row["worker_id"])),
+            fencing_token=int(row["fencing_token"]),
+            claimed_at=_optional_time(row["claimed_at"], field="claimed_at"),
+            lease_expires_at=_optional_time(
+                row["lease_expires_at"], field="lease_expires_at"
+            ),
+            current_attempt_id=(
+                None
+                if row["current_attempt_id"] is None
+                else str(row["current_attempt_id"])
+            ),
+            attempt_count=int(row["attempt_count"]),
+            created_at=_parse_time(row["created_at"], field="recovery outbox created_at"),
+            updated_at=_parse_time(row["updated_at"], field="recovery outbox updated_at"),
+        )
+        if record.state not in _RECOVERY_COMMAND_STATES:
+            raise StorageError("persisted recovery outbox state is invalid")
+        if _stored_hash(row["record_hash"], field="recovery outbox hash") != _record_hash(
+            "recovery-outbox", cls._recovery_outbox_material(record)
+        ):
+            raise StorageError("persisted recovery outbox hash does not match")
+        return record
+
+    def _set_recovery_command_state_locked(
+        self,
+        connection: sqlite3.Connection,
+        row: Mapping[str, Any],
+        *,
+        state: str,
+        at: datetime,
+        terminal: bool = False,
+    ) -> RecoveryCommand:
+        current = self._recovery_command_from_row(row)
+        updated = RecoveryCommand(
+            recovery_command_id=current.recovery_command_id,
+            permit_id=current.permit_id,
+            parent_command_id=current.parent_command_id,
+            incident_id=current.incident_id,
+            kind=current.kind,
+            priority=current.priority,
+            source_hash=current.source_hash,
+            preflight_hash=current.preflight_hash,
+            recovery_hash=current.recovery_hash,
+            recovery_material_json=current.recovery_material_json,
+            recovery_material_hash=current.recovery_material_hash,
+            safety_policy_hash=current.safety_policy_hash,
+            original_attempt_id=current.original_attempt_id,
+            original_nonce=current.original_nonce,
+            state=state,
+            created_at=current.created_at,
+            updated_at=at,
+            terminal_at=at if terminal else current.terminal_at,
+            revision=current.revision + 1,
+        )
+        connection.execute(
+            """
+            UPDATE execution_recovery_commands SET
+                state = ?, updated_at = ?, terminal_at = ?, revision = ?,
+                record_hash = ? WHERE recovery_command_id = ? AND revision = ?
+            """,
+            (
+                state,
+                _time_text(at, field="updated_at"),
+                None
+                if updated.terminal_at is None
+                else _time_text(updated.terminal_at, field="terminal_at"),
+                updated.revision,
+                _record_hash(
+                    "recovery-command", self._recovery_command_material(updated)
+                ),
+                current.recovery_command_id,
+                current.revision,
+            ),
+        )
+        return updated
+
+    def _set_recovery_outbox_locked(
+        self,
+        connection: sqlite3.Connection,
+        row: Mapping[str, Any],
+        *,
+        state: str,
+        worker_id: str | None,
+        fencing_token: int,
+        claimed_at: datetime | None,
+        lease_expires_at: datetime | None,
+        current_attempt_id: str | None,
+        attempt_count: int,
+        at: datetime,
+    ) -> RecoveryOutbox:
+        current = self._recovery_outbox_from_row(row)
+        updated = RecoveryOutbox(
+            recovery_command_id=current.recovery_command_id,
+            state=state,
+            worker_id=worker_id,
+            fencing_token=fencing_token,
+            claimed_at=claimed_at,
+            lease_expires_at=lease_expires_at,
+            current_attempt_id=current_attempt_id,
+            attempt_count=attempt_count,
+            created_at=current.created_at,
+            updated_at=at,
+        )
+        connection.execute(
+            """
+            UPDATE execution_recovery_outbox SET
+                state = ?, worker_id = ?, fencing_token = ?, claimed_at = ?,
+                lease_expires_at = ?, current_attempt_id = ?, attempt_count = ?,
+                updated_at = ?, record_hash = ? WHERE recovery_command_id = ?
+            """,
+            (
+                state,
+                worker_id,
+                fencing_token,
+                None if claimed_at is None else _time_text(claimed_at, field="claimed_at"),
+                None
+                if lease_expires_at is None
+                else _time_text(lease_expires_at, field="lease_expires_at"),
+                current_attempt_id,
+                attempt_count,
+                _time_text(at, field="updated_at"),
+                _record_hash("recovery-outbox", self._recovery_outbox_material(updated)),
+                current.recovery_command_id,
+            ),
+        )
+        return updated
+
+    def get_recovery_command(self, recovery_command_id: str) -> RecoveryCommand:
+        checked = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("recovery command is not registered")
+        return self._recovery_command_from_row(row)
+
+    def get_recovery_outbox(self, recovery_command_id: str) -> RecoveryOutbox:
+        checked = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_outbox
+                WHERE recovery_command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("recovery outbox is not registered")
+        return self._recovery_outbox_from_row(row)
+
+    def _normalize_expired_recovery_locked(
+        self, connection: sqlite3.Connection, *, at: datetime
+    ) -> None:
+        rows = connection.execute(
+            """
+            SELECT * FROM execution_recovery_outbox
+            WHERE state IN ('claimed', 'signing') AND lease_expires_at <= ?
+            """,
+            (_time_text(at, field="at"),),
+        ).fetchall()
+        for row in rows:
+            outbox = self._recovery_outbox_from_row(row)
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (outbox.recovery_command_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("expired recovery claim has no command")
+            if outbox.current_attempt_id is None:
+                if outbox.state == "claimed":
+                    next_state = "queued"
+                else:
+                    # Signing authority may already have reached a wallet and
+                    # burned a nonce.  Never issue it again after lease loss.
+                    next_state = "submitted_unknown"
+                self._set_recovery_outbox_locked(
+                    connection,
+                    row,
+                    state=next_state,
+                    worker_id=None,
+                    fencing_token=outbox.fencing_token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=None,
+                    attempt_count=outbox.attempt_count,
+                    at=at,
+                )
+                self._set_recovery_command_state_locked(
+                    connection, command_row, state=next_state, at=at
+                )
+            else:
+                attempt_row = connection.execute(
+                    """
+                    SELECT * FROM execution_recovery_attempts WHERE attempt_id = ?
+                    """,
+                    (outbox.current_attempt_id,),
+                ).fetchone()
+                if attempt_row is None:
+                    raise StorageError("recovery outbox attempt is missing")
+                attempt = self._recovery_attempt_from_row(attempt_row)
+                evidence = TransportOutcomeEvidence(
+                    command_id=attempt.recovery_command_id,
+                    attempt_id=attempt.attempt_id,
+                    signed_evidence_hash=attempt.signed_evidence_hash,
+                    endpoint="https://api.hyperliquid-testnet.xyz/exchange",
+                    attempted_at_ms=int(at.timestamp() * 1_000),
+                    outcome="unknown",
+                    http_status=None,
+                    detail_code="recovery_worker_lease_expired_after_prepare",
+                    response_hash=None,
+                    transport_attempt_hash=None,
+                    send_count=None,
+                    retry_performed=False,
+                    venue_write_attempted=None,
+                    evidence_basis="claim_expiry",
+                )
+                self._put_recovery_transport_locked(connection, evidence, at=at)
+                self._update_recovery_attempt_locked(
+                    connection,
+                    attempt,
+                    state="unknown",
+                    transport_evidence_hash=evidence.evidence_hash,
+                    at=at,
+                )
+                self._set_recovery_outbox_locked(
+                    connection,
+                    row,
+                    state="submitted_unknown",
+                    worker_id=None,
+                    fencing_token=outbox.fencing_token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=attempt.attempt_id,
+                    attempt_count=outbox.attempt_count,
+                    at=at,
+                )
+                self._set_recovery_command_state_locked(
+                    connection, command_row, state="submitted_unknown", at=at
+                )
+
+    def _terminalize_expired_queued_recovery_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        at: datetime,
+    ) -> None:
+        rows = connection.execute(
+            """
+            SELECT outbox.* FROM execution_recovery_outbox AS outbox
+            JOIN execution_recovery_commands AS command
+              ON command.recovery_command_id = outbox.recovery_command_id
+            JOIN execution_recovery_permits AS permit
+              ON permit.permit_id = command.permit_id
+            WHERE outbox.state = 'queued' AND permit.expires_at <= ?
+            """,
+            (_time_text(at, field="at"),),
+        ).fetchall()
+        for row in rows:
+            outbox = self._recovery_outbox_from_row(row)
+            if outbox.current_attempt_id is not None or outbox.attempt_count != 0:
+                raise StorageError("queued expired recovery unexpectedly has an attempt")
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (outbox.recovery_command_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("expired recovery command is missing")
+            command = self._set_recovery_command_state_locked(
+                connection,
+                command_row,
+                state="terminal",
+                at=at,
+                terminal=True,
+            )
+            self._set_recovery_outbox_locked(
+                connection,
+                row,
+                state="terminal",
+                worker_id=None,
+                fencing_token=outbox.fencing_token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=None,
+                attempt_count=0,
+                at=at,
+            )
+            self._append_event_locked(
+                connection,
+                command_id=command.parent_command_id,
+                event_type="recovery_expired_unsent",
+                occurred_at=at,
+                payload={
+                    "recovery_command_id": command.recovery_command_id,
+                    "incident_id": command.incident_id,
+                    "venue_write_attempted": False,
+                    "replacement_permit_required": True,
+                },
+            )
+
+    def claim_next_recovery(
+        self,
+        worker_id: str,
+        *,
+        at: datetime,
+        lease_seconds: int,
+    ) -> RecoveryOutbox | None:
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        checked_at = _utc(at, field="at")
+        lease = _positive_int(lease_seconds, field="lease_seconds", maximum=3_600)
+        with self._transaction() as connection:
+            self._normalize_expired_recovery_locked(connection, at=checked_at)
+            self._terminalize_expired_queued_recovery_locked(
+                connection,
+                at=checked_at,
+            )
+            row = connection.execute(
+                """
+                SELECT outbox.* FROM execution_recovery_outbox AS outbox
+                JOIN execution_recovery_commands AS command
+                  ON command.recovery_command_id = outbox.recovery_command_id
+                WHERE outbox.state = 'queued'
+                ORDER BY command.priority, command.created_at,
+                         command.recovery_command_id LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            current = self._recovery_outbox_from_row(row)
+            expires = checked_at + timedelta(seconds=lease)
+            claimed = self._set_recovery_outbox_locked(
+                connection,
+                row,
+                state="claimed",
+                worker_id=checked_worker,
+                fencing_token=current.fencing_token + 1,
+                claimed_at=checked_at,
+                lease_expires_at=expires,
+                current_attempt_id=None,
+                attempt_count=current.attempt_count,
+                at=checked_at,
+            )
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (current.recovery_command_id,),
+            ).fetchone()
+            self._set_recovery_command_state_locked(
+                connection, command_row, state="claimed", at=checked_at
+            )
+            self._append_event_locked(
+                connection,
+                command_id=self._recovery_command_from_row(command_row).parent_command_id,
+                event_type="recovery_claimed",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": current.recovery_command_id,
+                    "worker_id": checked_worker,
+                    "fencing_token": claimed.fencing_token,
+                },
+            )
+            return claimed
+
+    @staticmethod
+    def _signed_recovery_material(
+        evidence: SignedRecoveryEvidence,
+        *,
+        recorded_at: datetime,
+        payload_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            **evidence.as_dict(),
+            "recorded_at": _time_text(recorded_at, field="recorded_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+
+    def _put_signed_recovery_locked(
+        self,
+        connection: sqlite3.Connection,
+        evidence: SignedRecoveryEvidence,
+        *,
+        at: datetime,
+    ) -> None:
+        payload_json, content_hash = _canonical_payload(evidence.as_dict())
+        record_hash = _record_hash(
+            "signed-recovery-record",
+            self._signed_recovery_material(
+                evidence,
+                recorded_at=at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        existing = connection.execute(
+            """
+            SELECT * FROM execution_signed_recovery_evidence
+            WHERE recovery_command_id = ?
+            """,
+            (evidence.recovery_command_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing["evidence_hash"] == evidence.evidence_hash:
+                return
+            raise StateConflict("recovery command cannot swap signed evidence")
+        connection.execute(
+            """
+            INSERT INTO execution_signed_recovery_evidence (
+                evidence_hash, recovery_command_id, incident_id, kind,
+                source_hash, recovery_hash, safety_policy_hash, nonce,
+                signing_authority_hash, wire_hash, action_hash, signature_hash, envelope_hash,
+                signer_binding_hash, expires_after_ms, signed_at_ms,
+                recorded_at, payload_json, content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence.evidence_hash,
+                evidence.recovery_command_id,
+                evidence.incident_id,
+                evidence.kind,
+                evidence.source_hash,
+                evidence.recovery_hash,
+                evidence.safety_policy_hash,
+                evidence.nonce,
+                evidence.signing_authority_hash,
+                evidence.wire_hash,
+                evidence.action_hash,
+                evidence.signature_hash,
+                evidence.envelope_hash,
+                evidence.signer_binding_hash,
+                evidence.expires_after_ms,
+                evidence.signed_at_ms,
+                _time_text(at, field="recorded_at"),
+                payload_json,
+                content_hash,
+                record_hash,
+            ),
+        )
+
+    @staticmethod
+    def _recovery_attempt_material(record: RecoveryAttempt) -> dict[str, object]:
+        return {
+            "attempt_id": record.attempt_id,
+            "recovery_command_id": record.recovery_command_id,
+            "worker_id": record.worker_id,
+            "fencing_token": record.fencing_token,
+            "signed_evidence_hash": record.signed_evidence_hash,
+            "transport_evidence_hash": record.transport_evidence_hash,
+            "nonce": record.nonce,
+            "action_hash": record.action_hash,
+            "wire_hash": record.wire_hash,
+            "state": record.state,
+            "prepared_at": _time_text(record.prepared_at, field="prepared_at"),
+            "updated_at": _time_text(record.updated_at, field="updated_at"),
+        }
+
+    @classmethod
+    def _recovery_attempt_from_row(cls, row: Mapping[str, Any]) -> RecoveryAttempt:
+        record = RecoveryAttempt(
+            attempt_id=str(row["attempt_id"]),
+            recovery_command_id=str(row["recovery_command_id"]),
+            worker_id=str(row["worker_id"]),
+            fencing_token=int(row["fencing_token"]),
+            signed_evidence_hash=str(row["signed_evidence_hash"]),
+            transport_evidence_hash=(
+                None
+                if row["transport_evidence_hash"] is None
+                else str(row["transport_evidence_hash"])
+            ),
+            nonce=int(row["nonce"]),
+            action_hash=str(row["action_hash"]),
+            wire_hash=str(row["wire_hash"]),
+            state=str(row["state"]),
+            prepared_at=_parse_time(row["prepared_at"], field="recovery prepared_at"),
+            updated_at=_parse_time(row["updated_at"], field="recovery updated_at"),
+        )
+        if record.state not in _RECOVERY_ATTEMPT_STATES:
+            raise StorageError("persisted recovery attempt state is invalid")
+        for value, field in (
+            (record.signed_evidence_hash, "signed_evidence_hash"),
+            (record.action_hash, "action_hash"),
+            (record.wire_hash, "wire_hash"),
+        ):
+            _stored_hash(value, field=field)
+        if _stored_hash(row["record_hash"], field="recovery attempt hash") != _record_hash(
+            "recovery-attempt", cls._recovery_attempt_material(record)
+        ):
+            raise StorageError("persisted recovery attempt hash does not match")
+        return record
+
+    def _update_recovery_attempt_locked(
+        self,
+        connection: sqlite3.Connection,
+        attempt: RecoveryAttempt,
+        *,
+        state: str,
+        transport_evidence_hash: str | None,
+        at: datetime,
+    ) -> RecoveryAttempt:
+        updated = RecoveryAttempt(
+            attempt_id=attempt.attempt_id,
+            recovery_command_id=attempt.recovery_command_id,
+            worker_id=attempt.worker_id,
+            fencing_token=attempt.fencing_token,
+            signed_evidence_hash=attempt.signed_evidence_hash,
+            transport_evidence_hash=transport_evidence_hash,
+            nonce=attempt.nonce,
+            action_hash=attempt.action_hash,
+            wire_hash=attempt.wire_hash,
+            state=state,
+            prepared_at=attempt.prepared_at,
+            updated_at=at,
+        )
+        connection.execute(
+            """
+            UPDATE execution_recovery_attempts SET
+                state = ?, transport_evidence_hash = ?, updated_at = ?,
+                record_hash = ? WHERE attempt_id = ?
+            """,
+            (
+                state,
+                transport_evidence_hash,
+                _time_text(at, field="updated_at"),
+                _record_hash(
+                    "recovery-attempt", self._recovery_attempt_material(updated)
+                ),
+                attempt.attempt_id,
+            ),
+        )
+        return updated
+
+    def require_recovery_signing_authority(
+        self,
+        recovery_command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        at: datetime,
+    ) -> RecoverySigningAuthority:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            outbox, outbox_row = self._require_recovery_claim_locked(
+                connection,
+                recovery_command_id=checked_id,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                states={"claimed"},
+            )
+            if outbox.current_attempt_id is not None or outbox.attempt_count != 0:
+                raise StateConflict("recovery signing authority is already consumed")
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            command = self._recovery_command_from_row(command_row)
+            permit_row = connection.execute(
+                "SELECT * FROM execution_recovery_permits WHERE permit_id = ?",
+                (command.permit_id,),
+            ).fetchone()
+            permit = self._recovery_permit_from_row(permit_row)
+            if permit_row["state"] != "consumed" or checked_at >= permit.expires_at:
+                raise StateConflict("consumed recovery permit is missing or expired")
+            incident_row = connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (command.incident_id,),
+            ).fetchone()
+            incident = self._incident_from_row(incident_row)
+            if incident.state != "open" or incident.severity != "critical":
+                raise StateConflict("recovery signing requires open critical incident")
+            if command.kind == "noop_fence":
+                attempt_row = connection.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                    (command.original_attempt_id,),
+                ).fetchone()
+                attempt = self._attempt_from_row(attempt_row)
+                if (
+                    attempt.state != "unknown"
+                    or attempt.nonce != command.original_nonce
+                    or attempt.preflight_hash != command.preflight_hash
+                ):
+                    raise StateConflict("noop signing authority lost original attempt")
+            material = {
+                "recovery_command_id": command.recovery_command_id,
+                "permit_id": command.permit_id,
+                "parent_command_id": command.parent_command_id,
+                "incident_id": command.incident_id,
+                "kind": command.kind,
+                "source_hash": command.source_hash,
+                "preflight_hash": command.preflight_hash,
+                "recovery_hash": command.recovery_hash,
+                "safety_policy_hash": command.safety_policy_hash,
+                "original_attempt_id": command.original_attempt_id,
+                "original_nonce": command.original_nonce,
+                "worker_id": checked_worker,
+                "fencing_token": token,
+                "permit_expires_at": _time_text(
+                    permit.expires_at, field="permit_expires_at"
+                ),
+                "lease_expires_at": _time_text(
+                    outbox.lease_expires_at, field="lease_expires_at"
+                ),
+            }
+            authority_hash = _record_hash("recovery-signing-authority", material)
+            authority = RecoverySigningAuthority(
+                recovery_command_id=command.recovery_command_id,
+                permit_id=command.permit_id,
+                parent_command_id=command.parent_command_id,
+                incident_id=command.incident_id,
+                kind=command.kind,
+                source_hash=command.source_hash,
+                preflight_hash=command.preflight_hash,
+                recovery_hash=command.recovery_hash,
+                safety_policy_hash=command.safety_policy_hash,
+                original_attempt_id=command.original_attempt_id,
+                original_nonce=command.original_nonce,
+                worker_id=checked_worker,
+                fencing_token=token,
+                permit_expires_at=permit.expires_at,
+                lease_expires_at=outbox.lease_expires_at,
+                authority_hash=authority_hash,
+            )
+            payload_json, content_hash = _canonical_payload(
+                {**material, "authority_hash": authority_hash}
+            )
+            connection.execute(
+                """
+                INSERT INTO execution_recovery_signing_authorities (
+                    authority_hash, recovery_command_id, worker_id,
+                    fencing_token, issued_at, payload_json, content_hash,
+                    record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    authority_hash,
+                    checked_id,
+                    checked_worker,
+                    token,
+                    _time_text(checked_at, field="issued_at"),
+                    payload_json,
+                    content_hash,
+                    _record_hash(
+                        "recovery-signing-authority-record",
+                        {
+                            "authority_hash": authority_hash,
+                            "payload_json": payload_json,
+                            "content_hash": content_hash,
+                        },
+                    ),
+                ),
+            )
+            self._set_recovery_outbox_locked(
+                connection,
+                outbox_row,
+                state="signing",
+                worker_id=checked_worker,
+                fencing_token=token,
+                claimed_at=outbox.claimed_at,
+                lease_expires_at=outbox.lease_expires_at,
+                current_attempt_id=None,
+                attempt_count=0,
+                at=checked_at,
+            )
+            self._set_recovery_command_state_locked(
+                connection, command_row, state="signing", at=checked_at
+            )
+            self._append_event_locked(
+                connection,
+                command_id=command.parent_command_id,
+                event_type="recovery_signing_authority_issued",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": checked_id,
+                    "authority_hash": authority_hash,
+                    "single_use": True,
+                },
+            )
+            return authority
+
+    def require_recovery_submission_authority(
+        self,
+        recovery_command_id: str,
+        attempt_id: str,
+        signed_evidence_hash: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        at: datetime,
+    ) -> RecoverySubmissionAuthority:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_attempt = _text(attempt_id, field="attempt_id", maximum=128)
+        checked_signed = _hash(
+            signed_evidence_hash, field="signed_evidence_hash"
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            outbox, _ = self._require_recovery_claim_locked(
+                connection,
+                recovery_command_id=checked_id,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                states={"signing"},
+            )
+            if outbox.current_attempt_id != checked_attempt:
+                raise StateConflict("recovery submission attempt differs from outbox")
+            attempt_row = connection.execute(
+                "SELECT * FROM execution_recovery_attempts WHERE attempt_id = ?",
+                (checked_attempt,),
+            ).fetchone()
+            attempt = self._recovery_attempt_from_row(attempt_row)
+            if (
+                attempt.state != "prepared"
+                or attempt.signed_evidence_hash != checked_signed
+                or attempt.transport_evidence_hash is not None
+            ):
+                raise StateConflict("recovery attempt is not submission-ready")
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_recovery_transport_evidence
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone() is not None:
+                raise StateConflict("recovery already has transport evidence")
+            self._update_recovery_attempt_locked(
+                connection,
+                attempt,
+                state="sending",
+                transport_evidence_hash=None,
+                at=checked_at,
+            )
+            material = {
+                "recovery_command_id": checked_id,
+                "attempt_id": checked_attempt,
+                "signed_evidence_hash": checked_signed,
+                "nonce": attempt.nonce,
+                "action_hash": attempt.action_hash,
+                "wire_hash": attempt.wire_hash,
+                "worker_id": checked_worker,
+                "fencing_token": token,
+                "lease_expires_at": _time_text(
+                    outbox.lease_expires_at, field="lease_expires_at"
+                ),
+            }
+            return RecoverySubmissionAuthority(
+                recovery_command_id=checked_id,
+                attempt_id=checked_attempt,
+                signed_evidence_hash=checked_signed,
+                nonce=attempt.nonce,
+                action_hash=attempt.action_hash,
+                wire_hash=attempt.wire_hash,
+                worker_id=checked_worker,
+                fencing_token=token,
+                lease_expires_at=outbox.lease_expires_at,
+                authority_hash=_record_hash(
+                    "recovery-submission-authority", material
+                ),
+            )
+
+    def _require_recovery_claim_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        recovery_command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        at: datetime,
+        states: set[str],
+    ) -> tuple[RecoveryOutbox, sqlite3.Row]:
+        row = connection.execute(
+            """
+            SELECT * FROM execution_recovery_outbox
+            WHERE recovery_command_id = ?
+            """,
+            (recovery_command_id,),
+        ).fetchone()
+        if row is None:
+            raise RecordNotFound("recovery outbox is missing")
+        outbox = self._recovery_outbox_from_row(row)
+        if (
+            outbox.state not in states
+            or outbox.worker_id != worker_id
+            or outbox.fencing_token != fencing_token
+            or outbox.claimed_at is None
+            or outbox.lease_expires_at is None
+            or not outbox.claimed_at <= at < outbox.lease_expires_at
+        ):
+            raise StateConflict("recovery claim is stale, expired, or wrong state")
+        return outbox, row
+
+    def prepare_recovery_attempt(
+        self,
+        recovery_command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        attempt_id: str,
+        signed_evidence: SignedRecoveryEvidence,
+        at: datetime,
+    ) -> RecoveryAttempt:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        checked_attempt = _text(attempt_id, field="attempt_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        if not isinstance(signed_evidence, SignedRecoveryEvidence):
+            raise TypeError("signed_evidence must be SignedRecoveryEvidence")
+        with self._transaction() as connection:
+            outbox, outbox_row = self._require_recovery_claim_locked(
+                connection,
+                recovery_command_id=checked_id,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                states={"signing"},
+            )
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("recovery command disappeared")
+            command = self._recovery_command_from_row(command_row)
+            permit_row = connection.execute(
+                "SELECT * FROM execution_recovery_permits WHERE permit_id = ?",
+                (command.permit_id,),
+            ).fetchone()
+            if permit_row is None:
+                raise StorageError("recovery permit disappeared")
+            permit = self._recovery_permit_from_row(permit_row)
+            if checked_at >= permit.expires_at:
+                raise AdmissionDenied("RECOVERY_PERMIT_EXPIRED", "permit expired before signing")
+            if (
+                signed_evidence.recovery_command_id != checked_id
+                or signed_evidence.incident_id != command.incident_id
+                or signed_evidence.kind != command.kind
+                or signed_evidence.source_hash != command.source_hash
+                or signed_evidence.recovery_hash != command.recovery_hash
+                or signed_evidence.safety_policy_hash != command.safety_policy_hash
+            ):
+                raise StateConflict("signed recovery evidence differs from durable command")
+            authority_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_signing_authorities
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if (
+                authority_row is None
+                or authority_row["authority_hash"]
+                != signed_evidence.signing_authority_hash
+            ):
+                raise StateConflict("signed recovery lacks consumed signing authority")
+            if signed_evidence.expires_after_ms > int(permit.expires_at.timestamp() * 1_000):
+                raise AdmissionDenied(
+                    "SIGNED_RECOVERY_OUTLIVES_PERMIT",
+                    "signed recovery expiry exceeds permit",
+                )
+            if command.kind == "noop_fence" and signed_evidence.nonce != command.original_nonce:
+                raise StateConflict("noop recovery changed the original unknown nonce")
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_recovery_attempts
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone() is not None:
+                raise StateConflict("recovery command already has an attempt; retry forbidden")
+            self._put_signed_recovery_locked(
+                connection, signed_evidence, at=checked_at
+            )
+            attempt = RecoveryAttempt(
+                attempt_id=checked_attempt,
+                recovery_command_id=checked_id,
+                worker_id=checked_worker,
+                fencing_token=token,
+                signed_evidence_hash=signed_evidence.evidence_hash,
+                transport_evidence_hash=None,
+                nonce=signed_evidence.nonce,
+                action_hash=signed_evidence.action_hash,
+                wire_hash=signed_evidence.wire_hash,
+                state="prepared",
+                prepared_at=checked_at,
+                updated_at=checked_at,
+            )
+            connection.execute(
+                """
+                INSERT INTO execution_recovery_attempts (
+                    attempt_id, recovery_command_id, worker_id, fencing_token,
+                    signed_evidence_hash, transport_evidence_hash, nonce,
+                    action_hash, wire_hash, state, prepared_at, updated_at,
+                    record_hash
+                ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 'prepared', ?, ?, ?)
+                """,
+                (
+                    attempt.attempt_id,
+                    attempt.recovery_command_id,
+                    attempt.worker_id,
+                    attempt.fencing_token,
+                    attempt.signed_evidence_hash,
+                    attempt.nonce,
+                    attempt.action_hash,
+                    attempt.wire_hash,
+                    _time_text(checked_at, field="prepared_at"),
+                    _time_text(checked_at, field="updated_at"),
+                    _record_hash(
+                        "recovery-attempt", self._recovery_attempt_material(attempt)
+                    ),
+                ),
+            )
+            self._set_recovery_outbox_locked(
+                connection,
+                outbox_row,
+                state="signing",
+                worker_id=checked_worker,
+                fencing_token=token,
+                claimed_at=outbox.claimed_at,
+                lease_expires_at=outbox.lease_expires_at,
+                current_attempt_id=attempt.attempt_id,
+                attempt_count=outbox.attempt_count + 1,
+                at=checked_at,
+            )
+            self._append_event_locked(
+                connection,
+                command_id=command.parent_command_id,
+                event_type="recovery_attempt_prepared",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": checked_id,
+                    "attempt_id": attempt.attempt_id,
+                    "signed_evidence_hash": signed_evidence.evidence_hash,
+                    "nonce": attempt.nonce,
+                },
+            )
+            return attempt
+
+    def _put_recovery_transport_locked(
+        self,
+        connection: sqlite3.Connection,
+        evidence: TransportOutcomeEvidence,
+        *,
+        at: datetime,
+    ) -> None:
+        payload_json, content_hash = _canonical_payload(evidence.as_dict())
+        material = {
+            **evidence.as_dict(),
+            "recorded_at": _time_text(at, field="recorded_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+        existing = connection.execute(
+            """
+            SELECT * FROM execution_recovery_transport_evidence
+            WHERE recovery_command_id = ?
+            """,
+            (evidence.command_id,),
+        ).fetchone()
+        if existing is not None:
+            current = self._recovery_transport_from_row(existing)
+            if current.evidence_hash == evidence.evidence_hash:
+                return
+            raise StateConflict("recovery cannot swap transport evidence")
+        connection.execute(
+            """
+            INSERT INTO execution_recovery_transport_evidence (
+                evidence_hash, recovery_command_id, attempt_id,
+                signed_evidence_hash, endpoint, attempted_at_ms, outcome,
+                http_status, detail_code, response_hash,
+                transport_attempt_hash, send_count, retry_performed,
+                venue_write_attempted, evidence_basis, recorded_at,
+                payload_json, content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence.evidence_hash,
+                evidence.command_id,
+                evidence.attempt_id,
+                evidence.signed_evidence_hash,
+                evidence.endpoint,
+                evidence.attempted_at_ms,
+                evidence.outcome,
+                evidence.http_status,
+                evidence.detail_code,
+                evidence.response_hash,
+                evidence.transport_attempt_hash,
+                evidence.send_count,
+                None
+                if evidence.venue_write_attempted is None
+                else int(evidence.venue_write_attempted),
+                evidence.evidence_basis,
+                _time_text(at, field="recorded_at"),
+                payload_json,
+                content_hash,
+                _record_hash("recovery-transport", material),
+            ),
+        )
+
+    @classmethod
+    def _recovery_transport_from_row(
+        cls,
+        row: Mapping[str, Any],
+    ) -> TransportOutcomeEvidence:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="recovery transport content_hash"
+        )
+        payload = _decode_payload(
+            payload_json,
+            content_hash,
+            field="recovery transport evidence",
+        )
+        if not isinstance(payload, dict):
+            raise StorageError("persisted recovery transport payload is not an object")
+        try:
+            evidence = TransportOutcomeEvidence(
+                command_id=str(row["recovery_command_id"]),
+                attempt_id=str(row["attempt_id"]),
+                signed_evidence_hash=str(row["signed_evidence_hash"]),
+                endpoint=str(row["endpoint"]),
+                attempted_at_ms=int(row["attempted_at_ms"]),
+                outcome=str(row["outcome"]),
+                http_status=(
+                    None if row["http_status"] is None else int(row["http_status"])
+                ),
+                detail_code=str(row["detail_code"]),
+                response_hash=(
+                    None if row["response_hash"] is None else str(row["response_hash"])
+                ),
+                transport_attempt_hash=(
+                    None
+                    if row["transport_attempt_hash"] is None
+                    else str(row["transport_attempt_hash"])
+                ),
+                send_count=(
+                    None if row["send_count"] is None else int(row["send_count"])
+                ),
+                retry_performed=bool(row["retry_performed"]),
+                venue_write_attempted=(
+                    None
+                    if row["venue_write_attempted"] is None
+                    else bool(row["venue_write_attempted"])
+                ),
+                evidence_basis=str(row["evidence_basis"]),
+                evidence_hash=str(row["evidence_hash"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted recovery transport evidence is invalid") from error
+        if canonical_json(evidence.as_dict()) != payload_json:
+            raise StorageError("persisted recovery transport differs from columns")
+        recorded_at = _parse_time(
+            row["recorded_at"], field="recovery transport recorded_at"
+        )
+        material = {
+            **evidence.as_dict(),
+            "recorded_at": _time_text(recorded_at, field="recorded_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+        if _stored_hash(
+            row["record_hash"], field="recovery transport record_hash"
+        ) != _record_hash("recovery-transport", material):
+            raise StorageError("persisted recovery transport record hash differs")
+        return evidence
+
+    def get_recovery_transport_evidence(
+        self,
+        recovery_command_id: str,
+    ) -> TransportOutcomeEvidence:
+        checked = _text(
+            recovery_command_id,
+            field="recovery_command_id",
+            maximum=128,
+        )
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_transport_evidence
+                WHERE recovery_command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("recovery transport evidence is not registered")
+        return self._recovery_transport_from_row(row)
+
+    @staticmethod
+    def _noop_fence_response_record_material(
+        evidence: NoopFenceResponseEvidence,
+        *,
+        payload_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            **evidence.as_dict(),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+
+    @classmethod
+    def _noop_fence_response_from_row(
+        cls,
+        row: Mapping[str, Any],
+    ) -> NoopFenceResponseEvidence:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="noop fence response content_hash"
+        )
+        payload = _decode_payload(
+            payload_json,
+            content_hash,
+            field="noop fence response evidence",
+        )
+        if not isinstance(payload, dict):
+            raise StorageError("persisted noop fence response is not an object")
+        try:
+            evidence = NoopFenceResponseEvidence(
+                recovery_command_id=str(row["recovery_command_id"]),
+                attempt_id=str(row["attempt_id"]),
+                signed_evidence_hash=str(row["signed_evidence_hash"]),
+                transport_evidence_hash=str(row["transport_evidence_hash"]),
+                nonce=int(row["nonce"]),
+                response_json=str(row["response_json"]),
+                response_hash=str(row["response_hash"]),
+                parsed_at=_parse_time(row["parsed_at"], field="noop parsed_at"),
+                evidence_hash=str(row["evidence_hash"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted noop fence response is invalid") from error
+        if canonical_json(evidence.as_dict()) != payload_json:
+            raise StorageError("persisted noop fence response differs from columns")
+        if _stored_hash(
+            row["record_hash"], field="noop fence response record_hash"
+        ) != _record_hash(
+            "noop-fence-response-record",
+            cls._noop_fence_response_record_material(
+                evidence,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        ):
+            raise StorageError("persisted noop fence response record hash differs")
+        return evidence
+
+    def _put_noop_fence_response_locked(
+        self,
+        connection: sqlite3.Connection,
+        evidence: NoopFenceResponseEvidence,
+    ) -> NoopFenceResponseEvidence:
+        payload_json, content_hash = _canonical_payload(evidence.as_dict())
+        record_hash = _record_hash(
+            "noop-fence-response-record",
+            self._noop_fence_response_record_material(
+                evidence,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        )
+        existing = connection.execute(
+            """
+            SELECT * FROM execution_noop_fence_responses
+            WHERE recovery_command_id = ?
+            """,
+            (evidence.recovery_command_id,),
+        ).fetchone()
+        if existing is not None:
+            current = self._noop_fence_response_from_row(existing)
+            if current.evidence_hash == evidence.evidence_hash:
+                return current
+            raise StateConflict("noop recovery cannot swap accepted response evidence")
+        connection.execute(
+            """
+            INSERT INTO execution_noop_fence_responses (
+                evidence_hash, recovery_command_id, attempt_id,
+                signed_evidence_hash, transport_evidence_hash, nonce,
+                response_json, response_hash, parsed_at, payload_json,
+                content_hash, record_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence.evidence_hash,
+                evidence.recovery_command_id,
+                evidence.attempt_id,
+                evidence.signed_evidence_hash,
+                evidence.transport_evidence_hash,
+                evidence.nonce,
+                evidence.response_json,
+                evidence.response_hash,
+                _time_text(evidence.parsed_at, field="parsed_at"),
+                payload_json,
+                content_hash,
+                record_hash,
+            ),
+        )
+        return evidence
+
+    def get_noop_fence_response(
+        self,
+        recovery_command_id: str,
+    ) -> NoopFenceResponseEvidence:
+        checked = _text(
+            recovery_command_id,
+            field="recovery_command_id",
+            maximum=128,
+        )
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_noop_fence_responses
+                WHERE recovery_command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("noop fence response evidence is not registered")
+        return self._noop_fence_response_from_row(row)
+
+    def require_terminal_noop_fence(
+        self,
+        parent_command_id: str,
+    ) -> NoopFenceResolution:
+        """Return a fully verified same-nonce fence for one parent command."""
+
+        checked_parent = _text(
+            parent_command_id,
+            field="parent_command_id",
+            maximum=128,
+        )
+        connection = self._connect()
+        try:
+            command_rows = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE parent_command_id = ? AND kind = 'noop_fence'
+                  AND state = 'terminal'
+                  AND EXISTS (
+                      SELECT 1 FROM execution_recovery_reconciliations AS r
+                      WHERE r.recovery_command_id =
+                            execution_recovery_commands.recovery_command_id
+                        AND r.complete = 1 AND r.success = 1
+                  )
+                """,
+                (checked_parent,),
+            ).fetchall()
+            if len(command_rows) != 1:
+                raise RecordNotFound(
+                    "parent command lacks one terminal noop fence"
+                )
+            command = self._recovery_command_from_row(command_rows[0])
+            if command.original_attempt_id is None or command.original_nonce is None:
+                raise StorageError("terminal noop command lacks original attempt binding")
+
+            original_row = connection.execute(
+                "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                (command.original_attempt_id,),
+            ).fetchone()
+            if original_row is None:
+                raise StorageError("terminal noop original attempt is missing")
+            original = self._attempt_from_row(original_row)
+            if (
+                original.command_id != checked_parent
+                or original.state != "unknown"
+                or original.nonce != command.original_nonce
+                or original.preflight_hash != command.preflight_hash
+            ):
+                raise StateConflict("terminal noop no longer binds the unknown parent")
+
+            attempt_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_attempts
+                WHERE recovery_command_id = ?
+                """,
+                (command.recovery_command_id,),
+            ).fetchone()
+            if attempt_row is None:
+                raise StorageError("terminal noop recovery attempt is missing")
+            attempt = self._recovery_attempt_from_row(attempt_row)
+            if (
+                attempt.state != "response_received"
+                or attempt.nonce != command.original_nonce
+                or attempt.transport_evidence_hash is None
+            ):
+                raise StateConflict("terminal noop attempt is not accepted")
+
+            response_row = connection.execute(
+                """
+                SELECT * FROM execution_noop_fence_responses
+                WHERE recovery_command_id = ?
+                """,
+                (command.recovery_command_id,),
+            ).fetchone()
+            if response_row is None:
+                raise StorageError("terminal noop response evidence is missing")
+            response = self._noop_fence_response_from_row(response_row)
+            if (
+                response.attempt_id != attempt.attempt_id
+                or response.transport_evidence_hash
+                != attempt.transport_evidence_hash
+                or response.nonce != command.original_nonce
+            ):
+                raise StateConflict("terminal noop response binding differs")
+
+            reconciliation_rows = connection.execute(
+                """
+                SELECT * FROM execution_recovery_reconciliations
+                WHERE recovery_command_id = ? AND complete = 1 AND success = 1
+                """,
+                (command.recovery_command_id,),
+            ).fetchall()
+            if len(reconciliation_rows) != 1:
+                raise StateConflict("terminal noop lacks one successful reconciliation")
+            row = reconciliation_rows[0]
+            payload_json = str(row["payload_json"])
+            content_hash = _stored_hash(
+                row["content_hash"], field="noop reconciliation content_hash"
+            )
+            payload = _decode_payload(
+                payload_json,
+                content_hash,
+                field="noop recovery reconciliation",
+            )
+            if not isinstance(payload, dict) or set(payload) != {
+                "reconciliation_id",
+                "proof",
+                "incident_resolution",
+            }:
+                raise StorageError("terminal noop reconciliation payload is invalid")
+            proof_document = payload["proof"]
+            if not isinstance(proof_document, dict):
+                raise StorageError("terminal noop proof payload is invalid")
+            try:
+                proof = RecoveryReconciliationProof(
+                    recovery_command_id=proof_document["recovery_command_id"],
+                    kind=proof_document["kind"],
+                    account_snapshot_hash=proof_document["account_snapshot_hash"],
+                    observed_at=_parse_time(
+                        proof_document["observed_at"],
+                        field="noop proof observed_at",
+                    ),
+                    signed_position_quantity=proof_document[
+                        "signed_position_quantity"
+                    ],
+                    protected_quantity=proof_document["protected_quantity"],
+                    open_order_cloids=tuple(proof_document["open_order_cloids"]),
+                    affected_cloids=tuple(proof_document["affected_cloids"]),
+                    resolved_original_nonce=proof_document[
+                        "resolved_original_nonce"
+                    ],
+                    resolved_original_outcome=proof_document[
+                        "resolved_original_outcome"
+                    ],
+                    complete=proof_document["complete"],
+                    success=proof_document["success"],
+                    proof_hash=proof_document["proof_hash"],
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise StorageError("terminal noop proof cannot be reconstructed") from error
+            if (
+                canonical_json(proof.as_dict())
+                != canonical_json(proof_document)
+                or proof.kind != "noop_fence"
+                or proof.recovery_command_id != command.recovery_command_id
+                or proof.resolved_original_nonce != command.original_nonce
+                or proof.resolved_original_outcome != "fenced"
+                or not proof.complete
+                or not proof.success
+                or proof.signed_position_quantity != ZERO
+            ):
+                raise StateConflict("terminal noop proof does not establish a flat fence")
+            reconciliation_id = str(payload["reconciliation_id"])
+            incident_resolution = payload["incident_resolution"]
+            if incident_resolution not in {"contained", "closed"}:
+                raise StateConflict("terminal noop incident was not contained")
+            record_material = {
+                "reconciliation_id": reconciliation_id,
+                "proof": proof.as_dict(),
+                "incident_resolution": incident_resolution,
+                "payload_json": payload_json,
+                "content_hash": content_hash,
+            }
+            if _stored_hash(
+                row["record_hash"], field="noop reconciliation record_hash"
+            ) != _record_hash("recovery-reconciliation", record_material):
+                raise StorageError("terminal noop reconciliation hash differs")
+            if (
+                str(row["account_snapshot_hash"]) != proof.account_snapshot_hash
+                or int(row["complete"]) != 1
+                or int(row["success"]) != 1
+                or _parse_time(row["observed_at"], field="noop observed_at")
+                != proof.observed_at
+            ):
+                raise StorageError("terminal noop reconciliation columns differ")
+
+            incident_row = connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (command.incident_id,),
+            ).fetchone()
+            if incident_row is None:
+                raise StorageError("terminal noop incident is missing")
+            incident = self._incident_from_row(incident_row)
+            if incident.state not in {"contained", "closed"}:
+                raise StateConflict("terminal noop incident is not contained")
+            material = {
+                "parent_command_id": checked_parent,
+                "recovery_command_id": command.recovery_command_id,
+                "incident_id": command.incident_id,
+                "original_attempt_id": command.original_attempt_id,
+                "original_nonce": command.original_nonce,
+                "response_evidence_hash": response.evidence_hash,
+                "proof_hash": proof.proof_hash,
+                "account_snapshot_hash": proof.account_snapshot_hash,
+                "observed_at": _time_text(proof.observed_at, field="observed_at"),
+            }
+            return NoopFenceResolution(
+                parent_command_id=checked_parent,
+                recovery_command_id=command.recovery_command_id,
+                incident_id=command.incident_id,
+                original_attempt_id=command.original_attempt_id,
+                original_nonce=command.original_nonce,
+                response_evidence_hash=response.evidence_hash,
+                proof_hash=proof.proof_hash,
+                account_snapshot_hash=proof.account_snapshot_hash,
+                observed_at=proof.observed_at,
+                resolution_hash=_record_hash("noop-fence-resolution", material),
+            )
+        finally:
+            connection.close()
+
+    def close_noop_fenced_incident(
+        self,
+        parent_command_id: str,
+        resolution_hash: str,
+        *,
+        at: datetime,
+    ) -> IncidentRecord:
+        """Close a contained noop incident only after parent terminal-flat proof."""
+
+        checked_parent = _text(
+            parent_command_id,
+            field="parent_command_id",
+            maximum=128,
+        )
+        checked_resolution = _hash(resolution_hash, field="resolution_hash")
+        checked_at = _utc(at, field="at")
+        resolution = self.require_terminal_noop_fence(checked_parent)
+        if resolution.resolution_hash != checked_resolution:
+            raise StateConflict("noop fence resolution hash differs")
+        with self._transaction() as connection:
+            parent_row = connection.execute(
+                "SELECT * FROM execution_commands WHERE command_id = ?",
+                (checked_parent,),
+            ).fetchone()
+            if parent_row is None:
+                raise RecordNotFound("noop parent command is missing")
+            parent = self._command_from_row(parent_row)
+            if parent.state != "terminal":
+                raise StateConflict("noop parent must be terminal before incident closure")
+            plan_row = connection.execute(
+                "SELECT instrument FROM execution_plans WHERE plan_hash = ?",
+                (parent.plan_hash,),
+            ).fetchone()
+            if plan_row is None:
+                raise StorageError("noop parent plan is missing")
+            position_row = connection.execute(
+                "SELECT * FROM execution_positions WHERE instrument = ?",
+                (str(plan_row["instrument"]),),
+            ).fetchone()
+            protection_row = connection.execute(
+                "SELECT * FROM execution_protection WHERE command_id = ?",
+                (checked_parent,),
+            ).fetchone()
+            if (
+                position_row is None
+                or self._position_from_row(position_row).signed_quantity != ZERO
+                or protection_row is None
+                or self._protection_from_row(protection_row).state != "flat"
+            ):
+                raise StateConflict("noop parent is not durably terminal and flat")
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_recovery_commands
+                WHERE state != 'terminal' LIMIT 1
+                """
+            ).fetchone() is not None:
+                raise StateConflict("another recovery command remains active")
+            incident_row = connection.execute(
+                "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                (resolution.incident_id,),
+            ).fetchone()
+            if incident_row is None:
+                raise StorageError("noop recovery incident is missing")
+            incident = self._incident_from_row(incident_row)
+            if incident.state == "closed":
+                return incident
+            if incident.state != "contained" or checked_at < incident.updated_at:
+                raise StateConflict("noop recovery incident is not closable")
+            details_json, details_hash = _canonical_payload(
+                dict(incident.details), maximum=_MAX_DETAILS_BYTES
+            )
+            revision = incident.revision + 1
+            material = self._incident_material(
+                incident.incident_id,
+                incident.command_id,
+                incident.code,
+                incident.severity,
+                "closed",
+                incident.opened_at,
+                checked_at,
+                revision,
+                details_json,
+                details_hash,
+            )
+            connection.execute(
+                """
+                UPDATE execution_incidents SET state = 'closed', updated_at = ?,
+                    revision = ?, record_hash = ?
+                WHERE incident_id = ? AND revision = ? AND state = 'contained'
+                """,
+                (
+                    _time_text(checked_at, field="updated_at"),
+                    revision,
+                    _record_hash("incident", material),
+                    incident.incident_id,
+                    incident.revision,
+                ),
+            )
+            closed = self._incident_from_row(
+                connection.execute(
+                    "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                    (incident.incident_id,),
+                ).fetchone()
+            )
+            self._append_event_locked(
+                connection,
+                command_id=checked_parent,
+                event_type="noop_fenced_incident_closed",
+                occurred_at=checked_at,
+                payload={
+                    "incident_id": closed.incident_id,
+                    "noop_fence_resolution_hash": checked_resolution,
+                    "parent_terminal": True,
+                    "parent_flat": True,
+                },
+            )
+            return closed
+
+    def record_recovery_outcome(
+        self,
+        recovery_command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        transport_evidence: TransportOutcomeEvidence,
+        noop_response: NoopFenceResponseEvidence | None = None,
+        at: datetime,
+    ) -> RecoveryCommand:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        if not isinstance(transport_evidence, TransportOutcomeEvidence):
+            raise TypeError("transport_evidence must be TransportOutcomeEvidence")
+        if noop_response is not None and not isinstance(
+            noop_response, NoopFenceResponseEvidence
+        ):
+            raise TypeError("noop_response must be NoopFenceResponseEvidence or None")
+        with self._transaction() as connection:
+            outbox, outbox_row = self._require_recovery_claim_locked(
+                connection,
+                recovery_command_id=checked_id,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                states={"signing"},
+            )
+            if outbox.current_attempt_id is None:
+                raise StateConflict("recovery outcome requires prepared attempt")
+            attempt_row = connection.execute(
+                "SELECT * FROM execution_recovery_attempts WHERE attempt_id = ?",
+                (outbox.current_attempt_id,),
+            ).fetchone()
+            if attempt_row is None:
+                raise StorageError("recovery attempt disappeared")
+            attempt = self._recovery_attempt_from_row(attempt_row)
+            if attempt.state != "sending":
+                raise StateConflict(
+                    "recovery transport requires consumed submission authority"
+                )
+            if (
+                transport_evidence.command_id != checked_id
+                or transport_evidence.attempt_id != attempt.attempt_id
+                or transport_evidence.signed_evidence_hash
+                != attempt.signed_evidence_hash
+                or transport_evidence.evidence_basis != "transport_result"
+            ):
+                raise StateConflict("recovery transport differs from attempt")
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("recovery command disappeared")
+            command = self._recovery_command_from_row(command_row)
+            if command.kind == "noop_fence":
+                if transport_evidence.outcome == "response_received":
+                    if noop_response is None:
+                        raise StateConflict(
+                            "accepted noop transport requires canonical response evidence"
+                        )
+                    if (
+                        noop_response.recovery_command_id != checked_id
+                        or noop_response.attempt_id != attempt.attempt_id
+                        or noop_response.signed_evidence_hash
+                        != attempt.signed_evidence_hash
+                        or noop_response.transport_evidence_hash
+                        != transport_evidence.evidence_hash
+                        or noop_response.nonce != attempt.nonce
+                        or noop_response.response_hash
+                        != transport_evidence.response_hash
+                        or int(noop_response.parsed_at.timestamp() * 1_000)
+                        < transport_evidence.attempted_at_ms
+                        or noop_response.parsed_at > checked_at
+                    ):
+                        raise StateConflict(
+                            "noop response evidence differs from durable attempt"
+                        )
+                elif noop_response is not None:
+                    raise StateConflict("unknown noop transport cannot claim acceptance")
+            elif noop_response is not None:
+                raise StateConflict("only noop recovery accepts default response evidence")
+            self._put_recovery_transport_locked(
+                connection, transport_evidence, at=checked_at
+            )
+            if noop_response is not None:
+                self._put_noop_fence_response_locked(connection, noop_response)
+            attempt_state = (
+                "unknown"
+                if transport_evidence.outcome == "unknown"
+                else "response_received"
+            )
+            self._update_recovery_attempt_locked(
+                connection,
+                attempt,
+                state=attempt_state,
+                transport_evidence_hash=transport_evidence.evidence_hash,
+                at=checked_at,
+            )
+            state = (
+                "submitted_unknown"
+                if transport_evidence.outcome == "unknown"
+                else "reconciling"
+            )
+            self._set_recovery_outbox_locked(
+                connection,
+                outbox_row,
+                state=state,
+                worker_id=None,
+                fencing_token=token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=attempt.attempt_id,
+                attempt_count=outbox.attempt_count,
+                at=checked_at,
+            )
+            command = self._set_recovery_command_state_locked(
+                connection, command_row, state=state, at=checked_at
+            )
+            self._append_event_locked(
+                connection,
+                command_id=command.parent_command_id,
+                event_type="recovery_transport_outcome_recorded",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": checked_id,
+                    "outcome": transport_evidence.outcome,
+                    "transport_evidence_hash": transport_evidence.evidence_hash,
+                    "retry_allowed": False,
+                },
+            )
+            return command
+
+    def claim_recovery_reconciliation(
+        self,
+        recovery_command_id: str,
+        worker_id: str,
+        *,
+        at: datetime,
+        lease_seconds: int,
+    ) -> RecoveryOutbox:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        checked_at = _utc(at, field="at")
+        lease = _positive_int(lease_seconds, field="lease_seconds", maximum=3_600)
+        with self._transaction() as connection:
+            self._normalize_expired_recovery_locked(connection, at=checked_at)
+            row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_outbox
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if row is None:
+                raise RecordNotFound("recovery outbox is missing")
+            current = self._recovery_outbox_from_row(row)
+            if current.state not in {"submitted_unknown", "reconciling"}:
+                raise StateConflict("recovery is not ready for reconciliation")
+            if (
+                current.worker_id is not None
+                and current.lease_expires_at is not None
+                and checked_at < current.lease_expires_at
+            ):
+                raise StateConflict("recovery reconciliation is already claimed")
+            expires = checked_at + timedelta(seconds=lease)
+            claimed = self._set_recovery_outbox_locked(
+                connection,
+                row,
+                state="reconciling",
+                worker_id=checked_worker,
+                fencing_token=current.fencing_token + 1,
+                claimed_at=checked_at,
+                lease_expires_at=expires,
+                current_attempt_id=current.current_attempt_id,
+                attempt_count=current.attempt_count,
+                at=checked_at,
+            )
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            command = self._recovery_command_from_row(command_row)
+            if command.state != "reconciling":
+                self._set_recovery_command_state_locked(
+                    connection, command_row, state="reconciling", at=checked_at
+                )
+            return claimed
+
+    def reconcile_recovery(
+        self,
+        recovery_command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        reconciliation_id: str,
+        proof: RecoveryReconciliationProof,
+        incident_resolution: str | None,
+    ) -> RecoveryCommand:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_reconciliation = _text(
+            reconciliation_id, field="reconciliation_id", maximum=128
+        )
+        if not isinstance(proof, RecoveryReconciliationProof):
+            raise TypeError("proof must be RecoveryReconciliationProof")
+        if proof.recovery_command_id != checked_id:
+            raise StateConflict("recovery proof targets another command")
+        checked_at = proof.observed_at
+        if incident_resolution not in {None, "contained", "closed"}:
+            raise ValidationError("incident_resolution is invalid")
+        if incident_resolution is not None and (not proof.complete or not proof.success):
+            raise ValidationError("incident resolution requires complete success")
+        with self._transaction() as connection:
+            outbox, outbox_row = self._require_recovery_claim_locked(
+                connection,
+                recovery_command_id=checked_id,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                states={"reconciling"},
+            )
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("recovery command disappeared")
+            command = self._recovery_command_from_row(command_row)
+            if proof.kind != command.kind:
+                raise StateConflict("recovery proof kind differs from command")
+            recovery_material = json.loads(command.recovery_material_json)
+            if not isinstance(recovery_material, dict):
+                raise StorageError("recovery material is not an object")
+            if proof.success:
+                if command.kind == "reduce_only_close":
+                    original = _decimal(
+                        recovery_material.get("original_signed_position"),
+                        field="original_signed_position",
+                    )
+                    close_size = _decimal(
+                        recovery_material.get("close_size"),
+                        field="close_size",
+                        nonnegative=True,
+                    )
+                    maximum_remaining = max(abs(original) - close_size, ZERO)
+                    flipped = (
+                        original > ZERO and proof.signed_position_quantity < ZERO
+                    ) or (
+                        original < ZERO and proof.signed_position_quantity > ZERO
+                    )
+                    if flipped or abs(proof.signed_position_quantity) > maximum_remaining:
+                        raise StateConflict(
+                            "close proof does not show bounded non-flipping reduction"
+                        )
+                elif command.kind == "cancel_by_cloid":
+                    requests = recovery_material.get("requests")
+                    if not isinstance(requests, list):
+                        raise StorageError("cancel recovery material lacks requests")
+                    expected_cloids = tuple(
+                        sorted(
+                            str(item.get("cloid"))
+                            for item in requests
+                            if isinstance(item, dict)
+                        )
+                    )
+                    if proof.affected_cloids != expected_cloids or set(
+                        expected_cloids
+                    ) & set(proof.open_order_cloids):
+                        raise StateConflict(
+                            "cancel proof does not match persisted requested CLOIDs"
+                        )
+                else:
+                    original_nonce = recovery_material.get("original_nonce")
+                    if (
+                        type(original_nonce) is not int
+                        or proof.resolved_original_nonce != original_nonce
+                        or proof.resolved_original_outcome is None
+                    ):
+                        raise StateConflict(
+                            "noop proof does not resolve persisted original nonce"
+                        )
+            payload = {
+                "reconciliation_id": checked_reconciliation,
+                "proof": proof.as_dict(),
+                "incident_resolution": incident_resolution,
+            }
+            payload_json, content_hash = _canonical_payload(payload)
+            record_hash = _record_hash(
+                "recovery-reconciliation",
+                {
+                    **payload,
+                    "payload_json": payload_json,
+                    "content_hash": content_hash,
+                },
+            )
+            existing = connection.execute(
+                """
+                SELECT * FROM execution_recovery_reconciliations
+                WHERE reconciliation_id = ?
+                """,
+                (checked_reconciliation,),
+            ).fetchone()
+            if existing is not None:
+                if existing["record_hash"] == record_hash:
+                    return command
+                raise StateConflict("recovery reconciliation ID conflicts")
+            connection.execute(
+                """
+                INSERT INTO execution_recovery_reconciliations (
+                    reconciliation_id, recovery_command_id,
+                    account_snapshot_hash, success, complete,
+                    incident_resolution, observed_at, payload_json,
+                    content_hash, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checked_reconciliation,
+                    checked_id,
+                    proof.account_snapshot_hash,
+                    int(proof.success),
+                    int(proof.complete),
+                    incident_resolution,
+                    _time_text(checked_at, field="observed_at"),
+                    payload_json,
+                    content_hash,
+                    record_hash,
+                ),
+            )
+            if not proof.complete:
+                return command
+            plan_row = connection.execute(
+                """
+                SELECT plan.instrument FROM execution_commands AS parent
+                JOIN execution_plans AS plan ON plan.plan_hash = parent.plan_hash
+                WHERE parent.command_id = ?
+                """,
+                (command.parent_command_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise StorageError("recovery parent plan is missing")
+            instrument = str(plan_row["instrument"])
+            self._upsert_position_locked(
+                connection,
+                instrument=instrument,
+                quantity=proof.signed_position_quantity,
+                snapshot_hash=proof.account_snapshot_hash,
+                observed_at=checked_at,
+            )
+            stop_row = connection.execute(
+                """
+                SELECT cloid FROM execution_command_legs
+                WHERE command_id = ? AND role = 'protective_stop'
+                """,
+                (command.parent_command_id,),
+            ).fetchone()
+            if stop_row is None:
+                raise StorageError("recovery parent protective stop is missing")
+            protection = self._upsert_protection_locked(
+                connection,
+                command_id=command.parent_command_id,
+                instrument=instrument,
+                signed_position=proof.signed_position_quantity,
+                protected_quantity=proof.protected_quantity,
+                stop_cloid=str(stop_row["cloid"]),
+                observed_at=checked_at,
+                failed=False,
+            )
+            if incident_resolution == "contained" and not (
+                proof.signed_position_quantity == ZERO
+                or protection.state == "protected"
+            ):
+                raise StateConflict(
+                    "incident cannot be contained without flat or protected position"
+                )
+            if incident_resolution == "closed":
+                parent_row = connection.execute(
+                    "SELECT * FROM execution_commands WHERE command_id = ?",
+                    (command.parent_command_id,),
+                ).fetchone()
+                parent = self._command_from_row(parent_row)
+                protection_row = connection.execute(
+                    "SELECT * FROM execution_protection WHERE command_id = ?",
+                    (command.parent_command_id,),
+                ).fetchone()
+                if (
+                    parent.state != "terminal"
+                    or protection_row is None
+                    or self._protection_from_row(protection_row).state != "flat"
+                ):
+                    raise StateConflict(
+                        "incident cannot close before parent entry is terminal and flat"
+                    )
+            if incident_resolution is not None:
+                incident_row = connection.execute(
+                    "SELECT * FROM execution_incidents WHERE incident_id = ?",
+                    (command.incident_id,),
+                ).fetchone()
+                incident = self._incident_from_row(incident_row)
+                details_json, details_hash = _canonical_payload(
+                    dict(incident.details), maximum=_MAX_DETAILS_BYTES
+                )
+                updated_incident = self._incident_material(
+                    incident.incident_id,
+                    incident.command_id,
+                    incident.code,
+                    incident.severity,
+                    incident_resolution,
+                    incident.opened_at,
+                    checked_at,
+                    incident.revision + 1,
+                    details_json,
+                    details_hash,
+                )
+                connection.execute(
+                    """
+                    UPDATE execution_incidents SET state = ?, updated_at = ?,
+                        revision = ?, record_hash = ? WHERE incident_id = ?
+                    """,
+                    (
+                        incident_resolution,
+                        _time_text(checked_at, field="updated_at"),
+                        incident.revision + 1,
+                        _record_hash("incident", updated_incident),
+                        incident.incident_id,
+                    ),
+                )
+            terminal = self._set_recovery_command_state_locked(
+                connection,
+                command_row,
+                state="terminal",
+                at=checked_at,
+                terminal=True,
+            )
+            self._set_recovery_outbox_locked(
+                connection,
+                outbox_row,
+                state="terminal",
+                worker_id=None,
+                fencing_token=token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=outbox.current_attempt_id,
+                attempt_count=outbox.attempt_count,
+                at=checked_at,
+            )
+            self._append_event_locked(
+                connection,
+                command_id=command.parent_command_id,
+                event_type="recovery_reconciliation_terminal",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": checked_id,
+                    "success": proof.success,
+                    "incident_resolution": incident_resolution,
+                    "parent_risk_released": False,
+                },
+            )
+            return terminal
+
+    def get_recovery_attempt(self, recovery_command_id: str) -> RecoveryAttempt:
+        checked = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_attempts
+                WHERE recovery_command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("recovery attempt is not registered")
+        return self._recovery_attempt_from_row(row)
+
+    def get_recovery_permit_state(self, permit_id: str) -> str:
+        checked = _text(permit_id, field="permit_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_recovery_permits WHERE permit_id = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("recovery permit is not registered")
+        self._recovery_permit_from_row(row)
+        return str(row["state"])
+
+    def get_signed_recovery_evidence(
+        self, recovery_command_id: str
+    ) -> SignedRecoveryEvidence:
+        checked = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_signed_recovery_evidence
+                WHERE recovery_command_id = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("signed recovery evidence is not registered")
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="signed recovery content_hash"
+        )
+        payload = _decode_payload(
+            payload_json, content_hash, field="signed recovery evidence"
+        )
+        if not isinstance(payload, dict):
+            raise StorageError("signed recovery payload is not an object")
+        try:
+            evidence = SignedRecoveryEvidence(
+                recovery_command_id=str(row["recovery_command_id"]),
+                incident_id=str(row["incident_id"]),
+                kind=str(row["kind"]),
+                source_hash=str(row["source_hash"]),
+                recovery_hash=str(row["recovery_hash"]),
+                signing_authority_hash=str(row["signing_authority_hash"]),
+                safety_policy_hash=str(row["safety_policy_hash"]),
+                nonce=int(row["nonce"]),
+                wire_hash=str(row["wire_hash"]),
+                action_hash=str(row["action_hash"]),
+                signature_hash=str(row["signature_hash"]),
+                envelope_hash=str(row["envelope_hash"]),
+                signer_binding_hash=str(row["signer_binding_hash"]),
+                expires_after_ms=int(row["expires_after_ms"]),
+                signed_at_ms=int(row["signed_at_ms"]),
+                evidence_hash=str(row["evidence_hash"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted signed recovery evidence is invalid") from error
+        if canonical_json(evidence.as_dict()) != payload_json:
+            raise StorageError("persisted signed recovery payload differs")
+        recorded_at = _parse_time(
+            row["recorded_at"], field="signed recovery recorded_at"
+        )
+        if _stored_hash(
+            row["record_hash"], field="signed recovery record_hash"
+        ) != _record_hash(
+            "signed-recovery-record",
+            self._signed_recovery_material(
+                evidence,
+                recorded_at=recorded_at,
+                payload_json=payload_json,
+                content_hash=content_hash,
+            ),
+        ):
+            raise StorageError("persisted signed recovery record hash differs")
+        return evidence
+
 
 __all__ = (
     "AttemptRecord",
@@ -5608,10 +9057,17 @@ __all__ = (
     "IncidentRecord",
     "LegRecord",
     "LegReconciliation",
+    "NoopFenceResponseEvidence",
+    "NoopFenceResolution",
     "OutboxRecord",
     "PositionRecord",
     "ProtectionRecord",
+    "RecoveryAttempt",
+    "RecoveryCommand",
+    "RecoveryOutbox",
+    "RecoveryPermit",
     "SignedEnvelopeEvidence",
+    "SignedRecoveryEvidence",
     "TransportOutcomeEvidence",
     "TrustedApproval",
     "VenueFill",

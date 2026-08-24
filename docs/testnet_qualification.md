@@ -1,6 +1,10 @@
 # Hyperliquid testnet qualification
 
-Status: **not run; venue writes remain disabled**.
+Status: **offline implementation complete; live venue qualification not run**.
+
+The TESTNET execution functions are real and armed when the isolated worker is
+explicitly constructed. No account, API wallet or worker service is configured
+by the repository, and no Codex/MCP tool can invoke them.
 
 This checklist is a release gate, not a setup shortcut. Unit tests, local paper
 fills and valid SDK signatures do not prove that an API wallet is registered to
@@ -21,6 +25,23 @@ Provision outside Codex/chat and outside the repository:
 Never paste the API-wallet private key into a task, config committed to Git,
 environment variable visible to the agent, issue, log or test fixture. The
 research/MCP/Codex OS identity must not be able to read the signer credential.
+
+On macOS, create the generic-password item while logged in as the dedicated
+executor identity. `-w` must be the final argument so `security` prompts on the
+TTY; do not put the key in shell history or argv. Replace the Python path with
+the reviewed execution virtual environment:
+
+```sh
+/usr/bin/security add-generic-password -U \
+  -a hyperliquid-api-wallet \
+  -s com.jawndiego.trading-desk.testnet-signer \
+  -T /absolute/path/to/.venv-execution/bin/python3.11 \
+  -w
+```
+
+The harness only reads that item, verifies the derived public signer address,
+and zeroes its command-output buffers. It has no credential provisioning,
+export, environment-variable, or plaintext-file path.
 
 Install a reviewed commit in a Python 3.11 execution environment with the exact
 optional SDK pin:
@@ -46,6 +67,9 @@ Before connecting the signer process, retain passing evidence for:
 8. reduce-only close, owned-CLOID cancel and same-nonce noop construction;
 9. crash-before-send, crash-after-attempt and tamper tests;
 10. research strategy and deployment authority remaining independent.
+11. single-use recovery signing/submission authority, exact noop-default
+    response persistence, expired-unsent permit terminalization, and parent
+    risk release only after terminal-flat reconciliation.
 
 ## Live testnet sequence
 
@@ -67,7 +91,9 @@ request identity, response hash, account snapshot and reconciliation result.
    the account flat.
 7. Drop a real HTTP response after forwarding. Recover by CLOID/account state;
    do not send a replacement entry. Exercise the same-original-nonce noop only
-   through its durable incident-bound recovery command.
+   through its durable incident-bound recovery command. Treat only the exact
+   documented `{"status":"ok","response":{"type":"default"}}` body as an
+   accepted fence; every other body remains unknown.
 8. Disconnect WebSocket monitoring across a fill, then recover through REST
    without duplicate events or fills.
 9. Simulate stop rejection/disappearance and prove account-wide new risk is

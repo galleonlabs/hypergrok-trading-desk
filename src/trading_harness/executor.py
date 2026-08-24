@@ -1,9 +1,9 @@
-"""Fail-closed execution boundary for the foundation release.
+"""Fail-closed execution boundary used by research, MCP and the default CLI.
 
 This module intentionally contains no venue SDK, network client, credential
-loader, or enabled adapter.  The only adapter shipped by the project rejects
-every request.  A later execution implementation must live behind this narrow
-boundary and pass a separate safety review before it can be selected.
+loader, or enabled adapter. It rejects every request. The isolated TESTNET
+worker uses explicit signer/dispatcher modules and cannot be selected through
+this application-facing boundary.
 """
 
 from __future__ import annotations
@@ -56,8 +56,8 @@ class DisabledVenueAdapter:
     """Null adapter that fails closed for every venue write."""
 
     _REASON = (
-        "venue writes are disabled: this foundation contains no live trading "
-        "adapter"
+        "venue writes are disabled in the research/MCP/default CLI boundary; "
+        "isolated testnet execution is separate and unconfigured"
     )
     _STATUS = ExecutionStatus(
         adapter="disabled",

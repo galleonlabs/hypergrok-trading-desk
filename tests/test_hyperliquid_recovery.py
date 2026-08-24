@@ -20,6 +20,8 @@ from trading_harness.hyperliquid_recovery import (
     build_cancel_by_cloid,
     build_noop_fence,
     build_reduce_only_close,
+    recovery_action_from_material,
+    recovery_action_material,
 )
 from trading_harness.hyperliquid_signer import (
     OFFICIAL_SDK_VERSION,
@@ -35,6 +37,7 @@ from trading_harness.hyperliquid_signer import (
 from trading_harness.hyperliquid_transport import (
     HttpExchangeResponse,
     HyperliquidSubmissionError,
+    NOOP_FENCE_SUBMISSION_ENABLED,
     RECOVERY_SUBMISSION_ENABLED,
     submit_signed_action,
 )
@@ -179,10 +182,7 @@ def build_close(*, short: bool = False, close_size: Decimal | None = None):
 def build_cancel():
     return build_cancel_by_cloid(
         snapshot(),
-        (
-            CancelRequest("ETH", STOP_CLOID),
-            CancelRequest("ETH", TARGET_CLOID),
-        ),
+        (CancelRequest("ETH", TARGET_CLOID),),
         owned_cloids=(STOP_CLOID, TARGET_CLOID),
         incident=incident(),
         account_id="desk-recovery",
@@ -232,7 +232,64 @@ def rebind_close(value, *, wire_action=None, close_size=None):
     )
 
 
+def rebind_cancel(value, *, requests, asset_ids, wire_action):
+    provisional = replace(
+        value,
+        requests=tuple(requests),
+        asset_ids=tuple(asset_ids),
+        action=wire_action,
+    )
+    material = {
+        "kind": RecoveryKind.CANCEL_BY_CLOID.value,
+        "network": provisional.network.value,
+        "account_id": provisional.account_id,
+        "main_account_address": provisional.main_account_address,
+        "incident_id": provisional.incident_id,
+        "account_snapshot_hash": provisional.account_snapshot_hash,
+        "requests": [
+            {
+                "symbol": request.symbol,
+                "asset_id": asset_id,
+                "cloid": request.cloid,
+            }
+            for request, asset_id in zip(
+                provisional.requests,
+                provisional.asset_ids,
+            )
+        ],
+        "expires_at_ms": provisional.expires_at_ms,
+        "action": wire_action,
+    }
+    return replace(
+        provisional,
+        recovery_hash=domain_hash(RECOVERY_ACTION_HASH_DOMAIN, material),
+    )
+
+
 class RecoveryConstructionTests(unittest.TestCase):
+    def test_exact_material_round_trips_every_recovery_hash(self) -> None:
+        for recovery in (build_close(), build_cancel(), build_noop()):
+            with self.subTest(kind=recovery.kind):
+                material = recovery_action_material(recovery)
+                self.assertEqual(
+                    domain_hash(RECOVERY_ACTION_HASH_DOMAIN, material),
+                    recovery.recovery_hash,
+                )
+                self.assertIsNot(material["action"], recovery.action)
+                self.assertEqual(
+                    recovery,
+                    recovery_action_from_material(material),
+                )
+
+        malformed = recovery_action_material(build_close())
+        malformed["unexpected"] = True
+        with self.assertRaisesRegex(ValidationError, "fields"):
+            recovery_action_from_material(malformed)
+        noncanonical = recovery_action_material(build_close())
+        noncanonical["close_size"] = "0.500"
+        with self.assertRaisesRegex(ValidationError, "canonical"):
+            recovery_action_from_material(noncanonical)
+
     def test_long_full_and_partial_residual_closes_are_bounded_reduce_only_ioc(self) -> None:
         full = build_close()
         residual = build_close(close_size=Decimal("0.2"))
@@ -304,17 +361,53 @@ class RecoveryConstructionTests(unittest.TestCase):
         recovery = build_cancel()
 
         self.assertIs(recovery.kind, RecoveryKind.CANCEL_BY_CLOID)
-        self.assertEqual(recovery.asset_ids, (1, 1))
+        self.assertEqual(recovery.asset_ids, (1,))
         self.assertEqual(
             recovery.action,
             {
                 "type": "cancelByCloid",
-                "cancels": [
-                    {"asset": 1, "cloid": STOP_CLOID},
-                    {"asset": 1, "cloid": TARGET_CLOID},
-                ],
+                "cancels": [{"asset": 1, "cloid": TARGET_CLOID}],
             },
         )
+
+        with self.assertRaisesRegex(ValidationError, "protective stop"):
+            build_cancel_by_cloid(
+                snapshot(),
+                (CancelRequest("ETH", STOP_CLOID),),
+                owned_cloids=(STOP_CLOID,),
+                incident=incident(),
+                account_id="desk-recovery",
+                network=HyperliquidNetwork.TESTNET,
+                at=RECOVERY_NOW,
+            )
+
+        flat_cleanup = build_cancel_by_cloid(
+            snapshot(positions=False),
+            (CancelRequest("ETH", STOP_CLOID),),
+            owned_cloids=(STOP_CLOID,),
+            incident=incident(),
+            account_id="desk-recovery",
+            network=HyperliquidNetwork.TESTNET,
+            at=RECOVERY_NOW,
+        )
+        self.assertEqual(
+            flat_cleanup.action,
+            {
+                "type": "cancelByCloid",
+                "cancels": [{"asset": 1, "cloid": STOP_CLOID}],
+            },
+        )
+
+        with self.assertRaisesRegex(ValidationError, "fresh snapshot"):
+            build_cancel_by_cloid(
+                snapshot(),
+                (CancelRequest("ETH", CLOSE_CLOID),),
+                owned_cloids=(CLOSE_CLOID,),
+                incident=incident(),
+                account_id="desk-recovery",
+                network=HyperliquidNetwork.TESTNET,
+                at=RECOVERY_NOW,
+            )
 
         with self.assertRaisesRegex(ValidationError, "owned"):
             build_cancel_by_cloid(
@@ -389,17 +482,17 @@ class RecoveryConstructionTests(unittest.TestCase):
 
 
 class RecoverySignerTests(unittest.TestCase):
-    def test_public_recovery_signing_is_compiled_hard_off(self) -> None:
+    def test_public_recovery_signing_requires_durable_store_authority(self) -> None:
         recovery = build_close()
         events: list[str] = []
 
-        self.assertFalse(RECOVERY_SIGNING_ENABLED)
-        self.assertFalse(RECOVERY_SUBMISSION_ENABLED)
-        with self.assertRaisesRegex(SignerPolicyError, "hard-disabled"):
+        self.assertTrue(RECOVERY_SIGNING_ENABLED)
+        self.assertTrue(RECOVERY_SUBMISSION_ENABLED)
+        self.assertTrue(NOOP_FENCE_SUBMISSION_ENABLED)
+        with self.assertRaises(TypeError):
             public_sign_recovery_action(
                 recovery,
                 evidence=snapshot(),
-                incident=incident(),
                 policy=recovery_policy(),
                 wallet=FakeWallet(),
                 nonce_allocator=FakeNonceAllocator(events, RECOVERY_NOW_MS + 1),
@@ -485,31 +578,11 @@ class RecoverySignerTests(unittest.TestCase):
         wire_action = deepcopy(base.action)
         for item in wire_action["cancels"]:  # type: ignore[index]
             item["asset"] = 0
-        provisional = replace(base, asset_ids=(0, 0), action=wire_action)
-        material = {
-            "kind": RecoveryKind.CANCEL_BY_CLOID.value,
-            "network": provisional.network.value,
-            "account_id": provisional.account_id,
-            "main_account_address": provisional.main_account_address,
-            "incident_id": provisional.incident_id,
-            "account_snapshot_hash": provisional.account_snapshot_hash,
-            "requests": [
-                {
-                    "symbol": request.symbol,
-                    "asset_id": asset_id,
-                    "cloid": request.cloid,
-                }
-                for request, asset_id in zip(
-                    provisional.requests,
-                    provisional.asset_ids,
-                )
-            ],
-            "expires_at_ms": provisional.expires_at_ms,
-            "action": wire_action,
-        }
-        rebound = replace(
-            provisional,
-            recovery_hash=domain_hash(RECOVERY_ACTION_HASH_DOMAIN, material),
+        rebound = rebind_cancel(
+            base,
+            requests=base.requests,
+            asset_ids=(0,),
+            wire_action=wire_action,
         )
         events: list[str] = []
 
@@ -519,6 +592,33 @@ class RecoverySignerTests(unittest.TestCase):
                 evidence=snapshot(),
                 incident=incident(),
                 policy=recovery_policy(assets=frozenset({0})),
+                wallet=FakeWallet(),
+                nonce_allocator=FakeNonceAllocator(events, RECOVERY_NOW_MS + 1),
+                clock=lambda: RECOVERY_NOW,
+                sign_l1_action=FakeSigner(events),
+            )
+        self.assertEqual(events, [])
+
+    def test_cancel_signer_rejects_rebound_live_protective_stop(self) -> None:
+        base = build_cancel()
+        wire_action = {
+            "type": "cancelByCloid",
+            "cancels": [{"asset": 1, "cloid": STOP_CLOID}],
+        }
+        rebound = rebind_cancel(
+            base,
+            requests=(CancelRequest("ETH", STOP_CLOID),),
+            asset_ids=(1,),
+            wire_action=wire_action,
+        )
+        events: list[str] = []
+
+        with self.assertRaisesRegex(SignerPolicyError, "protective"):
+            sign_recovery_action(
+                rebound,
+                evidence=snapshot(),
+                incident=incident(),
+                policy=recovery_policy(),
                 wallet=FakeWallet(),
                 nonce_allocator=FakeNonceAllocator(events, RECOVERY_NOW_MS + 1),
                 clock=lambda: RECOVERY_NOW,
@@ -657,7 +757,7 @@ class RecoverySignerTests(unittest.TestCase):
 
 
 class RecoveryTransportTests(unittest.TestCase):
-    def test_recovery_envelope_is_hard_disabled_before_transport(self) -> None:
+    def test_internal_recovery_envelope_lacks_public_store_authority(self) -> None:
         recovery = build_close()
         events: list[str] = []
         signed = sign_recovery_action(
@@ -681,12 +781,12 @@ class RecoveryTransportTests(unittest.TestCase):
             "_default_sender",
             side_effect=sender,
         ):
-            with self.assertRaisesRegex(HyperliquidSubmissionError, "hard-disabled"):
+            with self.assertRaisesRegex(HyperliquidSubmissionError, "ExecutionStore"):
                 submit_signed_action(signed, clock=lambda: RECOVERY_NOW)
 
         self.assertEqual(calls, [])
 
-    def test_recovery_hardoff_precedes_timeout_sender(self) -> None:
+    def test_missing_noop_store_authority_precedes_timeout_sender(self) -> None:
         source = attempt()
         signed = sign_recovery_action(
             build_noop(selected_attempt=source),
@@ -711,7 +811,7 @@ class RecoveryTransportTests(unittest.TestCase):
             "_default_sender",
             side_effect=timeout,
         ):
-            with self.assertRaisesRegex(HyperliquidSubmissionError, "hard-disabled"):
+            with self.assertRaisesRegex(HyperliquidSubmissionError, "ExecutionStore"):
                 submit_signed_action(signed, clock=lambda: RECOVERY_NOW)
 
         self.assertEqual(calls, 0)
@@ -745,7 +845,7 @@ class RecoveryTransportTests(unittest.TestCase):
             "_default_sender",
             side_effect=sender,
         ):
-            with self.assertRaisesRegex(HyperliquidSubmissionError, "hard-disabled"):
+            with self.assertRaisesRegex(HyperliquidSubmissionError, "integrity"):
                 submit_signed_action(rebound, clock=lambda: RECOVERY_NOW)
         self.assertEqual(calls, 0)
 
@@ -778,7 +878,7 @@ class RecoveryTransportTests(unittest.TestCase):
             "_default_sender",
             side_effect=sender,
         ):
-            with self.assertRaisesRegex(HyperliquidSubmissionError, "hard-disabled"):
+            with self.assertRaisesRegex(HyperliquidSubmissionError, "integrity"):
                 submit_signed_action(
                     expired,
                     clock=lambda: RECOVERY_NOW + timedelta(seconds=10),

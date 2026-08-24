@@ -14,7 +14,8 @@ result again before it can access an injected wallet.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -124,6 +125,250 @@ class NoopFenceAction:
 RecoveryAction: TypeAlias = (
     ReduceOnlyCloseAction | CancelByCloidAction | NoopFenceAction
 )
+
+
+def _material_decimal(value: object, field: str) -> Decimal:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValidationError(f"{field} must be a canonical decimal string")
+    try:
+        parsed = Decimal(value)
+        validate_decimal_bounds(parsed, field=field)
+    except (ArithmeticError, ValueError) as error:
+        raise ValidationError(f"{field} is not a bounded decimal") from error
+    if canonical_decimal(parsed) != value:
+        raise ValidationError(f"{field} is not canonically encoded")
+    return parsed
+
+
+def recovery_action_from_material(value: Mapping[str, object]) -> RecoveryAction:
+    """Strictly reconstruct one persisted recovery artifact after restart."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("recovery material must be a mapping")
+    material = dict(value)
+    kind_value = material.get("kind")
+    try:
+        kind = RecoveryKind(kind_value)
+    except (TypeError, ValueError) as error:
+        raise ValidationError("recovery material kind is invalid") from error
+    common_keys = {
+        "kind",
+        "network",
+        "account_id",
+        "main_account_address",
+        "incident_id",
+        "expires_at_ms",
+        "action",
+    }
+    expected_extra = {
+        RecoveryKind.REDUCE_ONLY_CLOSE: {
+            "position_snapshot_hash",
+            "symbol",
+            "asset_id",
+            "original_signed_position",
+            "close_size",
+            "price_bound",
+            "cloid",
+        },
+        RecoveryKind.CANCEL_BY_CLOID: {"account_snapshot_hash", "requests"},
+        RecoveryKind.NOOP_FENCE: {
+            "attempt_id",
+            "command_id",
+            "preflight_hash",
+            "signed_evidence_hash",
+            "transport_evidence_hash",
+            "original_nonce",
+            "original_action_hash",
+            "original_wire_hash",
+            "ambiguous_attempt_hash",
+        },
+    }[kind]
+    if set(material) != common_keys | expected_extra:
+        raise ValidationError("recovery material fields are unsupported")
+    network = _network(material["network"])
+    account_id = _text(material["account_id"], "account_id")
+    main_account = _address(material["main_account_address"], "main_account_address")
+    incident_id = _text(material["incident_id"], "incident_id")
+    expires_at_ms = material["expires_at_ms"]
+    if type(expires_at_ms) is not int or expires_at_ms < 0:
+        raise ValidationError("recovery expires_at_ms is invalid")
+    action_value = material["action"]
+    if not isinstance(action_value, dict) or not all(
+        isinstance(key, str) for key in action_value
+    ):
+        raise ValidationError("recovery action must be an object")
+    action = deepcopy(action_value)
+    recovery_hash = _recovery_hash(material)
+    if kind is RecoveryKind.REDUCE_ONLY_CLOSE:
+        asset_id = material["asset_id"]
+        if type(asset_id) is not int or not 0 <= asset_id <= 1_000_000:
+            raise ValidationError("recovery asset_id is invalid")
+        original = _material_decimal(
+            material["original_signed_position"],
+            "original_signed_position",
+        )
+        close_size = _material_decimal(material["close_size"], "close_size")
+        price_bound = _material_decimal(material["price_bound"], "price_bound")
+        if original == _ZERO or close_size <= _ZERO or close_size > abs(original):
+            raise ValidationError("recovery close economics are invalid")
+        if price_bound <= _ZERO:
+            raise ValidationError("recovery price bound must be positive")
+        result: RecoveryAction = ReduceOnlyCloseAction(
+            kind=kind,
+            network=network,
+            account_id=account_id,
+            main_account_address=main_account,
+            incident_id=incident_id,
+            position_snapshot_hash=_hash(
+                material["position_snapshot_hash"], "position_snapshot_hash"
+            ),
+            symbol=_text(material["symbol"], "symbol", maximum=64),
+            asset_id=asset_id,
+            original_signed_position=original,
+            close_size=close_size,
+            price_bound=price_bound,
+            cloid=_cloid(material["cloid"], "close cloid"),
+            expires_at_ms=expires_at_ms,
+            action=action,
+            recovery_hash=recovery_hash,
+        )
+    elif kind is RecoveryKind.CANCEL_BY_CLOID:
+        raw_requests = material["requests"]
+        if not isinstance(raw_requests, list) or not 1 <= len(raw_requests) <= _MAX_CANCELS:
+            raise ValidationError("recovery cancel requests are invalid")
+        requests: list[CancelRequest] = []
+        asset_ids: list[int] = []
+        for index, raw in enumerate(raw_requests):
+            if not isinstance(raw, dict) or set(raw) != {
+                "symbol",
+                "asset_id",
+                "cloid",
+            }:
+                raise ValidationError(f"recovery cancel request {index} is invalid")
+            asset_id = raw["asset_id"]
+            if type(asset_id) is not int or not 0 <= asset_id <= 1_000_000:
+                raise ValidationError("recovery cancel asset_id is invalid")
+            requests.append(CancelRequest(raw["symbol"], raw["cloid"]))
+            asset_ids.append(asset_id)
+        result = CancelByCloidAction(
+            kind=kind,
+            network=network,
+            account_id=account_id,
+            main_account_address=main_account,
+            incident_id=incident_id,
+            account_snapshot_hash=_hash(
+                material["account_snapshot_hash"], "account_snapshot_hash"
+            ),
+            requests=tuple(requests),
+            asset_ids=tuple(asset_ids),
+            expires_at_ms=expires_at_ms,
+            action=action,
+            recovery_hash=recovery_hash,
+        )
+    else:
+        original_nonce = material["original_nonce"]
+        if type(original_nonce) is not int or original_nonce < 0:
+            raise ValidationError("noop original_nonce is invalid")
+        result = NoopFenceAction(
+            kind=kind,
+            network=network,
+            account_id=account_id,
+            main_account_address=main_account,
+            incident_id=incident_id,
+            attempt_id=_text(material["attempt_id"], "attempt_id"),
+            command_id=_text(material["command_id"], "command_id"),
+            preflight_hash=_hash(material["preflight_hash"], "preflight_hash"),
+            signed_evidence_hash=_hash(
+                material["signed_evidence_hash"], "signed_evidence_hash"
+            ),
+            transport_evidence_hash=_hash(
+                material["transport_evidence_hash"], "transport_evidence_hash"
+            ),
+            original_nonce=original_nonce,
+            original_action_hash=_hash(
+                material["original_action_hash"], "original_action_hash"
+            ),
+            original_wire_hash=_hash(
+                material["original_wire_hash"], "original_wire_hash"
+            ),
+            ambiguous_attempt_hash=_hash(
+                material["ambiguous_attempt_hash"], "ambiguous_attempt_hash"
+            ),
+            expires_at_ms=expires_at_ms,
+            action=action,
+            recovery_hash=recovery_hash,
+        )
+    if recovery_action_material(result) != material:
+        raise ValidationError("decoded recovery material does not round trip")
+    return result
+
+
+def recovery_action_material(recovery: RecoveryAction) -> dict[str, object]:
+    """Return the exact canonical material committed by ``recovery_hash``.
+
+    Recovery permits persist this material so restart-time reconciliation can
+    prove concrete quantities and CLOIDs rather than trusting an opaque digest.
+    The returned action is a deep copy; callers cannot mutate the reviewed
+    artifact through this helper.
+    """
+
+    common: dict[str, object] = {
+        "kind": recovery.kind.value,
+        "network": recovery.network.value,
+        "account_id": recovery.account_id,
+        "main_account_address": recovery.main_account_address,
+        "incident_id": recovery.incident_id,
+    }
+    if isinstance(recovery, ReduceOnlyCloseAction):
+        material = {
+            **common,
+            "position_snapshot_hash": recovery.position_snapshot_hash,
+            "symbol": recovery.symbol,
+            "asset_id": recovery.asset_id,
+            "original_signed_position": canonical_decimal(
+                recovery.original_signed_position
+            ),
+            "close_size": canonical_decimal(recovery.close_size),
+            "price_bound": canonical_decimal(recovery.price_bound),
+            "cloid": recovery.cloid,
+            "expires_at_ms": recovery.expires_at_ms,
+            "action": deepcopy(recovery.action),
+        }
+    elif isinstance(recovery, CancelByCloidAction):
+        material = {
+            **common,
+            "account_snapshot_hash": recovery.account_snapshot_hash,
+            "requests": [
+                {
+                    "symbol": request.symbol,
+                    "asset_id": asset_id,
+                    "cloid": request.cloid,
+                }
+                for request, asset_id in zip(recovery.requests, recovery.asset_ids)
+            ],
+            "expires_at_ms": recovery.expires_at_ms,
+            "action": deepcopy(recovery.action),
+        }
+    elif isinstance(recovery, NoopFenceAction):
+        material = {
+            **common,
+            "attempt_id": recovery.attempt_id,
+            "command_id": recovery.command_id,
+            "preflight_hash": recovery.preflight_hash,
+            "signed_evidence_hash": recovery.signed_evidence_hash,
+            "transport_evidence_hash": recovery.transport_evidence_hash,
+            "original_nonce": recovery.original_nonce,
+            "original_action_hash": recovery.original_action_hash,
+            "original_wire_hash": recovery.original_wire_hash,
+            "ambiguous_attempt_hash": recovery.ambiguous_attempt_hash,
+            "expires_at_ms": recovery.expires_at_ms,
+            "action": deepcopy(recovery.action),
+        }
+    else:
+        raise TypeError("recovery must be a typed RecoveryAction")
+    if _recovery_hash(material) != recovery.recovery_hash:
+        raise ValidationError("recovery hash does not match its exact material")
+    return material
 
 
 def _text(value: object, field: str, *, maximum: int = 128) -> str:
@@ -325,7 +570,14 @@ def build_cancel_by_cloid(
     at: datetime,
     ttl_ms: int = 10_000,
 ) -> CancelByCloidAction:
-    """Build one bounded batch containing only explicitly owned CLOIDs."""
+    """Build a bounded cancel batch without removing live downside protection.
+
+    Ownership is necessary but not sufficient: every requested CLOID must be
+    present in the fresh account snapshot and match the requested symbol.  If
+    that symbol has an open position, only reduce-only non-stop orders may be
+    cancelled.  In particular, an owned protective stop is never cancellable
+    while it is responsible for an open position.
+    """
 
     selected_network = _network(network)
     at_ms = _utc_ms(at, "at")
@@ -346,6 +598,23 @@ def build_cancel_by_cloid(
         raise ValidationError("cancel requests contain duplicate CLOIDs")
     if not set(request_cloids).issubset(owned):
         raise ValidationError("cancelByCloid may reference only owned CLOIDs")
+    open_orders = snapshot.all_open_orders()
+    for request in checked_requests:
+        matches = tuple(order for order in open_orders if order.cloid == request.cloid)
+        if len(matches) != 1:
+            raise ValidationError(
+                "cancelByCloid requires each CLOID exactly once in the fresh snapshot"
+            )
+        order = matches[0]
+        if order.symbol != request.symbol:
+            raise ValidationError("cancel request symbol differs from the live order")
+        if snapshot.position(request.symbol) is not None and (
+            order.is_protective_stop or not order.reduce_only
+        ):
+            raise ValidationError(
+                "cannot cancel a protective stop or exposure-increasing order "
+                "while its position is open"
+            )
     asset_ids = tuple(
         snapshot.metadata.instrument(item.symbol).asset_id for item in checked_requests
     )
@@ -514,4 +783,6 @@ __all__ = (
     "build_cancel_by_cloid",
     "build_noop_fence",
     "build_reduce_only_close",
+    "recovery_action_from_material",
+    "recovery_action_material",
 )

@@ -1,9 +1,9 @@
 """Isolated, fail-closed Hyperliquid signing boundary.
 
-The boundary accepts exactly one reviewed unsigned artifact type: a three-leg
-IOC entry plus reduce-only market SL and TP grouped as ``normalTpsl``.  It
-independently revalidates the compact wire shape and field insertion order,
-binds it to explicit network/account/asset policy, commits a nonce through an
+The boundary accepts a reviewed three-leg protected order or one narrowly
+typed account-safety recovery backed by a consumed durable store authority.
+It independently revalidates compact wire shape and field insertion order,
+binds explicit network/account/asset policy, commits fresh nonces through an
 injected durable allocator, and only then calls a signing function.
 
 No private-key, environment-variable, or file loader exists here.  The wallet
@@ -32,8 +32,12 @@ from .domain import Environment
 from .execution_store import (
     AttemptRecord,
     DispatchPreflight,
+    ExecutionStore,
     IncidentRecord,
+    RecoveryCommand,
+    RecoverySigningAuthority,
     SignedEnvelopeEvidence,
+    SignedRecoveryEvidence,
 )
 from .hyperliquid_account import HyperliquidAccountSnapshot
 from .hyperliquid_recovery import (
@@ -44,6 +48,7 @@ from .hyperliquid_recovery import (
     RecoveryKind,
     ReduceOnlyCloseAction,
     ambiguous_attempt_hash,
+    recovery_action_material,
 )
 from .hyperliquid_wire import (
     HyperliquidNetwork,
@@ -76,7 +81,13 @@ _ZERO = Decimal("0")
 _SIGNER_CONTEXT = Context(prec=256)
 MAX_PROTECTED_QUANTITY = Decimal("1000")
 MAX_PROTECTED_NOTIONAL = Decimal("100000")
-RECOVERY_SIGNING_ENABLED = False
+RECOVERY_SIGNING_ENABLED = True
+RECOVERY_SAFETY_POLICY_HASH_DOMAIN = (
+    "trading-harness/hyperliquid-recovery-safety-policy/v1"
+)
+RECOVERY_WIRE_ACTION_HASH_DOMAIN = (
+    "trading-harness/hyperliquid-recovery-wire-action/v1"
+)
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
@@ -108,6 +119,42 @@ class SignerDependencyError(HyperliquidSignerError):
 
 class SignerOutputError(HyperliquidSignerError, ValueError):
     """A signing implementation returned a malformed signature."""
+
+
+def _reject_json_float(value: str) -> object:
+    del value
+    raise ValueError("JSON floats are unsupported")
+
+
+def _reject_json_constant(value: str) -> object:
+    del value
+    raise ValueError("non-finite JSON values are unsupported")
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _frozen_json_object(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, str) or not value:
+        raise SignerOutputError(f"{field} is not JSON text")
+    try:
+        parsed = json.loads(
+            value,
+            object_pairs_hook=_unique_json_object,
+            parse_float=_reject_json_float,
+            parse_constant=_reject_json_constant,
+        )
+    except (TypeError, ValueError, RecursionError) as error:
+        raise SignerOutputError(f"{field} is invalid JSON") from error
+    if not isinstance(parsed, dict):
+        raise SignerOutputError(f"{field} is not an object")
+    return parsed
 
 
 def _text(value: object, field: str, *, maximum: int = 128) -> str:
@@ -207,7 +254,7 @@ class SigningAccount:
 
 @dataclass(frozen=True, slots=True)
 class SignerPolicy:
-    """Closed signer allowlists with mainnet disabled unless doubly enabled."""
+    """Closed signer allowlists with mainnet compiled off."""
 
     accounts: tuple[SigningAccount, ...]
     allowed_asset_ids: frozenset[int]
@@ -283,6 +330,36 @@ class SignerPolicy:
             raise SignerPolicyError("protected action account is not allowlisted")
         return matches[0]
 
+    @property
+    def safety_policy_hash(self) -> str:
+        accounts = [
+            {
+                "account_id": item.account_id,
+                "main_account_address": item.main_account_address,
+                "signer_address": item.signer_address,
+                "vault_address": item.vault_address,
+                "owned_cloids": sorted(item.owned_cloids),
+            }
+            for item in sorted(self.accounts, key=lambda value: value.account_id)
+        ]
+        return domain_hash(
+            RECOVERY_SAFETY_POLICY_HASH_DOMAIN,
+            {
+                "schema_version": "hyperliquid.recovery_safety_policy.v1",
+                "accounts": accounts,
+                "allowed_asset_ids": sorted(self.allowed_asset_ids),
+                "allowed_networks": sorted(
+                    value.value for value in self.allowed_networks
+                ),
+                "allowed_recovery_kinds": sorted(
+                    value.value for value in self.allowed_recovery_kinds
+                ),
+                "minimum_expiry_remaining_ms": self.minimum_expiry_remaining_ms,
+                "maximum_expiry_horizon_ms": self.maximum_expiry_horizon_ms,
+                "mainnet_enabled": False,
+            },
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Signature:
@@ -337,10 +414,7 @@ class SignedActionEnvelope:
         return self.wire_json.encode("utf-8")
 
     def envelope(self) -> dict[str, object]:
-        parsed = json.loads(self.wire_json)
-        if not isinstance(parsed, dict):
-            raise SignerOutputError("signed wire no longer decodes to an object")
-        return parsed
+        return _frozen_json_object(self.wire_json, "signed wire")
 
     def verify_integrity(self) -> None:
         if not isinstance(self.network, HyperliquidNetwork):
@@ -485,12 +559,26 @@ class SignedRecoveryEnvelope:
     main_account_address: str
     signer_address: str
     vault_address: str | None
+    recovery_command_id: str
+    permit_id: str
+    parent_command_id: str
+    preflight_hash: str | None
+    original_attempt_id: str | None
+    original_nonce: int | None
+    worker_id: str
+    fencing_token: int
     recovery_kind: RecoveryKind
     incident_id: str
     source_hash: str
     recovery_hash: str
+    action_hash: str
+    safety_policy_hash: str
+    signing_authority_hash: str
+    permit_expires_at_ms: int
+    lease_expires_at_ms: int
     recovery_material_json: str
     nonce: int
+    authorization_expires_at_ms: int
     expires_after_ms: int
     signed_at_ms: int
     signature: Signature
@@ -514,33 +602,62 @@ class SignedRecoveryEnvelope:
         return self.wire_json.encode("utf-8")
 
     def envelope(self) -> dict[str, object]:
-        parsed = json.loads(self.wire_json)
-        if not isinstance(parsed, dict):
-            raise SignerOutputError("signed recovery wire is not an object")
-        return parsed
+        return _frozen_json_object(self.wire_json, "signed recovery wire")
 
     def recovery_material(self) -> dict[str, object]:
-        parsed = json.loads(self.recovery_material_json)
-        if not isinstance(parsed, dict):
-            raise SignerOutputError("recovery binding is not an object")
-        return parsed
+        return _frozen_json_object(
+            self.recovery_material_json, "signed recovery material"
+        )
 
     def verify_integrity(self) -> None:
         if not isinstance(self.network, HyperliquidNetwork) or not isinstance(
             self.recovery_kind, RecoveryKind
         ):
             raise SignerOutputError("signed recovery network or kind is invalid")
-        if self.network is HyperliquidNetwork.MAINNET:
+        if self.network is not HyperliquidNetwork.TESTNET:
             raise SignerOutputError("mainnet recovery wire is hard-disabled")
+        try:
+            _text(self.account_id, "account_id")
+            _text(self.incident_id, "incident_id")
+            _address(self.main_account_address, "main_account_address")
+            _address(self.signer_address, "signer_address")
+            if self.vault_address is not None:
+                _address(self.vault_address, "vault_address")
+        except SignerPolicyError as error:
+            raise SignerOutputError("signed recovery identity is invalid") from error
+        if not isinstance(self.signature, Signature):
+            raise SignerOutputError("signed recovery signature object is invalid")
+        try:
+            if _parse_signature(self.signature.as_dict()) != self.signature:
+                raise SignerOutputError("signed recovery signature is non-canonical")
+        except SignerPolicyError as error:
+            raise SignerOutputError("signed recovery signature is invalid") from error
+        if type(self.nonce) is not int or self.nonce < 0:
+            raise SignerOutputError("signed recovery nonce is invalid")
         if not (
             type(self.signed_at_ms) is int
+            and type(self.authorization_expires_at_ms) is int
             and type(self.expires_after_ms) is int
-            and self.signed_at_ms < self.expires_after_ms
+            and type(self.permit_expires_at_ms) is int
+            and type(self.lease_expires_at_ms) is int
+            and self.signed_at_ms
+            < self.expires_after_ms
+            <= self.authorization_expires_at_ms
+            and self.expires_after_ms <= self.permit_expires_at_ms
+            and self.expires_after_ms <= self.lease_expires_at_ms
         ):
             raise SignerOutputError("signed recovery expiry ordering is invalid")
         if hashlib.sha256(self.wire_bytes).hexdigest() != self.wire_hash:
             raise SignerOutputError("signed recovery wire hash mismatch")
         envelope = self.envelope()
+        if json.dumps(
+            envelope,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=False,
+        ) != self.wire_json:
+            raise SignerOutputError("signed recovery wire JSON is not exact")
         if tuple(envelope) != (
             "action",
             "nonce",
@@ -565,19 +682,23 @@ class SignedRecoveryEnvelope:
         if domain_hash(SIGNATURE_HASH_DOMAIN, self.signature.as_dict()) != self.signature_hash:
             raise SignerOutputError("signed recovery signature hash mismatch")
         material = self.recovery_material()
+        if canonical_json(material) != self.recovery_material_json:
+            raise SignerOutputError("signed recovery material is not canonical")
         if domain_hash(RECOVERY_ACTION_HASH_DOMAIN, material) != self.recovery_hash:
             raise SignerOutputError("signed recovery binding hash mismatch")
         action = envelope.get("action")
         if not isinstance(action, dict) or material.get("action") != action:
             raise SignerOutputError("signed recovery action differs from its binding")
+        if domain_hash(RECOVERY_WIRE_ACTION_HASH_DOMAIN, action) != self.action_hash:
+            raise SignerOutputError("signed recovery action hash mismatch")
         try:
             _validate_recovery_material(self.recovery_kind, material, action)
         except SignerPolicyError as error:
             raise SignerOutputError("signed recovery action binding is invalid") from error
         if material.get("incident_id") != self.incident_id:
             raise SignerOutputError("signed recovery incident binding mismatch")
-        if material.get("expires_at_ms") != self.expires_after_ms:
-            raise SignerOutputError("signed recovery material expiry mismatch")
+        if material.get("expires_at_ms") != self.authorization_expires_at_ms:
+            raise SignerOutputError("signed recovery authorization expiry mismatch")
         if material.get("network") != self.network.value:
             raise SignerOutputError("signed recovery network binding mismatch")
         if material.get("account_id") != self.account_id:
@@ -591,6 +712,57 @@ class SignedRecoveryEnvelope:
         }[self.recovery_kind]
         if expected_source != self.source_hash:
             raise SignerOutputError("signed recovery source binding mismatch")
+        for field, value in (
+            ("source_hash", self.source_hash),
+            ("recovery_hash", self.recovery_hash),
+            ("action_hash", self.action_hash),
+            ("safety_policy_hash", self.safety_policy_hash),
+            ("signing_authority_hash", self.signing_authority_hash),
+        ):
+            if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
+                raise SignerOutputError(f"signed recovery {field} is invalid")
+        for field, value in (
+            ("recovery_command_id", self.recovery_command_id),
+            ("permit_id", self.permit_id),
+            ("parent_command_id", self.parent_command_id),
+            ("worker_id", self.worker_id),
+        ):
+            try:
+                _text(value, field)
+            except SignerPolicyError as error:
+                raise SignerOutputError(f"signed recovery {field} is invalid") from error
+        if self.preflight_hash is not None:
+            try:
+                _hash(self.preflight_hash, "preflight_hash")
+            except SignerPolicyError as error:
+                raise SignerOutputError("signed recovery preflight hash is invalid") from error
+        if self.original_attempt_id is not None:
+            try:
+                _text(self.original_attempt_id, "original_attempt_id")
+            except SignerPolicyError as error:
+                raise SignerOutputError(
+                    "signed recovery original attempt ID is invalid"
+                ) from error
+        if self.original_nonce is not None and (
+            type(self.original_nonce) is not int or self.original_nonce < 0
+        ):
+            raise SignerOutputError("signed recovery original nonce is invalid")
+        if type(self.fencing_token) is not int or self.fencing_token <= 0:
+            raise SignerOutputError("signed recovery fencing token is invalid")
+        if self.recovery_kind is RecoveryKind.NOOP_FENCE:
+            if (
+                self.original_attempt_id is None
+                or self.original_nonce is None
+                or self.preflight_hash is None
+                or self.nonce != self.original_nonce
+                or material.get("attempt_id") != self.original_attempt_id
+                or material.get("command_id") != self.parent_command_id
+                or material.get("preflight_hash") != self.preflight_hash
+                or material.get("original_nonce") != self.original_nonce
+            ):
+                raise SignerOutputError("signed noop recovery lost its original attempt")
+        elif self.original_attempt_id is not None or self.original_nonce is not None:
+            raise SignerOutputError("non-noop recovery binds an original attempt")
         binding = {
             "artifact_kind": self.artifact_kind,
             "network": self.network.value,
@@ -598,8 +770,23 @@ class SignedRecoveryEnvelope:
             "main_account_address": self.main_account_address,
             "signer_address": self.signer_address,
             "vault_address": self.vault_address,
+            "recovery_command_id": self.recovery_command_id,
+            "permit_id": self.permit_id,
+            "parent_command_id": self.parent_command_id,
+            "preflight_hash": self.preflight_hash,
+            "original_attempt_id": self.original_attempt_id,
+            "original_nonce": self.original_nonce,
+            "worker_id": self.worker_id,
+            "fencing_token": self.fencing_token,
             "incident_id": self.incident_id,
+            "source_hash": self.source_hash,
             "recovery_hash": self.recovery_hash,
+            "action_hash": self.action_hash,
+            "safety_policy_hash": self.safety_policy_hash,
+            "signing_authority_hash": self.signing_authority_hash,
+            "permit_expires_at_ms": self.permit_expires_at_ms,
+            "lease_expires_at_ms": self.lease_expires_at_ms,
+            "authorization_expires_at_ms": self.authorization_expires_at_ms,
         }
         if domain_hash(SIGNER_BINDING_HASH_DOMAIN, binding) != self.signer_binding_hash:
             raise SignerOutputError("signed recovery signer policy binding mismatch")
@@ -614,11 +801,25 @@ class SignedRecoveryEnvelope:
             "main_account_address": self.main_account_address,
             "signer_address": self.signer_address,
             "vault_address": self.vault_address,
+            "recovery_command_id": self.recovery_command_id,
+            "permit_id": self.permit_id,
+            "parent_command_id": self.parent_command_id,
+            "preflight_hash": self.preflight_hash,
+            "original_attempt_id": self.original_attempt_id,
+            "original_nonce": self.original_nonce,
+            "worker_id": self.worker_id,
+            "fencing_token": self.fencing_token,
             "recovery_kind": self.recovery_kind.value,
             "incident_id": self.incident_id,
             "source_hash": self.source_hash,
             "recovery_hash": self.recovery_hash,
+            "action_hash": self.action_hash,
+            "safety_policy_hash": self.safety_policy_hash,
+            "signing_authority_hash": self.signing_authority_hash,
+            "permit_expires_at_ms": self.permit_expires_at_ms,
+            "lease_expires_at_ms": self.lease_expires_at_ms,
             "nonce": self.nonce,
+            "authorization_expires_at_ms": self.authorization_expires_at_ms,
             "expires_after_ms": self.expires_after_ms,
             "signed_at_ms": self.signed_at_ms,
             "signature": self.signature.as_dict(),
@@ -631,6 +832,28 @@ class SignedRecoveryEnvelope:
             "envelope": self.envelope(),
             "submitted": False,
         }
+
+    def execution_store_evidence(self) -> SignedRecoveryEvidence:
+        """Return the exact durable evidence required before recovery send."""
+
+        self.verify_integrity()
+        return SignedRecoveryEvidence(
+            recovery_command_id=self.recovery_command_id,
+            incident_id=self.incident_id,
+            kind=self.recovery_kind.value,
+            source_hash=self.source_hash,
+            recovery_hash=self.recovery_hash,
+            signing_authority_hash=self.signing_authority_hash,
+            safety_policy_hash=self.safety_policy_hash,
+            nonce=self.nonce,
+            wire_hash=self.wire_hash,
+            action_hash=self.action_hash,
+            signature_hash=self.signature_hash,
+            envelope_hash=self.envelope_hash,
+            signer_binding_hash=self.signer_binding_hash,
+            expires_after_ms=self.expires_after_ms,
+            signed_at_ms=self.signed_at_ms,
+        )
 
 
 def official_sdk_available() -> bool:
@@ -975,7 +1198,8 @@ def _validated_recovery_action(
     recovery: RecoveryAction,
     *,
     evidence: HyperliquidAccountSnapshot | AttemptRecord,
-    incident: IncidentRecord,
+    incident_id: str,
+    parent_command_id: str | None,
     now_ms: int,
 ) -> tuple[
     dict[str, object],
@@ -985,9 +1209,8 @@ def _validated_recovery_action(
     tuple[str, ...],
     int | None,
 ]:
-    if not isinstance(incident, IncidentRecord) or incident.state != "open":
-        raise SignerPolicyError("recovery requires the bound open persisted incident")
-    if recovery.incident_id != incident.incident_id:
+    checked_incident_id = _text(incident_id, "incident_id")
+    if recovery.incident_id != checked_incident_id:
         raise SignerPolicyError("recovery incident binding does not match evidence")
     action = deepcopy(_object(recovery.action, "recovery action"))
     common = {
@@ -1059,6 +1282,27 @@ def _validated_recovery_action(
             ) from error
         if not metadata_matches:
             raise SignerPolicyError("cancel recovery assets differ from fresh metadata")
+        open_orders = evidence.all_open_orders()
+        for request in recovery.requests:
+            matches = tuple(
+                order for order in open_orders if order.cloid == request.cloid
+            )
+            if len(matches) != 1:
+                raise SignerPolicyError(
+                    "cancel recovery CLOID is not unique in fresh account evidence"
+                )
+            order = matches[0]
+            if order.symbol != request.symbol:
+                raise SignerPolicyError(
+                    "cancel recovery symbol differs from fresh account evidence"
+                )
+            if evidence.position(request.symbol) is not None and (
+                order.is_protective_stop or not order.reduce_only
+            ):
+                raise SignerPolicyError(
+                    "cancel recovery cannot remove live protective or "
+                    "exposure-increasing orders"
+                )
         material = {
             **common,
             "account_snapshot_hash": recovery.account_snapshot_hash,
@@ -1081,7 +1325,7 @@ def _validated_recovery_action(
             raise SignerPolicyError("noop fence requires persisted attempt evidence")
         if evidence.state != "unknown" or evidence.response_hash is not None:
             raise SignerPolicyError("noop fence evidence is not an unknown attempt")
-        if incident.command_id != evidence.command_id:
+        if parent_command_id != evidence.command_id:
             raise SignerPolicyError("noop incident command differs from attempt")
         if ambiguous_attempt_hash(evidence) != recovery.ambiguous_attempt_hash:
             raise SignerPolicyError("noop ambiguous attempt hash differs from evidence")
@@ -1118,6 +1362,12 @@ def _validated_recovery_action(
         raise TypeError("recovery must be a typed RecoveryAction")
     if domain_hash(RECOVERY_ACTION_HASH_DOMAIN, material) != recovery.recovery_hash:
         raise SignerPolicyError("recovery hash does not match its bound contents")
+    try:
+        canonical_material = recovery_action_material(recovery)
+    except (TypeError, ValidationError) as error:
+        raise SignerPolicyError("recovery failed exact material verification") from error
+    if canonical_material != material:
+        raise SignerPolicyError("recovery canonical material differs")
     _validate_recovery_material(recovery.kind, material, action)
     return action, material, source_hash, asset_ids, cloids, original_nonce
 
@@ -1425,82 +1675,105 @@ def sign_protected_action(
     return result
 
 
-def _sign_recovery_action_for_test(
-    recovery: RecoveryAction,
-    *,
-    evidence: HyperliquidAccountSnapshot | AttemptRecord,
-    incident: IncidentRecord,
-    policy: SignerPolicy,
-    wallet: object,
-    nonce_allocator: NonceAllocator | None,
-    clock: Clock = lambda: datetime.now(timezone.utc),
-    sign_l1_action: SignL1Action | None = None,
-) -> SignedRecoveryEnvelope:
-    """Sign one incident-bound close, owned cancel, or same-nonce noop."""
-
+def _verified_recovery_policy(policy: SignerPolicy) -> SignerPolicy:
     if not isinstance(policy, SignerPolicy):
         raise TypeError("policy must be SignerPolicy")
-    if not isinstance(
-        recovery,
-        (ReduceOnlyCloseAction, CancelByCloidAction, NoopFenceAction),
-    ):
-        raise TypeError("recovery must be a typed RecoveryAction")
-    if not isinstance(recovery.network, HyperliquidNetwork):
-        raise SignerPolicyError("recovery network is invalid")
-    if not callable(clock):
-        raise TypeError("clock must be callable")
-    now_ms = _utc_ms(clock)
-    (
-        action,
-        material,
-        source_hash,
-        asset_ids,
-        cloids,
-        original_nonce,
-    ) = _validated_recovery_action(
-        recovery,
-        evidence=evidence,
-        incident=incident,
-        now_ms=now_ms,
-    )
-    if recovery.kind not in policy.allowed_recovery_kinds:
-        raise SignerPolicyError("recovery kind is not explicitly allowlisted")
-    if recovery.network not in policy.allowed_networks:
-        raise SignerPolicyError("recovery network is not allowlisted")
-    if recovery.network is HyperliquidNetwork.MAINNET:
-        raise SignerPolicyError("mainnet recovery signing is hard-disabled")
-    account = policy.account(recovery.account_id)
-    if account.main_account_address != recovery.main_account_address:
-        raise SignerPolicyError("recovery main account differs from signer policy")
-    signer_address = _wallet_address(wallet)
-    if signer_address != account.signer_address:
-        raise SignerPolicyError("injected wallet does not match recovery signer policy")
-    if not set(asset_ids).issubset(policy.allowed_asset_ids):
-        raise SignerPolicyError("recovery asset is not allowlisted")
-    if not set(cloids).issubset(account.owned_cloids):
-        raise SignerPolicyError("recovery references a foreign CLOID")
-    remaining = recovery.expires_at_ms - now_ms
-    if not policy.minimum_expiry_remaining_ms <= remaining <= min(
-        policy.maximum_expiry_horizon_ms,
-        _MAX_EXPIRY_HORIZON_MS,
-    ):
-        raise SignerPolicyError("recovery expiry is not within the short signer bound")
+    try:
+        verified = SignerPolicy(
+            accounts=policy.accounts,
+            allowed_asset_ids=policy.allowed_asset_ids,
+            allowed_networks=policy.allowed_networks,
+            allow_mainnet=policy.allow_mainnet,
+            minimum_expiry_remaining_ms=policy.minimum_expiry_remaining_ms,
+            maximum_expiry_horizon_ms=policy.maximum_expiry_horizon_ms,
+            allowed_recovery_kinds=policy.allowed_recovery_kinds,
+        )
+    except (TypeError, ValueError, ValidationError) as error:
+        raise SignerPolicyError("recovery signer policy failed verification") from error
+    if verified != policy:
+        raise SignerPolicyError("recovery signer policy differs from verified encoding")
+    return verified
 
-    if recovery.kind is RecoveryKind.NOOP_FENCE:
-        if nonce_allocator is not None:
-            raise SignerPolicyError("noop fence must not allocate or replace its original nonce")
-        if original_nonce is None:
-            raise SignerPolicyError("noop fence lacks its original nonce")
-        nonce = original_nonce
-    else:
-        if not callable(getattr(nonce_allocator, "allocate", None)):
-            raise SignerPolicyError("close and cancel recovery require a nonce allocator")
-        nonce = nonce_allocator.allocate()  # type: ignore[union-attr]
-    if type(nonce) is not int or nonce < 0:
-        raise SignerPolicyError("recovery nonce is invalid")
-    if not now_ms - _NONCE_PAST_WINDOW_MS < nonce < now_ms + _NONCE_FUTURE_WINDOW_MS:
-        raise SignerPolicyError("recovery nonce is outside Hyperliquid's time window")
 
+def _recovery_signer_binding(
+    *,
+    recovery: RecoveryAction,
+    account: SigningAccount,
+    signer_address: str,
+    recovery_command_id: str,
+    permit_id: str,
+    parent_command_id: str,
+    preflight_hash: str | None,
+    original_attempt_id: str | None,
+    original_nonce: int | None,
+    worker_id: str,
+    fencing_token: int,
+    action_hash: str,
+    safety_policy_hash: str,
+    signing_authority_hash: str,
+    permit_expires_at_ms: int,
+    lease_expires_at_ms: int,
+    authorization_expires_at_ms: int,
+) -> dict[str, object]:
+    return {
+        "artifact_kind": "recovery",
+        "network": recovery.network.value,
+        "account_id": recovery.account_id,
+        "main_account_address": recovery.main_account_address,
+        "signer_address": signer_address,
+        "vault_address": account.vault_address,
+        "recovery_command_id": recovery_command_id,
+        "permit_id": permit_id,
+        "parent_command_id": parent_command_id,
+        "preflight_hash": preflight_hash,
+        "original_attempt_id": original_attempt_id,
+        "original_nonce": original_nonce,
+        "worker_id": worker_id,
+        "fencing_token": fencing_token,
+        "incident_id": recovery.incident_id,
+        "source_hash": (
+            recovery.position_snapshot_hash
+            if isinstance(recovery, ReduceOnlyCloseAction)
+            else recovery.account_snapshot_hash
+            if isinstance(recovery, CancelByCloidAction)
+            else recovery.ambiguous_attempt_hash
+        ),
+        "recovery_hash": recovery.recovery_hash,
+        "action_hash": action_hash,
+        "safety_policy_hash": safety_policy_hash,
+        "signing_authority_hash": signing_authority_hash,
+        "permit_expires_at_ms": permit_expires_at_ms,
+        "lease_expires_at_ms": lease_expires_at_ms,
+        "authorization_expires_at_ms": authorization_expires_at_ms,
+    }
+
+
+def _freeze_signed_recovery(
+    recovery: RecoveryAction,
+    *,
+    action: dict[str, object],
+    material: dict[str, object],
+    source_hash: str,
+    account: SigningAccount,
+    signer_address: str,
+    nonce: int,
+    expires_after_ms: int,
+    now_ms: int,
+    recovery_command_id: str,
+    permit_id: str,
+    parent_command_id: str,
+    preflight_hash: str | None,
+    original_attempt_id: str | None,
+    original_nonce: int | None,
+    worker_id: str,
+    fencing_token: int,
+    safety_policy_hash: str,
+    signing_authority_hash: str,
+    permit_expires_at_ms: int,
+    lease_expires_at_ms: int,
+    wallet: object,
+    sign_l1_action: SignL1Action | None,
+) -> SignedRecoveryEnvelope:
     implementation = "injected"
     signing_function = sign_l1_action
     if signing_function is None:
@@ -1522,8 +1795,8 @@ def _sign_recovery_action_for_test(
             signing_action,
             account.vault_address,
             nonce,
-            recovery.expires_at_ms,
-            recovery.network is HyperliquidNetwork.MAINNET,
+            expires_after_ms,
+            False,
         )
     except HyperliquidSignerError:
         raise
@@ -1546,7 +1819,7 @@ def _sign_recovery_action_for_test(
         "nonce": nonce,
         "signature": signature.as_dict(),
         "vaultAddress": account.vault_address,
-        "expiresAfter": recovery.expires_at_ms,
+        "expiresAfter": expires_after_ms,
     }
     wire_json = json.dumps(
         envelope,
@@ -1555,36 +1828,58 @@ def _sign_recovery_action_for_test(
         separators=(",", ":"),
         sort_keys=False,
     )
+    action_hash = domain_hash(RECOVERY_WIRE_ACTION_HASH_DOMAIN, action)
+    binding = _recovery_signer_binding(
+        recovery=recovery,
+        account=account,
+        signer_address=signer_address,
+        recovery_command_id=recovery_command_id,
+        permit_id=permit_id,
+        parent_command_id=parent_command_id,
+        preflight_hash=preflight_hash,
+        original_attempt_id=original_attempt_id,
+        original_nonce=original_nonce,
+        worker_id=worker_id,
+        fencing_token=fencing_token,
+        action_hash=action_hash,
+        safety_policy_hash=safety_policy_hash,
+        signing_authority_hash=signing_authority_hash,
+        permit_expires_at_ms=permit_expires_at_ms,
+        lease_expires_at_ms=lease_expires_at_ms,
+        authorization_expires_at_ms=recovery.expires_at_ms,
+    )
     result = SignedRecoveryEnvelope(
         network=recovery.network,
         account_id=recovery.account_id,
         main_account_address=recovery.main_account_address,
         signer_address=signer_address,
         vault_address=account.vault_address,
+        recovery_command_id=recovery_command_id,
+        permit_id=permit_id,
+        parent_command_id=parent_command_id,
+        preflight_hash=preflight_hash,
+        original_attempt_id=original_attempt_id,
+        original_nonce=original_nonce,
+        worker_id=worker_id,
+        fencing_token=fencing_token,
         recovery_kind=recovery.kind,
         incident_id=recovery.incident_id,
         source_hash=source_hash,
         recovery_hash=recovery.recovery_hash,
+        action_hash=action_hash,
+        safety_policy_hash=safety_policy_hash,
+        signing_authority_hash=signing_authority_hash,
+        permit_expires_at_ms=permit_expires_at_ms,
+        lease_expires_at_ms=lease_expires_at_ms,
         recovery_material_json=canonical_json(material),
         nonce=nonce,
-        expires_after_ms=recovery.expires_at_ms,
+        authorization_expires_at_ms=recovery.expires_at_ms,
+        expires_after_ms=expires_after_ms,
         signed_at_ms=now_ms,
         signature=signature,
         signature_hash=domain_hash(SIGNATURE_HASH_DOMAIN, signature.as_dict()),
         envelope_hash=domain_hash(SIGNED_ENVELOPE_HASH_DOMAIN, envelope),
-        signer_binding_hash=domain_hash(
-            SIGNER_BINDING_HASH_DOMAIN,
-            {
-                "artifact_kind": "recovery",
-                "network": recovery.network.value,
-                "account_id": recovery.account_id,
-                "main_account_address": recovery.main_account_address,
-                "signer_address": signer_address,
-                "vault_address": account.vault_address,
-                "incident_id": recovery.incident_id,
-                "recovery_hash": recovery.recovery_hash,
-            },
-        ),
+        signer_binding_hash=domain_hash(SIGNER_BINDING_HASH_DOMAIN, binding),
         wire_json=wire_json,
         wire_hash=hashlib.sha256(wire_json.encode("utf-8")).hexdigest(),
         signing_implementation=implementation,
@@ -1593,7 +1888,94 @@ def _sign_recovery_action_for_test(
     return result
 
 
-def sign_recovery_action(
+def _validate_recovery_allowlists(
+    recovery: RecoveryAction,
+    *,
+    policy: SignerPolicy,
+    asset_ids: tuple[int, ...],
+    cloids: tuple[str, ...],
+) -> SigningAccount:
+    if recovery.kind not in policy.allowed_recovery_kinds:
+        raise SignerPolicyError("recovery kind is not explicitly allowlisted")
+    if recovery.network not in policy.allowed_networks:
+        raise SignerPolicyError("recovery network is not allowlisted")
+    if recovery.network is not HyperliquidNetwork.TESTNET:
+        raise SignerPolicyError("mainnet recovery signing is hard-disabled")
+    account = policy.account(recovery.account_id)
+    if account.main_account_address != recovery.main_account_address:
+        raise SignerPolicyError("recovery main account differs from signer policy")
+    if not set(asset_ids).issubset(policy.allowed_asset_ids):
+        raise SignerPolicyError("recovery asset is not allowlisted")
+    if not set(cloids).issubset(account.owned_cloids):
+        raise SignerPolicyError("recovery references a foreign CLOID")
+    return account
+
+
+def _validate_durable_recovery_binding(
+    recovery: RecoveryAction,
+    *,
+    store: ExecutionStore,
+    command: RecoveryCommand,
+    authority: RecoverySigningAuthority,
+    material: dict[str, object],
+    source_hash: str,
+    policy: SignerPolicy,
+    worker_id: str,
+    fencing_token: int,
+) -> tuple[int, int]:
+    if command.state != "signing":
+        raise SignerPolicyError("durable recovery command is not in signing state")
+    expected = (
+        (authority.recovery_command_id, command.recovery_command_id),
+        (authority.permit_id, command.permit_id),
+        (authority.parent_command_id, command.parent_command_id),
+        (authority.incident_id, command.incident_id),
+        (authority.kind, command.kind),
+        (authority.source_hash, command.source_hash),
+        (authority.preflight_hash, command.preflight_hash),
+        (authority.recovery_hash, command.recovery_hash),
+        (authority.safety_policy_hash, command.safety_policy_hash),
+        (authority.original_attempt_id, command.original_attempt_id),
+        (authority.original_nonce, command.original_nonce),
+    )
+    if any(left != right for left, right in expected):
+        raise SignerPolicyError("recovery signing authority differs from durable command")
+    if authority.worker_id != worker_id or authority.fencing_token != fencing_token:
+        raise SignerPolicyError("recovery signing authority claim binding differs")
+    if (
+        command.recovery_command_id != authority.recovery_command_id
+        or command.incident_id != recovery.incident_id
+        or command.kind != recovery.kind.value
+        or command.source_hash != source_hash
+        or command.recovery_hash != recovery.recovery_hash
+    ):
+        raise SignerPolicyError("typed recovery differs from durable command")
+    material_json = canonical_json(material)
+    if (
+        material_json != command.recovery_material_json
+        or hashlib.sha256(material_json.encode("utf-8")).hexdigest()
+        != command.recovery_material_hash
+    ):
+        raise SignerPolicyError("typed recovery differs from durable canonical material")
+    if policy.safety_policy_hash != authority.safety_policy_hash:
+        raise SignerPolicyError("signer safety policy differs from recovery authority")
+    if (
+        type(store) is not ExecutionStore
+        or store.environment is not Environment.TESTNET
+        or store.account_id != recovery.account_id
+        or recovery.network is not HyperliquidNetwork.TESTNET
+    ):
+        raise SignerPolicyError("recovery execution-store scope is not exact testnet")
+    permit_expires_at_ms = _datetime_ms(
+        authority.permit_expires_at, "authority.permit_expires_at"
+    )
+    lease_expires_at_ms = _datetime_ms(
+        authority.lease_expires_at, "authority.lease_expires_at"
+    )
+    return permit_expires_at_ms, lease_expires_at_ms
+
+
+def _sign_recovery_action_for_test(
     recovery: RecoveryAction,
     *,
     evidence: HyperliquidAccountSnapshot | AttemptRecord,
@@ -1604,20 +1986,251 @@ def sign_recovery_action(
     clock: Clock = lambda: datetime.now(timezone.utc),
     sign_l1_action: SignL1Action | None = None,
 ) -> SignedRecoveryEnvelope:
-    """Refuse recovery signing until a durable RecoveryPermit exists."""
+    """Internal golden-vector helper; it cannot consume a live store permit."""
 
-    del (
+    policy = _verified_recovery_policy(policy)
+    if not isinstance(incident, IncidentRecord) or incident.state != "open":
+        raise SignerPolicyError("recovery requires the bound open persisted incident")
+    if not isinstance(
         recovery,
-        evidence,
-        incident,
-        policy,
-        wallet,
-        nonce_allocator,
-        clock,
-        sign_l1_action,
+        (ReduceOnlyCloseAction, CancelByCloidAction, NoopFenceAction),
+    ):
+        raise TypeError("recovery must be a typed RecoveryAction")
+    if not callable(clock):
+        raise TypeError("clock must be callable")
+    now_ms = _utc_ms(clock)
+    parent_command_id = incident.command_id or "internal-test-parent"
+    (
+        action,
+        material,
+        source_hash,
+        asset_ids,
+        cloids,
+        original_nonce,
+    ) = _validated_recovery_action(
+        recovery,
+        evidence=evidence,
+        incident_id=incident.incident_id,
+        parent_command_id=parent_command_id,
+        now_ms=now_ms,
     )
-    raise SignerPolicyError(
-        "recovery signing is hard-disabled until durable RecoveryPermit support"
+    account = _validate_recovery_allowlists(
+        recovery, policy=policy, asset_ids=asset_ids, cloids=cloids
+    )
+    remaining = recovery.expires_at_ms - now_ms
+    if not policy.minimum_expiry_remaining_ms <= remaining <= min(
+        policy.maximum_expiry_horizon_ms, _MAX_EXPIRY_HORIZON_MS
+    ):
+        raise SignerPolicyError("recovery expiry is not within the short signer bound")
+    signer_address = _wallet_address(wallet)
+    if signer_address != account.signer_address:
+        raise SignerPolicyError("injected wallet does not match recovery signer policy")
+    if recovery.kind is RecoveryKind.NOOP_FENCE:
+        if nonce_allocator is not None:
+            raise SignerPolicyError("noop fence must not allocate or replace its original nonce")
+        if original_nonce is None:
+            raise SignerPolicyError("noop fence lacks its original nonce")
+        nonce = original_nonce
+        original_attempt_id = recovery.attempt_id
+        preflight_hash = recovery.preflight_hash
+    else:
+        if not callable(getattr(nonce_allocator, "allocate", None)):
+            raise SignerPolicyError("close and cancel recovery require a nonce allocator")
+        nonce = nonce_allocator.allocate()  # type: ignore[union-attr]
+        original_attempt_id = None
+        preflight_hash = None
+    if type(nonce) is not int or not (
+        now_ms - _NONCE_PAST_WINDOW_MS < nonce < now_ms + _NONCE_FUTURE_WINDOW_MS
+    ):
+        raise SignerPolicyError("recovery nonce is outside Hyperliquid's time window")
+    synthetic = {
+        "recovery_command_id": "internal-test-" + recovery.recovery_hash[:32],
+        "permit_id": "internal-test-permit-" + recovery.recovery_hash[:24],
+        "parent_command_id": parent_command_id,
+        "incident_id": recovery.incident_id,
+        "recovery_hash": recovery.recovery_hash,
+        "worker_id": "internal-golden-vector",
+        "fencing_token": 1,
+    }
+    signing_authority_hash = domain_hash(
+        "trading-harness/internal-recovery-signing-authority/v1", synthetic
+    )
+    return _freeze_signed_recovery(
+        recovery,
+        action=action,
+        material=material,
+        source_hash=source_hash,
+        account=account,
+        signer_address=signer_address,
+        nonce=nonce,
+        expires_after_ms=recovery.expires_at_ms,
+        now_ms=now_ms,
+        recovery_command_id=synthetic["recovery_command_id"],  # type: ignore[arg-type]
+        permit_id=synthetic["permit_id"],  # type: ignore[arg-type]
+        parent_command_id=parent_command_id,
+        preflight_hash=preflight_hash,
+        original_attempt_id=original_attempt_id,
+        original_nonce=original_nonce,
+        worker_id="internal-golden-vector",
+        fencing_token=1,
+        safety_policy_hash=policy.safety_policy_hash,
+        signing_authority_hash=signing_authority_hash,
+        permit_expires_at_ms=recovery.expires_at_ms,
+        lease_expires_at_ms=recovery.expires_at_ms,
+        wallet=wallet,
+        sign_l1_action=sign_l1_action,
+    )
+
+
+def sign_recovery_action(
+    recovery: RecoveryAction,
+    *,
+    store: ExecutionStore,
+    recovery_command_id: str,
+    worker_id: str,
+    fencing_token: int,
+    evidence: HyperliquidAccountSnapshot | AttemptRecord,
+    policy: SignerPolicy,
+    wallet: object,
+    nonce_allocator: NonceAllocator | None,
+    clock: Clock = lambda: datetime.now(timezone.utc),
+    sign_l1_action: SignL1Action | None = None,
+) -> SignedRecoveryEnvelope:
+    """Consume one durable TESTNET authority, sign once, and freeze the wire."""
+
+    if type(store) is not ExecutionStore:
+        raise TypeError("store must be an exact ExecutionStore")
+    if not isinstance(
+        recovery,
+        (ReduceOnlyCloseAction, CancelByCloidAction, NoopFenceAction),
+    ):
+        raise TypeError("recovery must be a typed RecoveryAction")
+    if not isinstance(policy, SignerPolicy):
+        raise TypeError("policy must be SignerPolicy")
+    checked_command_id = _text(recovery_command_id, "recovery_command_id")
+    checked_worker_id = _text(worker_id, "worker_id")
+    if type(fencing_token) is not int or fencing_token <= 0:
+        raise TypeError("fencing_token must be a positive integer")
+    if not callable(clock):
+        raise TypeError("clock must be callable")
+    try:
+        now = clock()
+    except Exception as error:
+        raise ValidationError(f"signer clock failed: {type(error).__name__}") from error
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+        raise ValidationError("signer clock must return a timezone-aware datetime")
+    now = now.astimezone(timezone.utc)
+    now_ms = _datetime_ms(now, "signer clock")
+
+    # This store transition is the sole public recovery-signing capability.
+    # It happens before any wallet lookup, nonce allocation, or SDK access.
+    authority = ExecutionStore.require_recovery_signing_authority(
+        store,
+        checked_command_id,
+        checked_worker_id,
+        fencing_token,
+        at=now,
+    )
+    if not isinstance(authority, RecoverySigningAuthority):
+        raise SignerPolicyError("store returned an invalid recovery signing authority")
+    command = ExecutionStore.get_recovery_command(store, checked_command_id)
+    if not isinstance(command, RecoveryCommand):
+        raise SignerPolicyError("store returned an invalid recovery command")
+
+    selected_evidence = evidence
+    if isinstance(recovery, NoopFenceAction):
+        if not isinstance(evidence, AttemptRecord):
+            raise SignerPolicyError("noop fence requires persisted attempt evidence")
+        persisted_attempt = ExecutionStore.get_attempt(store, command.parent_command_id)
+        if evidence != persisted_attempt:
+            raise SignerPolicyError("noop evidence is not the exact durable parent attempt")
+        selected_evidence = persisted_attempt
+    (
+        action,
+        material,
+        source_hash,
+        asset_ids,
+        cloids,
+        original_nonce,
+    ) = _validated_recovery_action(
+        recovery,
+        evidence=selected_evidence,
+        incident_id=authority.incident_id,
+        parent_command_id=authority.parent_command_id,
+        now_ms=now_ms,
+    )
+    policy = _verified_recovery_policy(policy)
+    account = _validate_recovery_allowlists(
+        recovery, policy=policy, asset_ids=asset_ids, cloids=cloids
+    )
+    permit_expires_at_ms, lease_expires_at_ms = _validate_durable_recovery_binding(
+        recovery,
+        store=store,
+        command=command,
+        authority=authority,
+        material=material,
+        source_hash=source_hash,
+        policy=policy,
+        worker_id=checked_worker_id,
+        fencing_token=fencing_token,
+    )
+    expires_after_ms = min(
+        recovery.expires_at_ms,
+        permit_expires_at_ms,
+        lease_expires_at_ms,
+        now_ms + policy.maximum_expiry_horizon_ms,
+        now_ms + _MAX_EXPIRY_HORIZON_MS,
+    )
+    if expires_after_ms - now_ms < policy.minimum_expiry_remaining_ms:
+        raise SignerPolicyError("durable recovery authority expires too soon")
+
+    signer_address = _wallet_address(wallet)
+    if signer_address != account.signer_address:
+        raise SignerPolicyError("injected wallet does not match recovery signer policy")
+    if recovery.kind is RecoveryKind.NOOP_FENCE:
+        if nonce_allocator is not None:
+            raise SignerPolicyError("noop fence must not allocate or replace its original nonce")
+        if (
+            original_nonce is None
+            or authority.original_nonce is None
+            or original_nonce != authority.original_nonce
+        ):
+            raise SignerPolicyError("noop fence lost its durable original nonce")
+        nonce = original_nonce
+    else:
+        if authority.original_attempt_id is not None or authority.original_nonce is not None:
+            raise SignerPolicyError("non-noop authority unexpectedly binds an original attempt")
+        if not callable(getattr(nonce_allocator, "allocate", None)):
+            raise SignerPolicyError("close and cancel recovery require a nonce allocator")
+        nonce = nonce_allocator.allocate()  # type: ignore[union-attr]
+    if type(nonce) is not int or nonce < 0:
+        raise SignerPolicyError("recovery nonce is invalid")
+    if not now_ms - _NONCE_PAST_WINDOW_MS < nonce < now_ms + _NONCE_FUTURE_WINDOW_MS:
+        raise SignerPolicyError("recovery nonce is outside Hyperliquid's time window")
+    return _freeze_signed_recovery(
+        recovery,
+        action=action,
+        material=material,
+        source_hash=source_hash,
+        account=account,
+        signer_address=signer_address,
+        nonce=nonce,
+        expires_after_ms=expires_after_ms,
+        now_ms=now_ms,
+        recovery_command_id=command.recovery_command_id,
+        permit_id=command.permit_id,
+        parent_command_id=command.parent_command_id,
+        preflight_hash=command.preflight_hash,
+        original_attempt_id=command.original_attempt_id,
+        original_nonce=command.original_nonce,
+        worker_id=checked_worker_id,
+        fencing_token=fencing_token,
+        safety_policy_hash=policy.safety_policy_hash,
+        signing_authority_hash=authority.authority_hash,
+        permit_expires_at_ms=permit_expires_at_ms,
+        lease_expires_at_ms=lease_expires_at_ms,
+        wallet=wallet,
+        sign_l1_action=sign_l1_action,
     )
 
 
@@ -1626,7 +2239,9 @@ __all__ = (
     "OFFICIAL_SDK_VERSION",
     "MAX_PROTECTED_NOTIONAL",
     "MAX_PROTECTED_QUANTITY",
+    "RECOVERY_SAFETY_POLICY_HASH_DOMAIN",
     "RECOVERY_SIGNING_ENABLED",
+    "RECOVERY_WIRE_ACTION_HASH_DOMAIN",
     "SIGNED_ENVELOPE_HASH_DOMAIN",
     "SIGNATURE_HASH_DOMAIN",
     "SIGNER_BINDING_HASH_DOMAIN",

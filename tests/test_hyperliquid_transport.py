@@ -7,14 +7,27 @@ import unittest
 from unittest import mock
 
 from trading_harness import hyperliquid_transport
+from trading_harness.errors import StateConflict
 from trading_harness.hyperliquid_transport import (
     HttpExchangeResponse,
     HyperliquidSubmissionError,
+    RECOVERY_SUBMISSION_ENABLED,
     SubmissionOutcome,
     submit_signed_action,
 )
+from trading_harness.hyperliquid_signer import sign_recovery_action
 from trading_harness.hyperliquid_wire import HyperliquidNetwork
-from tests.test_hyperliquid_signer import NOW, make_signed
+from tests.test_execution_store import ExecutionStoreTestCase
+from tests.test_hyperliquid_signer import (
+    STORE_NOW,
+    FakeNonceAllocator,
+    FakeSigner,
+    FakeWallet,
+    NOW,
+    make_signed,
+    prepare_durable_recovery_fixture,
+    prepare_durable_noop_fixture,
+)
 
 
 class FakeSender:
@@ -29,13 +42,13 @@ class FakeSender:
         return self.result
 
 
-def submit(signed, sender, *, clock):
+def submit(signed, sender, *, clock, **kwargs):
     with mock.patch.object(
         hyperliquid_transport,
         "_default_sender",
         side_effect=sender,
     ):
-        return submit_signed_action(signed, clock=clock)
+        return submit_signed_action(signed, clock=clock, **kwargs)
 
 
 def successful_response(endpoint: str) -> HttpExchangeResponse:
@@ -259,6 +272,311 @@ class SingleAttemptTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(HyperliquidSubmissionError, "mainnet"):
             submit(signed, sender, clock=lambda: NOW)
         self.assertEqual(sender.calls, [])
+
+
+class DurableRecoveryTransportTests(ExecutionStoreTestCase):
+    def prepare_signed(self):
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            _,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(self)
+        signed = sign_recovery_action(
+            recovery,
+            store=self.store,
+            recovery_command_id=command.recovery_command_id,
+            worker_id="recovery-worker",
+            fencing_token=claim.fencing_token,
+            evidence=snapshot,
+            policy=selected_policy,
+            wallet=FakeWallet(),
+            nonce_allocator=FakeNonceAllocator(
+                [],
+                int((STORE_NOW + timedelta(seconds=8)).timestamp() * 1_000) + 1,
+            ),
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+            sign_l1_action=FakeSigner([]),
+        )
+        evidence = signed.execution_store_evidence()
+        attempt = self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="durable-recovery-attempt",
+            signed_evidence=evidence,
+            at=STORE_NOW + timedelta(seconds=8, milliseconds=100),
+        )
+        return signed, evidence, attempt, command, claim
+
+    def recovery_submit_arguments(self, evidence, attempt, claim):
+        return {
+            "store": self.store,
+            "attempt_id": attempt.attempt_id,
+            "signed_evidence_hash": evidence.evidence_hash,
+            "worker_id": "recovery-worker",
+            "fencing_token": claim.fencing_token,
+        }
+
+    def prepare_signed_noop(self):
+        recovery, parent_attempt, selected_policy, _, command, claim = (
+            prepare_durable_noop_fixture(self)
+        )
+        signed = sign_recovery_action(
+            recovery,
+            store=self.store,
+            recovery_command_id=command.recovery_command_id,
+            worker_id="recovery-worker",
+            fencing_token=claim.fencing_token,
+            evidence=parent_attempt,
+            policy=selected_policy,
+            wallet=FakeWallet(),
+            nonce_allocator=None,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+            sign_l1_action=FakeSigner([]),
+        )
+        evidence = signed.execution_store_evidence()
+        attempt = self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="durable-noop-attempt",
+            signed_evidence=evidence,
+            at=STORE_NOW + timedelta(seconds=8, milliseconds=100),
+        )
+        return signed, evidence, attempt, command, claim
+
+    def test_consumed_submission_authority_binds_one_exact_sender_call(self) -> None:
+        self.assertTrue(RECOVERY_SUBMISSION_ENABLED)
+        signed, evidence, prepared, command, claim = self.prepare_signed()
+        sender = FakeSender(successful_response(signed.exchange_url))
+        arguments = self.recovery_submit_arguments(evidence, prepared, claim)
+
+        result = submit(
+            signed,
+            sender,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=200),
+            **arguments,
+        )
+
+        self.assertEqual(sender.calls, [(signed.exchange_url, signed.wire_bytes, 10.0)])
+        self.assertEqual(result.recovery_command_id, command.recovery_command_id)
+        self.assertEqual(result.recovery_attempt_id, prepared.attempt_id)
+        self.assertEqual(
+            result.recovery_signed_evidence_hash,
+            evidence.evidence_hash,
+        )
+        self.assertRegex(result.submission_authority_hash or "", r"^[0-9a-f]{64}$")
+        with self.assertRaises(HyperliquidSubmissionError):
+            replace(result, submission_authority_hash="0" * 64).verify_integrity()
+        self.assertEqual(
+            self.store.get_recovery_attempt(command.recovery_command_id).state,
+            "sending",
+        )
+        transport_evidence = result.execution_store_evidence(
+            command_id=command.recovery_command_id,
+            attempt_id=prepared.attempt_id,
+            signed_evidence_hash=evidence.evidence_hash,
+        )
+        with self.assertRaisesRegex(HyperliquidSubmissionError, "authority"):
+            result.execution_store_evidence(
+                command_id="forged-recovery-command",
+                attempt_id=prepared.attempt_id,
+                signed_evidence_hash=evidence.evidence_hash,
+            )
+        updated = self.store.record_recovery_outcome(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            transport_evidence=transport_evidence,
+            at=STORE_NOW + timedelta(seconds=8, milliseconds=300),
+        )
+        self.assertEqual(updated.state, "reconciling")
+
+    def test_duplicate_submit_cannot_reach_sender_twice(self) -> None:
+        signed, evidence, prepared, _, claim = self.prepare_signed()
+        sender = FakeSender(successful_response(signed.exchange_url))
+        arguments = self.recovery_submit_arguments(evidence, prepared, claim)
+        submit(
+            signed,
+            sender,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=200),
+            **arguments,
+        )
+
+        with self.assertRaises(StateConflict):
+            submit(
+                signed,
+                sender,
+                clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=201),
+                **arguments,
+            )
+        self.assertEqual(len(sender.calls), 1)
+
+    def test_wrong_hash_worker_fence_and_tamper_fail_before_sender_or_authority(self) -> None:
+        signed, evidence, prepared, command, claim = self.prepare_signed()
+        sender = FakeSender(successful_response(signed.exchange_url))
+        base = self.recovery_submit_arguments(evidence, prepared, claim)
+        cases = (
+            ({**base, "store": object()}, HyperliquidSubmissionError),
+            ({**base, "signed_evidence_hash": "0" * 64}, HyperliquidSubmissionError),
+            ({**base, "worker_id": "foreign-worker"}, StateConflict),
+            ({**base, "fencing_token": claim.fencing_token + 1}, StateConflict),
+        )
+        for arguments, expected_error in cases:
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(expected_error):
+                    submit(
+                        signed,
+                        sender,
+                        clock=lambda: STORE_NOW
+                        + timedelta(seconds=8, milliseconds=200),
+                        **arguments,
+                    )
+                self.assertEqual(sender.calls, [])
+                self.assertEqual(
+                    self.store.get_recovery_attempt(command.recovery_command_id).state,
+                    "prepared",
+                )
+
+        tampered = replace(signed, wire_hash="0" * 64)
+        with self.assertRaisesRegex(HyperliquidSubmissionError, "integrity"):
+            submit(
+                tampered,
+                sender,
+                clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=200),
+                **base,
+            )
+        self.assertEqual(sender.calls, [])
+
+    def test_expired_local_recovery_fails_without_consuming_prepared_attempt(self) -> None:
+        signed, evidence, prepared, command, claim = self.prepare_signed()
+        sender = FakeSender(successful_response(signed.exchange_url))
+        with self.assertRaisesRegex(HyperliquidSubmissionError, "expired"):
+            submit(
+                signed,
+                sender,
+                clock=lambda: STORE_NOW + timedelta(seconds=15),
+                **self.recovery_submit_arguments(evidence, prepared, claim),
+            )
+        self.assertEqual(sender.calls, [])
+        self.assertEqual(
+            self.store.get_recovery_attempt(command.recovery_command_id).state,
+            "prepared",
+        )
+
+    def test_exact_noop_success_builds_atomic_response_evidence_and_cannot_replay(self) -> None:
+        self.assertTrue(RECOVERY_SUBMISSION_ENABLED)
+        self.assertTrue(hyperliquid_transport.NOOP_FENCE_SUBMISSION_ENABLED)
+        signed, evidence, prepared, command, claim = self.prepare_signed_noop()
+        sender = FakeSender(
+            HttpExchangeResponse(
+                status=200,
+                final_url=signed.exchange_url,
+                body=b'{"status":"ok","response":{"type":"default"}}',
+            )
+        )
+        arguments = self.recovery_submit_arguments(evidence, prepared, claim)
+        result = submit(
+            signed,
+            sender,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=200),
+            **arguments,
+        )
+        self.assertIs(result.outcome, SubmissionOutcome.RESPONSE_RECEIVED)
+        transport = result.execution_store_evidence(
+            command_id=command.recovery_command_id,
+            attempt_id=prepared.attempt_id,
+            signed_evidence_hash=evidence.evidence_hash,
+        )
+        noop = result.noop_fence_response_evidence(
+            command.recovery_command_id,
+            prepared.attempt_id,
+            evidence.evidence_hash,
+            parsed_at=STORE_NOW + timedelta(seconds=8, milliseconds=250),
+        )
+        self.assertEqual(noop.transport_evidence_hash, transport.evidence_hash)
+        updated = self.store.record_recovery_outcome(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            transport_evidence=transport,
+            noop_response=noop,
+            at=STORE_NOW + timedelta(seconds=8, milliseconds=300),
+        )
+        self.assertEqual(updated.state, "reconciling")
+        self.assertEqual(
+            noop,
+            self.store.get_noop_fence_response(command.recovery_command_id),
+        )
+        with self.assertRaises(StateConflict):
+            submit(
+                signed,
+                sender,
+                clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=301),
+                **arguments,
+            )
+        self.assertEqual(len(sender.calls), 1)
+
+    def test_wrong_noop_body_is_unknown_and_cannot_create_acceptance_evidence(self) -> None:
+        signed, evidence, prepared, command, claim = self.prepare_signed_noop()
+        sender = FakeSender(
+            HttpExchangeResponse(
+                status=200,
+                final_url=signed.exchange_url,
+                body=b'{"status":"ok","response":{"type":"order"}}',
+            )
+        )
+        result = submit(
+            signed,
+            sender,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=200),
+            **self.recovery_submit_arguments(evidence, prepared, claim),
+        )
+        self.assertIs(result.outcome, SubmissionOutcome.UNKNOWN)
+        self.assertEqual(result.detail_code, "unexpected_noop_response")
+        with self.assertRaisesRegex(HyperliquidSubmissionError, "canonical"):
+            result.noop_fence_response_evidence(
+                command.recovery_command_id,
+                prepared.attempt_id,
+                evidence.evidence_hash,
+                parsed_at=STORE_NOW + timedelta(seconds=8, milliseconds=250),
+            )
+        transport = result.execution_store_evidence(
+            command_id=command.recovery_command_id,
+            attempt_id=prepared.attempt_id,
+            signed_evidence_hash=evidence.evidence_hash,
+        )
+        updated = self.store.record_recovery_outcome(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            transport_evidence=transport,
+            at=STORE_NOW + timedelta(seconds=8, milliseconds=300),
+        )
+        self.assertEqual(updated.state, "submitted_unknown")
+
+    def test_timeout_noop_remains_unknown_without_false_response_evidence(self) -> None:
+        signed, evidence, prepared, command, claim = self.prepare_signed_noop()
+        sender = FakeSender(TimeoutError("unknown"))
+        result = submit(
+            signed,
+            sender,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=200),
+            **self.recovery_submit_arguments(evidence, prepared, claim),
+        )
+        self.assertIs(result.outcome, SubmissionOutcome.UNKNOWN)
+        self.assertEqual(result.detail_code, "timeout")
+        with self.assertRaises(HyperliquidSubmissionError):
+            result.noop_fence_response_evidence(
+                command.recovery_command_id,
+                prepared.attempt_id,
+                evidence.evidence_hash,
+                parsed_at=STORE_NOW + timedelta(seconds=8, milliseconds=250),
+            )
 
 
 class HardenedDefaultSenderTests(unittest.TestCase):

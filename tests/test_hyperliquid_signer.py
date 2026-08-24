@@ -13,11 +13,21 @@ from unittest import mock
 
 from trading_harness.canonical import canonical_data, canonical_json, domain_hash
 from trading_harness.domain import Environment
-from trading_harness.execution_store import DispatchPreflight
+from trading_harness.errors import RecordNotFound, StateConflict
+from trading_harness.execution_store import DispatchPreflight, RecoveryPermit
+from trading_harness.hyperliquid_recovery import (
+    CancelRequest,
+    RecoveryKind,
+    build_cancel_by_cloid,
+    build_noop_fence,
+    build_reduce_only_close,
+    recovery_action_material,
+)
 from trading_harness.hyperliquid_signer import (
     OFFICIAL_SDK_VERSION,
     MAX_PROTECTED_NOTIONAL,
     MAX_PROTECTED_QUANTITY,
+    RECOVERY_SIGNING_ENABLED,
     SignerDependencyError,
     SignerOutputError,
     SignerPolicy,
@@ -25,6 +35,7 @@ from trading_harness.hyperliquid_signer import (
     SigningAccount,
     load_official_sign_l1_action,
     official_sdk_available,
+    sign_recovery_action,
     sign_protected_action as _sign_protected_action,
 )
 from trading_harness.hyperliquid_wire import (
@@ -34,7 +45,18 @@ from trading_harness.hyperliquid_wire import (
 )
 from trading_harness.nonce import PersistentNonceAllocator
 from trading_harness.planning import ProtectedTradePlan
-from tests.test_execution_store import digest
+from tests.test_execution_store import (
+    NOW as STORE_NOW,
+    ExecutionStoreTestCase,
+    digest,
+)
+from tests.test_hyperliquid_account import (
+    ACCOUNT as RECOVERY_MAIN_ACCOUNT,
+    FixtureTransport as RecoveryFixtureTransport,
+    TARGET_CLOID as RECOVERY_TARGET_CLOID,
+    fetch as fetch_recovery_account,
+    valid_clearing as valid_recovery_clearing,
+)
 from tests.test_hyperliquid_wire import metadata as metadata_fixture, protected_plan
 
 
@@ -50,6 +72,7 @@ PLAN_HASH = SOURCE_PLAN.plan_hash
 METADATA_HASH = SOURCE_METADATA.source_hash
 R = "0x" + "1" * 64
 S = "0x" + "2" * 64
+RECOVERY_CLOSE_CLOID = "0x" + "4" * 32
 
 
 def action() -> dict[str, object]:
@@ -195,6 +218,18 @@ class FakeWallet:
         self.address = address
 
 
+class GuardWallet:
+    """Fails a test if an unauthorized path reaches wallet lookup."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def address(self) -> str:
+        self.calls += 1
+        raise AssertionError("wallet must remain untouched")
+
+
 class FakeNonceAllocator:
     def __init__(self, events: list[str], nonce: object = NOW_MS + 1) -> None:
         self.events = events
@@ -248,6 +283,228 @@ def make_signed(*, vault_address: str | None = None):
         sign_l1_action=signer,
     )
     return result
+
+
+def durable_recovery_policy(
+    *,
+    maximum_expiry_horizon_ms: int = 15_000,
+    signer_address: str = SIGNER,
+    kind: RecoveryKind = RecoveryKind.REDUCE_ONLY_CLOSE,
+) -> SignerPolicy:
+    return SignerPolicy(
+        accounts=(
+            SigningAccount(
+                account_id="testnet-account",
+                main_account_address=RECOVERY_MAIN_ACCOUNT,
+                signer_address=signer_address,
+                owned_cloids=frozenset(
+                    {RECOVERY_CLOSE_CLOID, RECOVERY_TARGET_CLOID}
+                ),
+            ),
+        ),
+        allowed_asset_ids=frozenset({1}),
+        allowed_recovery_kinds=frozenset({kind}),
+        maximum_expiry_horizon_ms=maximum_expiry_horizon_ms,
+    )
+
+
+def prepare_durable_recovery_fixture(
+    case: ExecutionStoreTestCase,
+    *,
+    lease_seconds: int = 7,
+    signer_address: str = SIGNER,
+    kind: RecoveryKind = RecoveryKind.REDUCE_ONLY_CLOSE,
+):
+    """Create one exact consumed permit and claimed close command for tests."""
+
+    case.admit_one()
+    incident = case.store.record_incident(
+        incident_id="durable-recovery-incident",
+        command_id="command-1",
+        code="RECOVERY_REQUIRED",
+        severity="critical",
+        at=STORE_NOW + timedelta(seconds=5),
+    )
+    evidence_at = STORE_NOW + timedelta(seconds=6)
+    evidence_ms = int(evidence_at.timestamp() * 1_000)
+    snapshot, _ = fetch_recovery_account(
+        RecoveryFixtureTransport(
+            clearing=valid_recovery_clearing(server_time=evidence_ms)
+        ),
+        received_at_ms=evidence_ms,
+        network="testnet",
+    )
+    if kind is RecoveryKind.REDUCE_ONLY_CLOSE:
+        recovery = build_reduce_only_close(
+            snapshot,
+            symbol="ETH",
+            price_bound=Decimal("2400"),
+            cloid=RECOVERY_CLOSE_CLOID,
+            incident=incident,
+            account_id="testnet-account",
+            network=HyperliquidNetwork.TESTNET,
+            at=evidence_at,
+        )
+        source_hash = recovery.position_snapshot_hash
+    elif kind is RecoveryKind.CANCEL_BY_CLOID:
+        recovery = build_cancel_by_cloid(
+            snapshot,
+            (CancelRequest("ETH", RECOVERY_TARGET_CLOID),),
+            owned_cloids=(RECOVERY_TARGET_CLOID,),
+            incident=incident,
+            account_id="testnet-account",
+            network=HyperliquidNetwork.TESTNET,
+            at=evidence_at,
+        )
+        source_hash = recovery.account_snapshot_hash
+    else:
+        raise ValueError("close/cancel fixture received unsupported recovery kind")
+    selected_policy = durable_recovery_policy(
+        signer_address=signer_address,
+        kind=kind,
+    )
+    material = recovery_action_material(recovery)
+    permit = RecoveryPermit(
+        permit_id="durable-recovery-permit",
+        token_hash=digest("durable-recovery-token"),
+        parent_command_id="command-1",
+        incident_id=incident.incident_id,
+        kind=recovery.kind.value,
+        environment=Environment.TESTNET,
+        account_id="testnet-account",
+        source_hash=source_hash,
+        preflight_hash=None,
+        recovery_hash=recovery.recovery_hash,
+        recovery_material=material,
+        safety_policy_hash=selected_policy.safety_policy_hash,
+        original_attempt_id=None,
+        original_nonce=None,
+        issuer_id="testnet-recovery-authority",
+        audience="recovery-worker",
+        issued_at=evidence_at,
+        expires_at=STORE_NOW + timedelta(seconds=16),
+    )
+    case.store.register_recovery_permit(permit)
+    command = case.store.queue_recovery(
+        recovery_command_id="durable-recovery-command",
+        permit_id=permit.permit_id,
+        token_hash=permit.token_hash,
+        audience=permit.audience,
+        at=STORE_NOW + timedelta(seconds=7),
+    )
+    claim = case.store.claim_next_recovery(
+        "recovery-worker",
+        at=STORE_NOW + timedelta(seconds=8),
+        lease_seconds=lease_seconds,
+    )
+    assert claim is not None
+    return recovery, snapshot, selected_policy, incident, permit, command, claim
+
+
+def prepare_durable_noop_fixture(
+    case: ExecutionStoreTestCase,
+    *,
+    signer_address: str = SIGNER,
+):
+    ticket, _ = case.admit_one()
+    dispatch_claim = case.store.claim_next(
+        "dispatcher",
+        at=STORE_NOW + timedelta(seconds=1),
+        lease_seconds=10,
+    )
+    assert dispatch_claim is not None
+    preflight = case.register_preflight(ticket)
+    original_nonce = int(
+        (STORE_NOW + timedelta(seconds=2)).timestamp() * 1_000
+    )
+    signed_parent = case.make_signed_evidence(
+        preflight,
+        nonce=original_nonce,
+    )
+    case.store.prepare_attempt(
+        "command-1",
+        "dispatcher",
+        dispatch_claim.fencing_token,
+        attempt_id="durable-parent-attempt",
+        preflight_hash=preflight.preflight_hash,
+        signed_evidence=signed_parent,
+        nonce=original_nonce,
+        action_hash=signed_parent.action_hash,
+        wire_hash=signed_parent.wire_hash,
+        at=STORE_NOW + timedelta(seconds=2),
+    )
+    case.store.mark_submitted_unknown(
+        "command-1",
+        "dispatcher",
+        dispatch_claim.fencing_token,
+        transport_evidence=case.make_transport_evidence(
+            "durable-parent-attempt",
+            signed_parent,
+            outcome="unknown",
+        ),
+        at=STORE_NOW + timedelta(seconds=3),
+    )
+    case.store.claim_reconciliation(
+        "command-1",
+        "reconciler",
+        at=STORE_NOW + timedelta(seconds=4),
+        lease_seconds=30,
+    )
+    incident = case.store.record_incident(
+        incident_id="durable-noop-incident",
+        command_id="command-1",
+        code="AMBIGUOUS_SUBMISSION",
+        severity="critical",
+        at=STORE_NOW + timedelta(seconds=5),
+    )
+    attempt = case.store.get_attempt("command-1")
+    recovery = build_noop_fence(
+        attempt,
+        incident=incident,
+        account_id="testnet-account",
+        main_account_address=RECOVERY_MAIN_ACCOUNT,
+        network=HyperliquidNetwork.TESTNET,
+        at=STORE_NOW + timedelta(seconds=6),
+    )
+    selected_policy = durable_recovery_policy(
+        signer_address=signer_address,
+        kind=RecoveryKind.NOOP_FENCE,
+    )
+    permit = RecoveryPermit(
+        permit_id="durable-noop-permit",
+        token_hash=digest("durable-noop-token"),
+        parent_command_id="command-1",
+        incident_id=incident.incident_id,
+        kind=recovery.kind.value,
+        environment=Environment.TESTNET,
+        account_id="testnet-account",
+        source_hash=recovery.ambiguous_attempt_hash,
+        preflight_hash=attempt.preflight_hash,
+        recovery_hash=recovery.recovery_hash,
+        recovery_material=recovery_action_material(recovery),
+        safety_policy_hash=selected_policy.safety_policy_hash,
+        original_attempt_id=attempt.attempt_id,
+        original_nonce=attempt.nonce,
+        issuer_id="testnet-recovery-authority",
+        audience="recovery-worker",
+        issued_at=STORE_NOW + timedelta(seconds=6),
+        expires_at=STORE_NOW + timedelta(seconds=16),
+    )
+    case.store.register_recovery_permit(permit)
+    command = case.store.queue_recovery(
+        recovery_command_id="durable-noop-command",
+        permit_id=permit.permit_id,
+        token_hash=permit.token_hash,
+        audience=permit.audience,
+        at=STORE_NOW + timedelta(seconds=7),
+    )
+    claim = case.store.claim_next_recovery(
+        "recovery-worker",
+        at=STORE_NOW + timedelta(seconds=8),
+        lease_seconds=7,
+    )
+    assert claim is not None
+    return recovery, attempt, selected_policy, permit, command, claim
 
 
 class IsolatedSigningTests(unittest.TestCase):
@@ -594,6 +851,20 @@ class IndependentActionValidationTests(unittest.TestCase):
 
 
 class SignerPolicyTests(unittest.TestCase):
+    def test_recovery_safety_policy_hash_is_canonical_and_economically_complete(self) -> None:
+        first = durable_recovery_policy()
+        second = durable_recovery_policy()
+        changed_expiry = durable_recovery_policy(
+            maximum_expiry_horizon_ms=14_000
+        )
+        changed_kind = durable_recovery_policy(
+            kind=RecoveryKind.CANCEL_BY_CLOID
+        )
+
+        self.assertEqual(first.safety_policy_hash, second.safety_policy_hash)
+        self.assertNotEqual(first.safety_policy_hash, changed_expiry.safety_policy_hash)
+        self.assertNotEqual(first.safety_policy_hash, changed_kind.safety_policy_hash)
+
     def test_network_account_asset_and_wallet_are_all_explicitly_allowlisted(self) -> None:
         cases = (
             (
@@ -696,6 +967,369 @@ class SignerPolicyTests(unittest.TestCase):
                 main_account_address=MAIN_ACCOUNT,
                 signer_address=MAIN_ACCOUNT,
             )
+
+
+class DurableRecoverySigningTests(ExecutionStoreTestCase):
+    def sign_fixture(self, *, policy_override: SignerPolicy | None = None):
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            incident,
+            permit,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(self)
+        events: list[str] = []
+        signed = sign_recovery_action(
+            recovery,
+            store=self.store,
+            recovery_command_id=command.recovery_command_id,
+            worker_id="recovery-worker",
+            fencing_token=claim.fencing_token,
+            evidence=snapshot,
+            policy=selected_policy if policy_override is None else policy_override,
+            wallet=FakeWallet(),
+            nonce_allocator=FakeNonceAllocator(
+                events,
+                int((STORE_NOW + timedelta(seconds=8)).timestamp() * 1_000) + 1,
+            ),
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+            sign_l1_action=FakeSigner(events),
+        )
+        return (
+            signed,
+            events,
+            recovery,
+            snapshot,
+            selected_policy,
+            incident,
+            permit,
+            command,
+            claim,
+        )
+
+    def test_public_signing_consumes_exact_authority_and_freezes_local_attestation(self) -> None:
+        self.assertTrue(RECOVERY_SIGNING_ENABLED)
+        (
+            signed,
+            events,
+            recovery,
+            _,
+            selected_policy,
+            _,
+            permit,
+            command,
+            claim,
+        ) = self.sign_fixture()
+
+        self.assertEqual(events, ["nonce_committed", "signed"])
+        self.assertEqual(signed.recovery_command_id, command.recovery_command_id)
+        self.assertEqual(signed.permit_id, permit.permit_id)
+        self.assertEqual(signed.parent_command_id, command.parent_command_id)
+        self.assertEqual(signed.worker_id, "recovery-worker")
+        self.assertEqual(signed.fencing_token, claim.fencing_token)
+        self.assertEqual(signed.safety_policy_hash, selected_policy.safety_policy_hash)
+        self.assertEqual(signed.recovery_hash, recovery.recovery_hash)
+        self.assertEqual(
+            signed.expires_after_ms,
+            int((STORE_NOW + timedelta(seconds=15)).timestamp() * 1_000),
+        )
+        self.assertNotIn(permit.permit_id, signed.wire_json)
+        self.assertNotIn(command.recovery_command_id, signed.wire_json)
+        self.assertNotIn(signed.signing_authority_hash, signed.wire_json)
+        signed.verify_integrity()
+        evidence = signed.execution_store_evidence()
+        prepared = self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="durable-recovery-attempt",
+            signed_evidence=evidence,
+            at=STORE_NOW + timedelta(seconds=8, milliseconds=100),
+        )
+        self.assertEqual(prepared.signed_evidence_hash, evidence.evidence_hash)
+        self.assertEqual(prepared.action_hash, signed.action_hash)
+        self.assertEqual(prepared.wire_hash, signed.wire_hash)
+
+    def test_public_cancel_path_requires_the_same_durable_authority(self) -> None:
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            _,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(
+            self,
+            kind=RecoveryKind.CANCEL_BY_CLOID,
+        )
+        events: list[str] = []
+        signed = sign_recovery_action(
+            recovery,
+            store=self.store,
+            recovery_command_id=command.recovery_command_id,
+            worker_id="recovery-worker",
+            fencing_token=claim.fencing_token,
+            evidence=snapshot,
+            policy=selected_policy,
+            wallet=FakeWallet(),
+            nonce_allocator=FakeNonceAllocator(
+                events,
+                int((STORE_NOW + timedelta(seconds=8)).timestamp() * 1_000) + 2,
+            ),
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+            sign_l1_action=FakeSigner(events),
+        )
+        self.assertEqual(events, ["nonce_committed", "signed"])
+        self.assertIs(signed.recovery_kind, RecoveryKind.CANCEL_BY_CLOID)
+        self.assertEqual(signed.envelope()["action"], recovery.action)
+        signed.verify_integrity()
+
+    def test_public_noop_signing_reuses_exact_durable_unknown_nonce(self) -> None:
+        (
+            recovery,
+            attempt,
+            selected_policy,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_noop_fixture(self)
+        events: list[str] = []
+        signed = sign_recovery_action(
+            recovery,
+            store=self.store,
+            recovery_command_id=command.recovery_command_id,
+            worker_id="recovery-worker",
+            fencing_token=claim.fencing_token,
+            evidence=attempt,
+            policy=selected_policy,
+            wallet=FakeWallet(),
+            nonce_allocator=None,
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+            sign_l1_action=FakeSigner(events),
+        )
+        self.assertEqual(events, ["signed"])
+        self.assertEqual(signed.nonce, attempt.nonce)
+        self.assertEqual(signed.original_attempt_id, attempt.attempt_id)
+        self.assertEqual(signed.preflight_hash, attempt.preflight_hash)
+        self.assertEqual(signed.envelope()["action"], {"type": "noop"})
+        signed.verify_integrity()
+
+    def test_duplicate_signing_and_caller_forged_permit_fail_before_wallet_or_nonce(self) -> None:
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            _,
+            permit,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(self)
+        base = {
+            "store": self.store,
+            "recovery_command_id": command.recovery_command_id,
+            "worker_id": "recovery-worker",
+            "fencing_token": claim.fencing_token,
+            "evidence": snapshot,
+            "policy": selected_policy,
+            "wallet": FakeWallet(),
+            "nonce_allocator": FakeNonceAllocator([], int((STORE_NOW + timedelta(seconds=8)).timestamp() * 1_000) + 1),
+            "clock": lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+            "sign_l1_action": FakeSigner([]),
+        }
+        with self.assertRaisesRegex(TypeError, "permit"):
+            sign_recovery_action(recovery, permit=permit, **base)  # type: ignore[call-arg]
+        forged_store_arguments = dict(base)
+        forged_store_wallet = GuardWallet()
+        forged_store_arguments["store"] = object()
+        forged_store_arguments["wallet"] = forged_store_wallet
+        with self.assertRaisesRegex(TypeError, "exact ExecutionStore"):
+            sign_recovery_action(recovery, **forged_store_arguments)
+        self.assertEqual(forged_store_wallet.calls, 0)
+        self.assertEqual(
+            self.store.get_recovery_outbox(command.recovery_command_id).state,
+            "claimed",
+        )
+
+        first_events: list[str] = []
+        first_arguments = dict(base)
+        first_arguments["nonce_allocator"] = FakeNonceAllocator(
+            first_events,
+            int((STORE_NOW + timedelta(seconds=8)).timestamp() * 1_000) + 1,
+        )
+        first_arguments["sign_l1_action"] = FakeSigner(first_events)
+        sign_recovery_action(recovery, **first_arguments)
+        replay_events: list[str] = []
+        replay_arguments = dict(base)
+        replay_wallet = GuardWallet()
+        replay_arguments["wallet"] = replay_wallet
+        replay_arguments["nonce_allocator"] = FakeNonceAllocator(replay_events)
+        replay_arguments["sign_l1_action"] = FakeSigner(replay_events)
+        with self.assertRaisesRegex(StateConflict, "state|consumed|claim"):
+            sign_recovery_action(recovery, **replay_arguments)
+        self.assertEqual(replay_events, [])
+        self.assertEqual(replay_wallet.calls, 0)
+
+    def test_valid_but_different_recovery_is_denied_before_key_use(self) -> None:
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            incident,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(self)
+        different = build_reduce_only_close(
+            snapshot,
+            symbol="ETH",
+            price_bound=Decimal("2400"),
+            close_size=Decimal("0.2"),
+            cloid=RECOVERY_CLOSE_CLOID,
+            incident=incident,
+            account_id="testnet-account",
+            network=HyperliquidNetwork.TESTNET,
+            at=STORE_NOW + timedelta(seconds=6),
+        )
+        events: list[str] = []
+        wallet = GuardWallet()
+        with self.assertRaisesRegex(SignerPolicyError, "durable"):
+            sign_recovery_action(
+                different,
+                store=self.store,
+                recovery_command_id=command.recovery_command_id,
+                worker_id="recovery-worker",
+                fencing_token=claim.fencing_token,
+                evidence=snapshot,
+                policy=selected_policy,
+                wallet=wallet,
+                nonce_allocator=FakeNonceAllocator(events),
+                clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+                sign_l1_action=FakeSigner(events),
+            )
+        self.assertEqual(events, [])
+        self.assertEqual(wallet.calls, 0)
+
+    def test_wrong_safety_policy_is_denied_before_key_use(self) -> None:
+        (
+            recovery,
+            snapshot,
+            _,
+            _,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(self)
+        wrong_policy = durable_recovery_policy(maximum_expiry_horizon_ms=14_000)
+        events = []
+        wallet = GuardWallet()
+        with self.assertRaisesRegex(SignerPolicyError, "safety policy"):
+            sign_recovery_action(
+                recovery,
+                store=self.store,
+                recovery_command_id=command.recovery_command_id,
+                worker_id="recovery-worker",
+                fencing_token=claim.fencing_token,
+                evidence=snapshot,
+                policy=wrong_policy,
+                wallet=wallet,
+                nonce_allocator=FakeNonceAllocator(events),
+                clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+                sign_l1_action=FakeSigner(events),
+            )
+        self.assertEqual(events, [])
+        self.assertEqual(wallet.calls, 0)
+
+    def test_stale_lease_wrong_fence_and_unknown_command_fail_before_key_use(self) -> None:
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            _,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(self, lease_seconds=1)
+        cases = (
+            (command.recovery_command_id, claim.fencing_token + 1, STORE_NOW + timedelta(seconds=8, milliseconds=1)),
+            (command.recovery_command_id, claim.fencing_token, STORE_NOW + timedelta(seconds=9)),
+            ("unknown-recovery-command", claim.fencing_token, STORE_NOW + timedelta(seconds=8, milliseconds=1)),
+        )
+        for command_id, token, at in cases:
+            with self.subTest(command_id=command_id, token=token, at=at):
+                events: list[str] = []
+                wallet = GuardWallet()
+                expected_error = (
+                    RecordNotFound
+                    if command_id == "unknown-recovery-command"
+                    else StateConflict
+                )
+                with self.assertRaises(expected_error):
+                    sign_recovery_action(
+                        recovery,
+                        store=self.store,
+                        recovery_command_id=command_id,
+                        worker_id="recovery-worker",
+                        fencing_token=token,
+                        evidence=snapshot,
+                        policy=selected_policy,
+                        wallet=wallet,
+                        nonce_allocator=FakeNonceAllocator(events),
+                        clock=lambda at=at: at,
+                        sign_l1_action=FakeSigner(events),
+                    )
+                self.assertEqual(events, [])
+                self.assertEqual(wallet.calls, 0)
+
+    @unittest.skipUnless(
+        official_sdk_available(),
+        f"requires optional hyperliquid-python-sdk=={OFFICIAL_SDK_VERSION}",
+    )
+    def test_public_durable_path_uses_official_0240_signature_contract(self) -> None:
+        from eth_account import Account
+        from hyperliquid.utils.signing import recover_agent_or_user_from_l1_action
+
+        wallet = Account.from_key(
+            "0x0123456789012345678901234567890123456789012345678901234567890123"
+        )
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            _,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(
+            self, signer_address=wallet.address.lower()
+        )
+        signed = sign_recovery_action(
+            recovery,
+            store=self.store,
+            recovery_command_id=command.recovery_command_id,
+            worker_id="recovery-worker",
+            fencing_token=claim.fencing_token,
+            evidence=snapshot,
+            policy=selected_policy,
+            wallet=wallet,
+            nonce_allocator=FakeNonceAllocator(
+                [],
+                int((STORE_NOW + timedelta(seconds=8)).timestamp() * 1_000) + 1,
+            ),
+            clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+        )
+        envelope = signed.envelope()
+        recovered = recover_agent_or_user_from_l1_action(
+            envelope["action"],
+            envelope["signature"],
+            envelope["vaultAddress"],
+            envelope["nonce"],
+            envelope["expiresAfter"],
+            False,
+        )
+        self.assertEqual(recovered.lower(), wallet.address.lower())
 
 
 class OfficialSdkContractTests(unittest.TestCase):

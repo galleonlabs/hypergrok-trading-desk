@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import json
@@ -23,12 +23,18 @@ from urllib import request as urlrequest
 
 from .canonical import canonical_json, domain_hash
 from .errors import HarnessError, ValidationError
-from .execution_store import TransportOutcomeEvidence
+from .execution_store import (
+    ExecutionStore,
+    NoopFenceResponseEvidence,
+    RecoverySubmissionAuthority,
+    TransportOutcomeEvidence,
+)
 from .hyperliquid_signer import (
     SignedActionEnvelope,
     SignedRecoveryEnvelope,
     SignerOutputError,
 )
+from .hyperliquid_recovery import RecoveryKind
 from .hyperliquid_wire import HyperliquidNetwork
 
 
@@ -38,7 +44,14 @@ SignedEnvelope: TypeAlias = SignedActionEnvelope | SignedRecoveryEnvelope
 
 SUBMISSION_ATTEMPT_HASH_DOMAIN = "trading-harness/hyperliquid-submission-attempt/v1"
 SUBMISSION_RESPONSE_HASH_DOMAIN = "trading-harness/hyperliquid-submission-response/v1"
-RECOVERY_SUBMISSION_ENABLED = False
+RECOVERY_SUBMISSION_ENABLED = True
+NOOP_FENCE_SUBMISSION_ENABLED = True
+
+_NOOP_DEFAULT_RESPONSE: dict[str, object] = {
+    "status": "ok",
+    "response": {"type": "default"},
+}
+_NOOP_DEFAULT_RESPONSE_JSON = canonical_json(_NOOP_DEFAULT_RESPONSE)
 
 _ALLOWED_EXCHANGE_URLS = frozenset(
     {
@@ -103,6 +116,11 @@ class SubmissionAttempt:
     wire_hash: str
     signed_envelope_hash: str
     signer_binding_hash: str
+    recovery_kind: str | None
+    recovery_command_id: str | None
+    recovery_attempt_id: str | None
+    recovery_signed_evidence_hash: str | None
+    submission_authority_hash: str | None
     attempted_at_ms: int
     outcome: SubmissionOutcome
     http_status: int | None
@@ -124,6 +142,8 @@ class SubmissionAttempt:
     def verify_integrity(self) -> None:
         if not isinstance(self.network, HyperliquidNetwork):
             raise HyperliquidSubmissionError("submission attempt network is invalid")
+        if self.network is not HyperliquidNetwork.TESTNET:
+            raise HyperliquidSubmissionError("mainnet submission attempt is hard-disabled")
         if self.endpoint != self.network.exchange_url:
             raise HyperliquidSubmissionError("submission endpoint binding is invalid")
         if self.artifact_kind not in {"protected_order", "recovery"}:
@@ -134,6 +154,45 @@ class SubmissionAttempt:
             not isinstance(self.incident_id, str) or not self.incident_id
         ):
             raise HyperliquidSubmissionError("recovery submission requires an incident")
+        recovery_bindings = (
+            self.recovery_kind,
+            self.recovery_command_id,
+            self.recovery_attempt_id,
+            self.recovery_signed_evidence_hash,
+            self.submission_authority_hash,
+        )
+        if self.artifact_kind == "protected_order" and any(
+            value is not None for value in recovery_bindings
+        ):
+            raise HyperliquidSubmissionError(
+                "protected submission cannot bind recovery authority"
+            )
+        if self.artifact_kind == "recovery":
+            if any(not isinstance(value, str) or not value for value in recovery_bindings):
+                raise HyperliquidSubmissionError(
+                    "recovery submission authority binding is incomplete"
+                )
+            for field, value in (
+                ("recovery_signed_evidence_hash", self.recovery_signed_evidence_hash),
+                ("submission_authority_hash", self.submission_authority_hash),
+            ):
+                if not re.fullmatch(r"[0-9a-f]{64}", value or ""):
+                    raise HyperliquidSubmissionError(f"submission {field} is invalid")
+            if self.recovery_kind not in {value.value for value in RecoveryKind}:
+                raise HyperliquidSubmissionError(
+                    "submission recovery kind is invalid"
+                )
+            for field, value in (
+                ("recovery_command_id", self.recovery_command_id),
+                ("recovery_attempt_id", self.recovery_attempt_id),
+            ):
+                if (
+                    not isinstance(value, str)
+                    or value != value.strip()
+                    or len(value) > 128
+                    or any(ord(character) < 32 for character in value)
+                ):
+                    raise HyperliquidSubmissionError(f"submission {field} is invalid")
         if (
             not isinstance(self.account_id, str)
             or not self.account_id
@@ -198,6 +257,11 @@ class SubmissionAttempt:
             wire_hash=self.wire_hash,
             signed_envelope_hash=self.signed_envelope_hash,
             signer_binding_hash=self.signer_binding_hash,
+            recovery_kind=self.recovery_kind,
+            recovery_command_id=self.recovery_command_id,
+            recovery_attempt_id=self.recovery_attempt_id,
+            recovery_signed_evidence_hash=self.recovery_signed_evidence_hash,
+            submission_authority_hash=self.submission_authority_hash,
             attempted_at_ms=self.attempted_at_ms,
             outcome=self.outcome,
             http_status=self.http_status,
@@ -219,6 +283,11 @@ class SubmissionAttempt:
             "wire_hash": self.wire_hash,
             "signed_envelope_hash": self.signed_envelope_hash,
             "signer_binding_hash": self.signer_binding_hash,
+            "recovery_kind": self.recovery_kind,
+            "recovery_command_id": self.recovery_command_id,
+            "recovery_attempt_id": self.recovery_attempt_id,
+            "recovery_signed_evidence_hash": self.recovery_signed_evidence_hash,
+            "submission_authority_hash": self.submission_authority_hash,
             "attempted_at_ms": self.attempted_at_ms,
             "outcome": self.outcome.value,
             "outcome_unknown": self.outcome_unknown,
@@ -242,6 +311,14 @@ class SubmissionAttempt:
         """Produce exact one-send outcome evidence for durable persistence."""
 
         self.verify_integrity()
+        if self.artifact_kind == "recovery" and (
+            command_id != self.recovery_command_id
+            or attempt_id != self.recovery_attempt_id
+            or signed_evidence_hash != self.recovery_signed_evidence_hash
+        ):
+            raise HyperliquidSubmissionError(
+                "recovery transport evidence differs from consumed authority"
+            )
         return TransportOutcomeEvidence(
             command_id=command_id,
             attempt_id=attempt_id,
@@ -256,6 +333,57 @@ class SubmissionAttempt:
             send_count=self.send_count,
             retry_performed=self.retry_performed,
             venue_write_attempted=True,
+        )
+
+    def noop_fence_response_evidence(
+        self,
+        command_id: str,
+        attempt_id: str,
+        signed_evidence_hash: str,
+        *,
+        parsed_at: datetime,
+    ) -> NoopFenceResponseEvidence:
+        """Build exact durable proof for an accepted same-nonce noop only."""
+
+        self.verify_integrity()
+        if (
+            self.artifact_kind != "recovery"
+            or self.recovery_kind != RecoveryKind.NOOP_FENCE.value
+        ):
+            raise HyperliquidSubmissionError(
+                "noop response evidence requires a noop-fence recovery attempt"
+            )
+        if (
+            self.outcome is not SubmissionOutcome.RESPONSE_RECEIVED
+            or self.response_json != _NOOP_DEFAULT_RESPONSE_JSON
+            or self.response_hash
+            != domain_hash(
+                SUBMISSION_RESPONSE_HASH_DOMAIN,
+                _NOOP_DEFAULT_RESPONSE,
+            )
+        ):
+            raise HyperliquidSubmissionError(
+                "noop response is not the exact canonical default success"
+            )
+        parsed_at_ms = _utc_ms(lambda: parsed_at)
+        if parsed_at_ms < self.attempted_at_ms:
+            raise HyperliquidSubmissionError(
+                "noop response parse time predates the network attempt"
+            )
+        transport = self.execution_store_evidence(
+            command_id=command_id,
+            attempt_id=attempt_id,
+            signed_evidence_hash=signed_evidence_hash,
+        )
+        return NoopFenceResponseEvidence(
+            recovery_command_id=command_id,
+            attempt_id=attempt_id,
+            signed_evidence_hash=signed_evidence_hash,
+            transport_evidence_hash=transport.evidence_hash,
+            nonce=self.nonce,
+            response_json=self.response_json,
+            response_hash=self.response_hash,
+            parsed_at=parsed_at,
         )
 
 
@@ -338,6 +466,11 @@ def _attempt_material(
     wire_hash: str,
     signed_envelope_hash: str,
     signer_binding_hash: str,
+    recovery_kind: str | None = None,
+    recovery_command_id: str | None = None,
+    recovery_attempt_id: str | None = None,
+    recovery_signed_evidence_hash: str | None = None,
+    submission_authority_hash: str | None = None,
     attempted_at_ms: int,
     outcome: SubmissionOutcome,
     http_status: int | None,
@@ -354,6 +487,11 @@ def _attempt_material(
         "wire_hash": wire_hash,
         "signed_envelope_hash": signed_envelope_hash,
         "signer_binding_hash": signer_binding_hash,
+        "recovery_kind": recovery_kind,
+        "recovery_command_id": recovery_command_id,
+        "recovery_attempt_id": recovery_attempt_id,
+        "recovery_signed_evidence_hash": recovery_signed_evidence_hash,
+        "submission_authority_hash": submission_authority_hash,
         "attempted_at_ms": attempted_at_ms,
         "outcome": outcome.value,
         "http_status": http_status,
@@ -368,6 +506,11 @@ def _attempt_material(
 def _attempt(
     signed: SignedEnvelope,
     *,
+    recovery_kind: str | None = None,
+    recovery_command_id: str | None = None,
+    recovery_attempt_id: str | None = None,
+    recovery_signed_evidence_hash: str | None = None,
+    submission_authority_hash: str | None = None,
     attempted_at_ms: int,
     outcome: SubmissionOutcome,
     http_status: int | None,
@@ -385,6 +528,11 @@ def _attempt(
         wire_hash=signed.wire_hash,
         signed_envelope_hash=signed.envelope_hash,
         signer_binding_hash=signed.signer_binding_hash,
+        recovery_kind=recovery_kind,
+        recovery_command_id=recovery_command_id,
+        recovery_attempt_id=recovery_attempt_id,
+        recovery_signed_evidence_hash=recovery_signed_evidence_hash,
+        submission_authority_hash=submission_authority_hash,
         attempted_at_ms=attempted_at_ms,
         outcome=outcome,
         http_status=http_status,
@@ -401,6 +549,11 @@ def _attempt(
         wire_hash=signed.wire_hash,
         signed_envelope_hash=signed.envelope_hash,
         signer_binding_hash=signed.signer_binding_hash,
+        recovery_kind=recovery_kind,
+        recovery_command_id=recovery_command_id,
+        recovery_attempt_id=recovery_attempt_id,
+        recovery_signed_evidence_hash=recovery_signed_evidence_hash,
+        submission_authority_hash=submission_authority_hash,
         attempted_at_ms=attempted_at_ms,
         outcome=outcome,
         http_status=http_status,
@@ -416,6 +569,11 @@ def _attempt(
 def submit_signed_action(
     signed: SignedEnvelope,
     *,
+    store: ExecutionStore | None = None,
+    attempt_id: str | None = None,
+    signed_evidence_hash: str | None = None,
+    worker_id: str | None = None,
+    fencing_token: int | None = None,
     clock: Clock = lambda: datetime.now(timezone.utc),
 ) -> SubmissionAttempt:
     """Send exactly once and preserve every uncertain result as ``unknown``."""
@@ -424,10 +582,6 @@ def submit_signed_action(
         raise TypeError("signed must be a protected or recovery signed envelope")
     if not callable(clock):
         raise TypeError("clock must be callable")
-    if isinstance(signed, SignedRecoveryEnvelope):
-        raise HyperliquidSubmissionError(
-            "recovery submission is hard-disabled until durable RecoveryPermit support"
-        )
     if signed.network is HyperliquidNetwork.MAINNET:
         raise HyperliquidSubmissionError("mainnet submission is hard-disabled")
     if signed.exchange_url not in _ALLOWED_EXCHANGE_URLS:
@@ -446,6 +600,110 @@ def submit_signed_action(
         and attempted_at_ms >= signed.preflight_expires_at_ms
     ):
         raise HyperliquidSubmissionError("dispatch preflight expired before submission")
+
+    recovery_binding: dict[str, str | None] = {
+        "recovery_kind": None,
+        "recovery_command_id": None,
+        "recovery_attempt_id": None,
+        "recovery_signed_evidence_hash": None,
+        "submission_authority_hash": None,
+    }
+    recovery_arguments = (
+        store,
+        attempt_id,
+        signed_evidence_hash,
+        worker_id,
+        fencing_token,
+    )
+    if isinstance(signed, SignedActionEnvelope):
+        if any(value is not None for value in recovery_arguments):
+            raise HyperliquidSubmissionError(
+                "protected submission cannot consume recovery authority"
+            )
+    else:
+        if type(store) is not ExecutionStore:
+            raise HyperliquidSubmissionError(
+                "recovery submission requires an exact ExecutionStore"
+            )
+        if (
+            not isinstance(attempt_id, str)
+            or not attempt_id
+            or not isinstance(worker_id, str)
+            or not worker_id
+            or not isinstance(signed_evidence_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", signed_evidence_hash)
+            or type(fencing_token) is not int
+            or fencing_token <= 0
+        ):
+            raise HyperliquidSubmissionError(
+                "recovery submission authority arguments are invalid"
+            )
+        if (
+            signed.network is not HyperliquidNetwork.TESTNET
+            or store.environment is not signed.network.environment
+            or store.account_id != signed.account_id
+        ):
+            raise HyperliquidSubmissionError(
+                "recovery submission store scope is not exact testnet"
+            )
+        if (
+            attempted_at_ms >= signed.permit_expires_at_ms
+            or attempted_at_ms >= signed.lease_expires_at_ms
+        ):
+            raise HyperliquidSubmissionError(
+                "recovery permit or claim expired before local submission"
+            )
+        try:
+            local_signed_evidence = signed.execution_store_evidence()
+        except (SignerOutputError, ValidationError) as error:
+            raise HyperliquidSubmissionError(
+                "signed recovery evidence construction failed"
+            ) from error
+        if local_signed_evidence.evidence_hash != signed_evidence_hash:
+            raise HyperliquidSubmissionError(
+                "recovery signed evidence hash differs before submission"
+            )
+
+        # This is the final pre-send transition.  It atomically changes the
+        # durable attempt from prepared to sending; a second call cannot obtain
+        # another authority and therefore cannot reach the sender.
+        authority = ExecutionStore.require_recovery_submission_authority(
+            store,
+            signed.recovery_command_id,
+            attempt_id,
+            signed_evidence_hash,
+            worker_id,
+            fencing_token,
+            at=_EPOCH + timedelta(milliseconds=attempted_at_ms),
+        )
+        if not isinstance(authority, RecoverySubmissionAuthority):
+            raise HyperliquidSubmissionError(
+                "store returned an invalid recovery submission authority"
+            )
+        authority_lease_ms = _utc_ms(lambda: authority.lease_expires_at)
+        if (
+            authority.recovery_command_id != signed.recovery_command_id
+            or authority.attempt_id != attempt_id
+            or authority.signed_evidence_hash != signed_evidence_hash
+            or authority.nonce != signed.nonce
+            or authority.action_hash != signed.action_hash
+            or authority.wire_hash != signed.wire_hash
+            or authority.worker_id != worker_id
+            or authority.fencing_token != fencing_token
+            or authority_lease_ms != signed.lease_expires_at_ms
+            or attempted_at_ms >= authority_lease_ms
+            or not re.fullmatch(r"[0-9a-f]{64}", authority.authority_hash)
+        ):
+            raise HyperliquidSubmissionError(
+                "recovery submission authority differs from signed attempt"
+            )
+        recovery_binding = {
+            "recovery_kind": signed.recovery_kind.value,
+            "recovery_command_id": authority.recovery_command_id,
+            "recovery_attempt_id": authority.attempt_id,
+            "recovery_signed_evidence_hash": authority.signed_evidence_hash,
+            "submission_authority_hash": authority.authority_hash,
+        }
 
     # One call, deliberately no loop and no retry adapter.
     try:
@@ -466,6 +724,7 @@ def submit_signed_action(
             code = "response_too_large"
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=None,
@@ -477,6 +736,7 @@ def submit_signed_action(
     if not isinstance(result, HttpExchangeResponse):
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=None,
@@ -491,6 +751,7 @@ def submit_signed_action(
     ):
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=None,
@@ -501,6 +762,7 @@ def submit_signed_action(
     if result.final_url != signed.exchange_url:
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=result.status,
@@ -511,6 +773,7 @@ def submit_signed_action(
     if len(result.body) > _MAX_RESPONSE_BYTES:
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=result.status,
@@ -521,6 +784,7 @@ def submit_signed_action(
     if result.status != 200:
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=result.status,
@@ -537,6 +801,7 @@ def submit_signed_action(
     except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
         return _attempt(
             signed,
+            **recovery_binding,
             attempted_at_ms=attempted_at_ms,
             outcome=SubmissionOutcome.UNKNOWN,
             http_status=200,
@@ -544,9 +809,25 @@ def submit_signed_action(
             response_hash=None,
             detail_code="invalid_json_response",
         )
+    if (
+        isinstance(signed, SignedRecoveryEnvelope)
+        and signed.recovery_kind is RecoveryKind.NOOP_FENCE
+        and decoded != _NOOP_DEFAULT_RESPONSE
+    ):
+        return _attempt(
+            signed,
+            **recovery_binding,
+            attempted_at_ms=attempted_at_ms,
+            outcome=SubmissionOutcome.UNKNOWN,
+            http_status=200,
+            response_json=None,
+            response_hash=None,
+            detail_code="unexpected_noop_response",
+        )
     response_hash = domain_hash(SUBMISSION_RESPONSE_HASH_DOMAIN, decoded)
     return _attempt(
         signed,
+        **recovery_binding,
         attempted_at_ms=attempted_at_ms,
         outcome=SubmissionOutcome.RESPONSE_RECEIVED,
         http_status=200,
@@ -560,6 +841,7 @@ __all__ = (
     "SUBMISSION_ATTEMPT_HASH_DOMAIN",
     "SUBMISSION_RESPONSE_HASH_DOMAIN",
     "RECOVERY_SUBMISSION_ENABLED",
+    "NOOP_FENCE_SUBMISSION_ENABLED",
     "ExchangeSender",
     "HttpExchangeResponse",
     "HyperliquidSubmissionError",

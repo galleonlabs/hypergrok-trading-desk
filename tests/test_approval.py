@@ -2,18 +2,29 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
+import hashlib
 import unittest
 
 from trading_harness.approval import (
     PlanApproval,
+    RecoveryAuthorization,
     TestnetApprovalAuthority,
+    TestnetRecoveryAuthority,
     verified_execution_approval,
+    verified_recovery_permit,
 )
 from trading_harness.domain import Environment
 from trading_harness.errors import StateConflict, ValidationError
 from trading_harness.execution_store import TrustedApproval
+from trading_harness.hyperliquid_wire import HyperliquidNetwork
 from trading_harness.planning import quote_risk_ticket
 from tests.test_planning import NOW, account, assessment, identity, technical
+from tests.test_hyperliquid_recovery import (
+    RECOVERY_NOW,
+    build_close,
+    build_noop,
+    incident as recovery_incident,
+)
 
 
 def ticket():
@@ -136,6 +147,124 @@ class TestnetApprovalTests(unittest.TestCase):
                 key_id=approval.key_id,
                 mac=approval.mac,
             )
+
+
+class TestnetRecoveryAuthorityTests(unittest.TestCase):
+    POLICY_HASH = hashlib.sha256(b"testnet-recovery-signer-policy").hexdigest()
+
+    def authority(self, *, secret: bytes = b"r" * 32) -> TestnetRecoveryAuthority:
+        return TestnetRecoveryAuthority(
+            secret,
+            key_id="recovery-key-v1",
+            issuer_id="isolated-safety-authority",
+            audience="testnet-recovery-worker",
+        )
+
+    def test_exact_recovery_is_authenticated_and_materialized_as_permit(self) -> None:
+        recovery = build_close()
+        incident = recovery_incident()
+        authorization = self.authority().issue(
+            recovery,
+            incident,
+            permit_id="recovery-permit-1",
+            safety_policy_hash=self.POLICY_HASH,
+            at=RECOVERY_NOW,
+        )
+        permit = verified_recovery_permit(
+            self.authority(),
+            authorization,
+            recovery,
+            incident,
+            safety_policy_hash=self.POLICY_HASH,
+            at=RECOVERY_NOW + timedelta(seconds=1),
+        )
+
+        self.assertIsInstance(authorization, RecoveryAuthorization)
+        self.assertEqual(permit.token_hash, authorization.token_hash)
+        self.assertEqual(permit.recovery_hash, recovery.recovery_hash)
+        self.assertEqual(permit.recovery_material["close_size"], "0.5")
+        self.assertEqual(permit.safety_policy_hash, self.POLICY_HASH)
+        self.assertTrue(authorization.redacted_dict()["mac_redacted"])
+        self.assertNotIn(authorization.mac, repr(authorization.redacted_dict()))
+
+    def test_tamper_wrong_policy_stale_incident_and_expiry_fail_closed(self) -> None:
+        recovery = build_close()
+        incident = recovery_incident()
+        authority = self.authority()
+        authorization = authority.issue(
+            recovery,
+            incident,
+            permit_id="recovery-permit-2",
+            safety_policy_hash=self.POLICY_HASH,
+            at=RECOVERY_NOW,
+        )
+        with self.assertRaisesRegex(StateConflict, "MAC"):
+            authority.verify(
+                replace(authorization, source_hash="0" * 64),
+                recovery,
+                incident,
+                safety_policy_hash=self.POLICY_HASH,
+                at=RECOVERY_NOW + timedelta(seconds=1),
+            )
+        with self.assertRaisesRegex(StateConflict, "exact current evidence"):
+            authority.verify(
+                authorization,
+                recovery,
+                incident,
+                safety_policy_hash="1" * 64,
+                at=RECOVERY_NOW + timedelta(seconds=1),
+            )
+        with self.assertRaisesRegex(StateConflict, "exact current evidence"):
+            authority.verify(
+                authorization,
+                recovery,
+                replace(incident, revision=incident.revision + 1),
+                safety_policy_hash=self.POLICY_HASH,
+                at=RECOVERY_NOW + timedelta(seconds=1),
+            )
+        with self.assertRaisesRegex(StateConflict, "not active"):
+            authority.verify(
+                authorization,
+                recovery,
+                incident,
+                safety_policy_hash=self.POLICY_HASH,
+                at=authorization.expires_at,
+            )
+
+    def test_noop_binds_original_attempt_and_mainnet_or_mutation_cannot_issue(self) -> None:
+        noop = build_noop()
+        incident = recovery_incident()
+        authorization = self.authority().issue(
+            noop,
+            incident,
+            permit_id="recovery-permit-noop",
+            safety_policy_hash=self.POLICY_HASH,
+            at=RECOVERY_NOW,
+        )
+        self.assertEqual(authorization.original_attempt_id, noop.attempt_id)
+        self.assertEqual(authorization.original_nonce, noop.original_nonce)
+        self.assertEqual(authorization.preflight_hash, noop.preflight_hash)
+
+        with self.assertRaisesRegex(StateConflict, "testnet-only"):
+            self.authority().issue(
+                replace(build_close(), network=HyperliquidNetwork.MAINNET),
+                incident,
+                permit_id="mainnet-forbidden",
+                safety_policy_hash=self.POLICY_HASH,
+                at=RECOVERY_NOW,
+            )
+        with self.assertRaisesRegex(ValidationError, "recovery hash"):
+            self.authority().issue(
+                replace(build_close(), close_size=build_close().close_size / 2),
+                incident,
+                permit_id="mutated-recovery",
+                safety_policy_hash=self.POLICY_HASH,
+                at=RECOVERY_NOW,
+            )
+
+    def test_recovery_authority_rejects_short_secret(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "32 bytes"):
+            self.authority(secret=b"short")
 
 
 if __name__ == "__main__":

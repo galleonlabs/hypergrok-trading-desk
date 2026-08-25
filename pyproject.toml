@@ -27,6 +27,7 @@ execution = ["hyperliquid-python-sdk==0.24.0"]
 [project.scripts]
 trading-harness = "trading_harness.cli:main"
 trading-harness-mcp = "trading_harness.mcp_server:main"
+trading-harness-executor = "trading_harness.executor_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

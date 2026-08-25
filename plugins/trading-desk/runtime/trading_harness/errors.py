@@ -33,6 +33,10 @@ class StateConflict(HarnessError):
     """Persisted state does not permit the requested transition."""
 
 
+class EntrySubmissionRevoked(HarnessError):
+    """The runtime revoked an entry before its one-shot send authority."""
+
+
 class RecordNotFound(HarnessError):
     """A required persisted record does not exist."""
 

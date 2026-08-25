@@ -1,0 +1,36 @@
+[Unit]
+Description=Trading Desk configured TESTNET learning MCP
+Documentation=file:__REVIEWED_REPO_DIR__/docs/always_on_operation.md
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=__REVIEWED_RESEARCH_USER__
+Group=__REVIEWED_RESEARCH_GROUP__
+WorkingDirectory=__REVIEWED_REPO_DIR__
+ExecStart=__REVIEWED_VENV_BIN__/trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port __REVIEWED_MCP_PORT__ --learning-executor-config __REVIEWED_CONFIG_FILE__ --learning-research-db __REVIEWED_RESEARCH_DB__ --learning-grant __REVIEWED_GRANT_FILE__
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+
+StandardOutput=append:__REVIEWED_LOG_DIR__/learning-mcp.stdout.log
+StandardError=append:__REVIEWED_LOG_DIR__/learning-mcp.stderr.log
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=__REVIEWED_CONFIG_FILE__ __REVIEWED_GRANT_FILE__
+ReadWritePaths=__REVIEWED_RESEARCH_STATE_DIR__ __REVIEWED_LEARNING_STATE_DIR__ __REVIEWED_LOG_DIR__
+InaccessiblePaths=__REVIEWED_EXECUTOR_STATE_DIR__
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -12,9 +12,12 @@ setup as buy/sell/nothing/unavailable, and evaluate a strategy after costs.
 Capital-bearing actions remain behind a separate local approval, isolated
 credential, and live-qualification path.
 
-Profitability is a revocable evidence gate, not a product promise. The first
-registered ETH strategy was tested honestly and rejected; the harness will
-abstain instead of relabelling a failed backtest as an opportunity.
+The immediate objective is infrastructure learning, not a profitability
+claim: every analysis, abstention, staged bracket, approval reference,
+execution state, fill, fee, venue-reported PnL, latency and later review is
+kept as immutable evidence. The first registered ETH strategy was tested
+honestly and rejected, but small attended TESTNET experiments can still be
+staged under an explicit `profitability_qualified: false` grant.
 
 ## Capability status
 
@@ -27,6 +30,9 @@ abstain instead of relabelling a failed backtest as an opportunity.
 | Manual X sentiment evidence | Implemented for explicit browser research; attended approval only |
 | Unattended sentiment | Requires an official X API or compliant provider |
 | Costed historical validation and prospective shadow ledger | Implemented |
+| Immutable analysis/trade learning ledger and deterministic reviews | Implemented |
+| Codex/OpenCode staging inbox | Implemented; all authority flags false |
+| Bounded infrastructure-learning grant | Implemented; TESTNET-only, <=24h, no profitability/mainnet claim |
 | Mandatory-stop risk ticket and exact three-leg plan | Implemented |
 | Local paper OMS/protection watchdog | Implemented |
 | Approval/reservation/outbox/preflight/dispatcher persistence | Implemented; local isolated boundary, not MCP |
@@ -34,6 +40,8 @@ abstain instead of relabelling a failed backtest as an opportunity.
 | Hyperliquid exact wire, durable nonce, isolated signing and one-shot entry transport | Implemented and armed for TESTNET only |
 | Reduce-only close/cancel/same-nonce recovery | Implemented with durable permit, outbox, dispatch and reconciliation |
 | Isolated credential provider | macOS Keychain reader implemented; no env/file key loader |
+| Always-on serialized executor runtime | Implemented with fenced lease, daily-loss sync, strict recovery priority and graceful drain |
+| Direct attended control CLI | Implemented; confirmation is read from `/dev/tty`, never MCP/chat/stdin |
 | Live Hyperliquid testnet | **Code armed; no account configured; not live-qualified** |
 | Live Hyperliquid mainnet | **Hard-disabled in store, signer and transport** |
 
@@ -73,19 +81,22 @@ bounded MCP research tools + local research database
         |                       --> registered signal
         +--> sourced sentiment evidence
         +--> buy / sell / nothing / unavailable
-        +--> costed historical + prospective shadow gates
+        +--> immutable analysis/learning records
         |
         v
-mandatory-stop risk ticket (not trade authority)
+non-authoritative TESTNET staging inbox
         |
         v
-trusted local approval + atomic execution store (not MCP/chat)
+direct-terminal approval + atomic execution store (not MCP/chat)
         |
         v
 isolated signer process + one-shot TESTNET transport
         |
         v
-independent reconciliation + protection watchdog
+daily-loss sync + independent reconciliation + protection watchdog
+        |
+        v
+immutable fill/fee/slippage/PnL review by exact component version
 ```
 
 Agents explain and route evidence. Deterministic code owns indicators,
@@ -94,9 +105,10 @@ and reconciliation. A chat message is never approval.
 
 ## Codex/ChatGPT plugin
 
-[`plugins/trading-desk`](plugins/trading-desk) packages six skills and eleven
-bounded MCP tools. Three tools write only local research state; none writes to
-an exchange.
+[`plugins/trading-desk`](plugins/trading-desk) packages six skills and fifteen
+bounded MCP tools. Five tools write only local research, analysis, sentiment,
+or non-authoritative staging state; none approves, signs, reserves capital, or
+writes to an exchange.
 
 Research tools:
 
@@ -107,8 +119,12 @@ Research tools:
 - `list_tracked_assets`
 - `record_manual_sentiment` — local database write
 - `get_latest_sentiment`
-- `analyze_asset`
+- `analyze_asset` — immutable local analysis/learning write
 - `validate_candidate_profitability`
+- `stage_trade_candidate` — immutable all-false-authority staging write
+- `get_trade_stage`
+- `get_learning_review`
+- `get_learning_summary`
 - `get_node_status`
 - `validate_trade_intent` — schema/hash only, not risk or approval
 
@@ -120,8 +136,9 @@ Manual X research uses the user's visible signed-in browser session only for
 an explicit request. X forbids non-API website scripting, so the always-on node
 does not automate the website. It stores post IDs/URLs/hashes/timestamps and
 bounded polarity—not raw text, cookies, or tokens—and marks the result
-unusable for unattended trading. It may support a fresh, attended risk quote,
-but the exact ticket still requires the separate local approval authority.
+unusable for unattended trading. It may support a fresh, attended TESTNET
+learning quote, but the exact ticket still requires the separate
+direct-terminal approval authority.
 
 OpenCode consumes the same plugin tools and byte-identical skill mirror through
 [`opencode.json`](opencode.json). Its local research writes require review;
@@ -176,9 +193,33 @@ trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
 The endpoint is `http://127.0.0.1:8000/mcp`. Public binding is rejected because
-the local server has no user-authentication layer. ChatGPT requires a reviewed
-authenticated HTTPS deployment or secure tunnel; doing that still does not
-enable exchange writes.
+the local server has no user-authentication layer. The checked-in Codex plugin
+and OpenCode config target this loopback URL; they do not launch ambient
+`python3`. A server started without the three learning arguments remains
+research-only and returns a configuration blocker for directional staging. A
+dedicated local research service enables real staging with:
+
+```bash
+trading-harness-mcp \
+  --transport streamable-http --host 127.0.0.1 --port 8000 \
+  --learning-executor-config /absolute/private/testnet-executor.toml \
+  --learning-research-db /absolute/state/research.sqlite3 \
+  --learning-grant /absolute/private/active-learning-grant.json
+```
+
+This profile loads the signed grant only as a non-authoritative quote scope;
+the agent-facing process never receives the symmetric grant key. The separate
+attended control plane verifies the MAC before admission.
+Agent quotes do not open the executor daily-loss database; that amount is
+explicitly deferred, and the isolated worker requires a complete authoritative
+loss refresh in the same tick before it can dispatch an entry.
+
+Using the [official Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+add the configured URL-backed server with:
+
+```bash
+codex mcp add tradingDesk --url http://127.0.0.1:8000/mcp
+```
 
 ### Isolated TESTNET execution environment
 
@@ -191,11 +232,58 @@ source .venv-execution/bin/activate
 python -m pip install -e '.[execution]'
 ```
 
+Start from
+[`deploy/config/testnet-executor.toml.example`](deploy/config/testnet-executor.toml.example),
+render every placeholder, keep the config admin-owned and mode `0400` with
+narrow read ACLs, and create each state-directory parent with mode `0700`.
+Keep execution/nonce/daily-loss/control-socket state in an executor-private
+directory and only staging/learning in a separately ACL-scoped shared-learning
+directory. Validate and initialize as the executor UID without
+loading credentials or touching the venue:
+
+```bash
+trading-harness-executor validate --config /absolute/private/testnet-executor.toml
+trading-harness-executor init --config /absolute/private/testnet-executor.toml
+trading-harness-executor status --config /absolute/private/testnet-executor.toml
+trading-harness-executor dry-run --config /absolute/private/testnet-executor.toml
+```
+
+Grant issuance and trade authorization require direct controlling-terminal
+input. There is intentionally no `--confirmation` argument and piping stdin is
+not accepted:
+
+```bash
+trading-harness-executor issue-grant \
+  --config /absolute/private/testnet-executor.toml \
+  --output /absolute/private/active-learning-grant.json \
+  --grant-id testnet-learning-001 --ttl-seconds 3600
+
+trading-harness-executor show-stage \
+  --config /absolute/private/testnet-executor.toml \
+  --document-id stg_REVIEWED_ID
+
+trading-harness-executor authorize-stage \
+  --config /absolute/private/testnet-executor.toml \
+  --grant /absolute/private/active-learning-grant.json \
+  --document-id stg_REVIEWED_ID --approver-id local-operator
+```
+
+Only after foreground qualification should the isolated worker run:
+
+```bash
+trading-harness-executor run \
+  --config /absolute/private/testnet-executor.toml \
+  --worker-id isolated-testnet-worker
+```
+
 The isolated process can load one expected API-wallet key from macOS Keychain;
 it rejects environment variables and plaintext key files and verifies the
 derived signer address. Use a dedicated non-login OS identity so the
 research/MCP/Codex identity cannot read that Keychain item. Installing the
 extra alone does not configure an account or invoke a venue write.
+The LaunchDaemon profile uses the explicitly configured
+`/Library/Keychains/System.keychain` and `/usr/bin/security` item ACL; it never
+depends on `HOME` or a login-keychain search list.
 
 The execution path now includes:
 
@@ -204,10 +292,17 @@ The execution path now includes:
 - HMAC-authenticated testnet approvals and short-lived recovery permits;
 - reduce-only close, role-aware cancel and same-original-nonce fencing;
 - canonical noop response persistence and restart-safe reconciliation;
-- automatic risk release only after a fresh flat, terminal account proof.
+- automatic risk release only after a fresh flat, terminal account proof;
+- exact TESTNET fill/funding daily-loss synchronization with gap/retention detection;
+- immutable projection of command states plus fully evidenced parent and
+  recovery-close fills into the learning ledger.
 
 There is intentionally no execution MCP tool. A chat message is not a trusted
-approval, and the model process never receives the wallet object.
+approval, and the model process never receives the wallet object. The macOS
+launchd executor template is separate from the credential-free research
+service. Linux execution is not advertised because no Linux secret provider
+is implemented; the systemd template is for the credential-free research/MCP
+process only.
 
 ## Testnet before mainnet
 

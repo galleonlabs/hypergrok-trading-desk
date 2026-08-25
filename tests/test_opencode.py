@@ -23,15 +23,14 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = json.loads((ROOT / "opencode.json").read_text(encoding="utf-8"))
 
-    def test_config_is_model_neutral_and_uses_only_local_bounded_tools(self) -> None:
+    def test_config_is_model_neutral_and_uses_loopback_remote_mcp(self) -> None:
         self.assertEqual("https://opencode.ai/config.json", self.config["$schema"])
         self.assertNotIn("model", self.config)
         self.assertNotIn("provider", self.config)
         self.assertEqual(
             {
-                "type": "local",
-                "command": ["python3", "plugins/trading-desk/server.py"],
-                "cwd": ".",
+                "type": "remote",
+                "url": "http://127.0.0.1:8000/mcp",
                 "enabled": True,
                 "timeout": 30000,
             },
@@ -66,6 +65,19 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual("deny", resolve_rule(bash, "git log -p -- .env"))
 
+    def test_allowed_commands_cannot_append_shell_control_operators(self) -> None:
+        bash = self.config["permission"]["bash"]
+        for command in (
+            "python3 -m unittest; env",
+            "python3 -m unittest && env",
+            "python3 -m compileall src | sh",
+            "trading-harness doctor > /tmp/output",
+            "python3 -m unittest $(env)",
+            "python3 -m unittest `env`",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("deny", resolve_rule(bash, command))
+
     def test_only_reviewed_repo_skills_and_mcp_tools_are_allowed(self) -> None:
         skills = self.config["permission"]["skill"]
         self.assertEqual(
@@ -88,14 +100,18 @@ class OpenCodeCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             {
                 "trading_desk_*": "deny",
-                "trading_desk_analyze_asset": "allow",
+                "trading_desk_analyze_asset": "ask",
                 "trading_desk_get_latest_sentiment": "allow",
+                "trading_desk_get_learning_review": "allow",
+                "trading_desk_get_learning_summary": "allow",
                 "trading_desk_get_node_status": "allow",
                 "trading_desk_get_harness_status": "allow",
                 "trading_desk_get_market_brief": "allow",
+                "trading_desk_get_trade_stage": "allow",
                 "trading_desk_list_tracked_assets": "allow",
                 "trading_desk_pause_tracked_asset": "ask",
                 "trading_desk_record_manual_sentiment": "ask",
+                "trading_desk_stage_trade_candidate": "ask",
                 "trading_desk_track_asset": "ask",
                 "trading_desk_validate_candidate_profitability": "allow",
                 "trading_desk_validate_trade_intent": "allow",

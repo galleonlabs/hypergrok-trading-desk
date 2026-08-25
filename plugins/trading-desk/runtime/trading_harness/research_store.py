@@ -278,7 +278,45 @@ _RESEARCH_SCHEMA_V1 = _Migration(
     ),
 )
 
-_MIGRATIONS = (_RESEARCH_SCHEMA_V1,)
+_RESEARCH_SCHEMA_V2 = _Migration(
+    version=2,
+    name="immutable_asset_analysis",
+    statements=(
+        """
+        CREATE TABLE research_asset_analyses (
+            analysis_hash TEXT PRIMARY KEY,
+            asset_id TEXT NOT NULL REFERENCES research_tracked_assets(asset_id),
+            tracker_revision INTEGER NOT NULL CHECK (tracker_revision > 0),
+            history_hash TEXT NOT NULL,
+            signal_hash TEXT NOT NULL,
+            sentiment_hash TEXT,
+            assessment_hash TEXT,
+            observed_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            stored_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_research_asset_analysis_time
+        ON research_asset_analyses (asset_id, observed_at, analysis_hash)
+        """,
+        """
+        CREATE TRIGGER trg_research_asset_analysis_no_update
+        BEFORE UPDATE ON research_asset_analyses
+        BEGIN SELECT RAISE(ABORT, 'research asset analyses are immutable'); END
+        """,
+        """
+        CREATE TRIGGER trg_research_asset_analysis_no_delete
+        BEFORE DELETE ON research_asset_analyses
+        BEGIN SELECT RAISE(ABORT, 'research asset analyses are immutable'); END
+        """,
+    ),
+)
+
+_MIGRATIONS = (_RESEARCH_SCHEMA_V1, _RESEARCH_SCHEMA_V2)
 RESEARCH_SCHEMA_VERSION = _MIGRATIONS[-1].version
 
 _EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
@@ -350,10 +388,29 @@ _EXPECTED_COLUMNS: Mapping[str, tuple[str, ...]] = {
         "details_json",
         "content_hash",
     ),
+    "research_asset_analyses": (
+        "analysis_hash",
+        "asset_id",
+        "tracker_revision",
+        "history_hash",
+        "signal_hash",
+        "sentiment_hash",
+        "assessment_hash",
+        "observed_at",
+        "expires_at",
+        "stored_at",
+        "payload_json",
+        "content_hash",
+        "record_hash",
+    ),
 }
 
 _EXPECTED_INDEXES = frozenset(
-    {"idx_research_artifacts_asset_time", "idx_research_heartbeats_node"}
+    {
+        "idx_research_artifacts_asset_time",
+        "idx_research_heartbeats_node",
+        "idx_research_asset_analysis_time",
+    }
 )
 
 
@@ -373,6 +430,30 @@ class ResearchArtifactRecord:
     @property
     def payload(self) -> Any:
         return json.loads(self.payload_json)
+
+
+@dataclass(frozen=True, slots=True)
+class AssetAnalysisRecord:
+    analysis_hash: str
+    asset_id: str
+    tracker_revision: int
+    history_hash: str
+    signal_hash: str
+    sentiment_hash: str | None
+    assessment_hash: str | None
+    observed_at: datetime
+    expires_at: datetime
+    stored_at: datetime
+    payload_json: str
+    content_hash: str
+    record_hash: str
+
+    @property
+    def payload(self) -> Mapping[str, Any]:
+        value = json.loads(self.payload_json)
+        if not isinstance(value, dict):
+            raise StorageError("persisted asset analysis is not an object")
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -812,6 +893,227 @@ class ResearchStore:
         return tuple(self._tracked_from_row(row) for row in rows)
 
     # -- immutable research artifacts ---------------------------------
+
+    @staticmethod
+    def _analysis_from_row(row: Mapping[str, Any]) -> AssetAnalysisRecord:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_sha256(
+            row["content_hash"], field="asset analysis content_hash"
+        )
+        payload = _decode_canonical_payload(
+            payload_json,
+            content_hash,
+            field="asset analysis",
+            maximum_bytes=_MAX_ARTIFACT_BYTES,
+        )
+        if not isinstance(payload, dict):
+            raise StorageError("persisted asset analysis is not an object")
+        record = AssetAnalysisRecord(
+            analysis_hash=_stored_sha256(
+                row["analysis_hash"], field="analysis_hash"
+            ),
+            asset_id=_stored_text(row["asset_id"], field="asset_id", maximum=128),
+            tracker_revision=int(row["tracker_revision"]),
+            history_hash=_stored_sha256(
+                row["history_hash"], field="history_hash"
+            ),
+            signal_hash=_stored_sha256(row["signal_hash"], field="signal_hash"),
+            sentiment_hash=(
+                None
+                if row["sentiment_hash"] is None
+                else _stored_sha256(row["sentiment_hash"], field="sentiment_hash")
+            ),
+            assessment_hash=(
+                None
+                if row["assessment_hash"] is None
+                else _stored_sha256(
+                    row["assessment_hash"], field="assessment_hash"
+                )
+            ),
+            observed_at=_parse_time(
+                row["observed_at"], field="analysis observed_at"
+            ),
+            expires_at=_parse_time(row["expires_at"], field="analysis expires_at"),
+            stored_at=_parse_time(row["stored_at"], field="analysis stored_at"),
+            payload_json=payload_json,
+            content_hash=content_hash,
+            record_hash=_stored_sha256(row["record_hash"], field="record_hash"),
+        )
+        if record.tracker_revision <= 0:
+            raise StorageError("persisted analysis tracker revision is invalid")
+        core = dict(payload)
+        if core.pop("analysis_hash", None) != record.analysis_hash:
+            raise StorageError("persisted analysis hash differs from payload")
+        if domain_hash("trading-harness/asset-analysis/v1", core) != record.analysis_hash:
+            raise StorageError("persisted asset analysis hash does not match")
+        material = {
+            "analysis_hash": record.analysis_hash,
+            "asset_id": record.asset_id,
+            "tracker_revision": record.tracker_revision,
+            "history_hash": record.history_hash,
+            "signal_hash": record.signal_hash,
+            "sentiment_hash": record.sentiment_hash,
+            "assessment_hash": record.assessment_hash,
+            "observed_at": _time_text(record.observed_at, field="observed_at"),
+            "expires_at": _time_text(record.expires_at, field="expires_at"),
+            "stored_at": _time_text(record.stored_at, field="stored_at"),
+            "content_hash": record.content_hash,
+            "payload_json": record.payload_json,
+        }
+        if record.record_hash != domain_hash(
+            "trading-harness/asset-analysis-record/v1", material
+        ):
+            raise StorageError("persisted asset analysis record hash does not match")
+        return record
+
+    def put_asset_analysis(
+        self,
+        asset_id: str,
+        analysis: Mapping[str, Any],
+        *,
+        stored_at: datetime,
+    ) -> AssetAnalysisRecord:
+        checked_asset = _text(asset_id, field="asset_id", maximum=128)
+        if not isinstance(analysis, Mapping):
+            raise TypeError("analysis must be a mapping")
+        document = dict(analysis)
+        analysis_hash = _sha256(
+            document.get("analysis_hash"), field="analysis_hash"
+        )
+        core = dict(document)
+        core.pop("analysis_hash")
+        if domain_hash("trading-harness/asset-analysis/v1", core) != analysis_hash:
+            raise ValidationError("analysis_hash does not match analysis contents")
+        asset = core.get("asset")
+        history = core.get("history")
+        signal = core.get("registered_signal")
+        sentiment = core.get("sentiment")
+        assessment = core.get("assessment")
+        if not all(isinstance(value, Mapping) for value in (asset, history, signal, sentiment, assessment)):
+            raise ValidationError("asset analysis dependencies are incomplete")
+        if asset.get("asset_id") != checked_asset:
+            raise ValidationError("asset analysis targets another tracked asset")
+        tracker_revision = _positive_int(
+            asset.get("revision"), field="tracker_revision"
+        )
+        history_hash = _sha256(history.get("data_hash"), field="history_hash")
+        signal_hash = _sha256(signal.get("signal_hash"), field="signal_hash")
+        snapshot = sentiment.get("snapshot")
+        if snapshot is not None and not isinstance(snapshot, Mapping):
+            raise ValidationError("analysis sentiment snapshot is invalid")
+        sentiment_hash = (
+            None
+            if snapshot is None
+            else _sha256(snapshot.get("artifact_hash"), field="sentiment_hash")
+        )
+        assessment_hash = (
+            None
+            if assessment.get("artifact_hash") is None
+            else _sha256(assessment.get("artifact_hash"), field="assessment_hash")
+        )
+        observed_at = _parse_time(core.get("observed_at"), field="observed_at")
+        expires_at = _parse_time(signal.get("expires_at"), field="signal expires_at")
+        checked_stored = _utc(stored_at, field="stored_at")
+        if not observed_at <= checked_stored or expires_at < observed_at:
+            raise ValidationError("asset analysis storage/expiry time is invalid")
+        payload_json, content_hash = _canonical_payload(
+            document, maximum_bytes=_MAX_ARTIFACT_BYTES
+        )
+        material = {
+            "analysis_hash": analysis_hash,
+            "asset_id": checked_asset,
+            "tracker_revision": tracker_revision,
+            "history_hash": history_hash,
+            "signal_hash": signal_hash,
+            "sentiment_hash": sentiment_hash,
+            "assessment_hash": assessment_hash,
+            "observed_at": _time_text(observed_at, field="observed_at"),
+            "expires_at": _time_text(expires_at, field="expires_at"),
+            "stored_at": _time_text(checked_stored, field="stored_at"),
+            "content_hash": content_hash,
+            "payload_json": payload_json,
+        }
+        record_hash = domain_hash(
+            "trading-harness/asset-analysis-record/v1", material
+        )
+        with self._transaction() as connection:
+            tracked = connection.execute(
+                "SELECT revision FROM research_tracked_assets WHERE asset_id = ?",
+                (checked_asset,),
+            ).fetchone()
+            if tracked is None:
+                raise RecordNotFound("tracked asset is not registered")
+            if int(tracked["revision"]) != tracker_revision:
+                raise StateConflict("asset analysis tracker revision is stale")
+            existing = connection.execute(
+                "SELECT * FROM research_asset_analyses WHERE analysis_hash = ?",
+                (analysis_hash,),
+            ).fetchone()
+            if existing is not None:
+                current = self._analysis_from_row(existing)
+                if current.payload_json == payload_json:
+                    return current
+                raise StateConflict("analysis hash is already bound differently")
+            connection.execute(
+                """
+                INSERT INTO research_asset_analyses (
+                    analysis_hash, asset_id, tracker_revision, history_hash,
+                    signal_hash, sentiment_hash, assessment_hash, observed_at,
+                    expires_at, stored_at, payload_json, content_hash, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    analysis_hash,
+                    checked_asset,
+                    tracker_revision,
+                    history_hash,
+                    signal_hash,
+                    sentiment_hash,
+                    assessment_hash,
+                    _time_text(observed_at, field="observed_at"),
+                    _time_text(expires_at, field="expires_at"),
+                    _time_text(checked_stored, field="stored_at"),
+                    payload_json,
+                    content_hash,
+                    record_hash,
+                ),
+            )
+            return self._analysis_from_row(
+                connection.execute(
+                    "SELECT * FROM research_asset_analyses WHERE analysis_hash = ?",
+                    (analysis_hash,),
+                ).fetchone()
+            )
+
+    def get_asset_analysis(self, analysis_hash: str) -> AssetAnalysisRecord:
+        checked = _sha256(analysis_hash, field="analysis_hash")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM research_asset_analyses WHERE analysis_hash = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("asset analysis is not registered")
+        return self._analysis_from_row(row)
+
+    def latest_asset_analysis(self, asset_id: str) -> AssetAnalysisRecord | None:
+        checked = _text(asset_id, field="asset_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM research_asset_analyses
+                WHERE asset_id = ?
+                ORDER BY observed_at DESC, analysis_hash DESC LIMIT 1
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        return None if row is None else self._analysis_from_row(row)
 
     @staticmethod
     def _artifact_record_hash(
@@ -2102,6 +2404,7 @@ class ResearchStore:
 
 
 __all__ = (
+    "AssetAnalysisRecord",
     "HeartbeatRecord",
     "NodeLeaseRecord",
     "NodeRuntimeRecord",

@@ -165,7 +165,7 @@ class TestnetApprovalAuthority:
             raise StateConflict("risk ticket is not active")
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 300:
             raise ValidationError("approval ttl_seconds must be from 1 to 300")
-        expected_confirmation = f"approve {ticket.ticket_id} {ticket.ticket_hash[:12]}"
+        expected_confirmation = f"approve {ticket.ticket_id} {ticket.ticket_hash[:16]}"
         if confirmation != expected_confirmation:
             raise ValidationError("trusted UI confirmation does not match the exact ticket")
         expires = min(ticket.expires_at, now + timedelta(seconds=ttl_seconds))

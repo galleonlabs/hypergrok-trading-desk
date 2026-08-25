@@ -167,6 +167,7 @@ class ProfitabilityAttestation:
 class RegisteredOpportunityAssessment:
     assessment_id: str
     asset_id: str
+    instrument: str
     created_at: datetime
     expires_at: datetime
     strategy_hash: str
@@ -185,6 +186,7 @@ class RegisteredOpportunityAssessment:
     def __post_init__(self) -> None:
         object.__setattr__(self, "assessment_id", _text(self.assessment_id, "assessment_id"))
         object.__setattr__(self, "asset_id", _text(self.asset_id, "asset_id"))
+        object.__setattr__(self, "instrument", _text(self.instrument, "instrument", maximum=64))
         created = _utc(self.created_at, "created_at")
         expires = _utc(self.expires_at, "expires_at")
         if expires < created:
@@ -257,6 +259,7 @@ class RegisteredOpportunityAssessment:
             "schema_version": "registered_opportunity_assessment.v1",
             "assessment_id": self.assessment_id,
             "asset_id": self.asset_id,
+            "instrument": self.instrument,
             "created_at": self.created_at.isoformat(timespec="milliseconds").replace(
                 "+00:00", "Z"
             ),
@@ -288,6 +291,7 @@ def _registered_payload(value: RegisteredOpportunityAssessment) -> dict[str, Any
     return {
         "assessment_id": value.assessment_id,
         "asset_id": value.asset_id,
+        "instrument": value.instrument,
         "created_at": value.created_at,
         "expires_at": value.expires_at,
         "strategy_hash": value.strategy_hash,
@@ -435,6 +439,7 @@ def build_registered_assessment(
     payload = {
         "assessment_id": checked_id,
         "asset_id": checked_asset,
+        "instrument": signal.instrument,
         "created_at": checked_at,
         "expires_at": expires,
         "strategy_hash": signal.strategy_hash,
@@ -454,6 +459,7 @@ def build_registered_assessment(
     return RegisteredOpportunityAssessment(
         assessment_id=checked_id,
         asset_id=checked_asset,
+        instrument=signal.instrument,
         created_at=checked_at,
         expires_at=expires,
         strategy_hash=signal.strategy_hash,
@@ -476,10 +482,85 @@ def build_registered_assessment(
     )
 
 
+def _parse_instant(value: object, field: str) -> datetime:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValidationError(f"{field} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValidationError(f"{field} must be an ISO-8601 timestamp") from error
+    return _utc(parsed, field)
+
+
+def registered_assessment_from_dict(
+    value: dict[str, object],
+) -> RegisteredOpportunityAssessment:
+    """Reconstruct and integrity-check one saved registered assessment."""
+
+    if not isinstance(value, dict):
+        raise TypeError("registered assessment document must be an object")
+    expected = {
+        "schema_version",
+        "assessment_id",
+        "asset_id",
+        "instrument",
+        "created_at",
+        "expires_at",
+        "strategy_hash",
+        "signal_hash",
+        "sentiment_hash",
+        "profitability_attestation_hash",
+        "verdict",
+        "reason_codes",
+        "reference_price",
+        "stop_price",
+        "target_price",
+        "eligible_for_risk_quote",
+        "eligible_to_trade",
+        "artifact_hash",
+        "approval_created",
+        "order_submitted",
+    }
+    if set(value) != expected:
+        raise ValidationError("registered assessment fields are unsupported")
+    if value["schema_version"] != "registered_opportunity_assessment.v1":
+        raise ValidationError("registered assessment schema is unsupported")
+    if any(
+        value[field] is not False
+        for field in ("eligible_to_trade", "approval_created", "order_submitted")
+    ):
+        raise ValidationError("registered assessment contains trade authority")
+    reasons = value["reason_codes"]
+    if not isinstance(reasons, list):
+        raise ValidationError("registered assessment reason_codes must be an array")
+    return RegisteredOpportunityAssessment(
+        assessment_id=value["assessment_id"],  # type: ignore[arg-type]
+        asset_id=value["asset_id"],  # type: ignore[arg-type]
+        instrument=value["instrument"],  # type: ignore[arg-type]
+        created_at=_parse_instant(value["created_at"], "created_at"),
+        expires_at=_parse_instant(value["expires_at"], "expires_at"),
+        strategy_hash=value["strategy_hash"],  # type: ignore[arg-type]
+        signal_hash=value["signal_hash"],  # type: ignore[arg-type]
+        sentiment_hash=value["sentiment_hash"],  # type: ignore[arg-type]
+        profitability_attestation_hash=value[
+            "profitability_attestation_hash"
+        ],  # type: ignore[arg-type]
+        verdict=RegisteredVerdict(value["verdict"]),  # type: ignore[arg-type]
+        reason_codes=tuple(reasons),
+        reference_price=value["reference_price"],  # type: ignore[arg-type]
+        stop_price=value["stop_price"],  # type: ignore[arg-type]
+        target_price=value["target_price"],  # type: ignore[arg-type]
+        eligible_for_risk_quote=value["eligible_for_risk_quote"],  # type: ignore[arg-type]
+        eligible_to_trade=False,
+        artifact_hash=value["artifact_hash"],  # type: ignore[arg-type]
+    )
+
+
 __all__ = (
     "ProfitabilityAttestation",
     "ProfitabilityAttestationStatus",
     "RegisteredOpportunityAssessment",
     "RegisteredVerdict",
     "build_registered_assessment",
+    "registered_assessment_from_dict",
 )

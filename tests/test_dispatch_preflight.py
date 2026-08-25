@@ -18,7 +18,12 @@ from trading_harness.execution_store import ExecutionStore
 from trading_harness.hyperliquid_account import fetch_account_snapshot
 from trading_harness.planning import RiskSizingPolicy
 from tests.test_account_risk import flat_clearing
-from tests.test_execution_store import NOW, make_approval, make_ticket
+from tests.test_execution_store import (
+    NOW,
+    make_approval,
+    make_infrastructure_grant,
+    make_ticket,
+)
 from tests.test_hyperliquid_account import ACCOUNT, FixtureTransport, valid_clearing
 
 
@@ -94,8 +99,11 @@ class DispatchPreflightBuilderTests(unittest.TestCase):
             max_reserved_notional="2000",
         )
         self.ticket = make_ticket()
+        grant = make_infrastructure_grant(self.ticket)
+        self.store.register_infrastructure_grant(grant, at=NOW)
         self.store.register_ticket(
             self.ticket,
+            infrastructure_grant_hash=grant.grant_hash,
             stored_at=NOW + timedelta(milliseconds=1),
         )
         approval = make_approval(self.ticket)

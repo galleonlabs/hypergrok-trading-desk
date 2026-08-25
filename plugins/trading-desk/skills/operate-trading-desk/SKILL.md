@@ -20,10 +20,12 @@ Read [references/roles.md](references/roles.md) before assigning or describing d
 - For an idea or edge claim, use `$validate-thesis` before treating it as a registered research rule.
 - For registered-rule observations, use `$scan-signals` and `analyze_asset`; a match is evidence, not an order.
 - For historical evaluation, use `$test-strategy` and `validate_candidate_profitability`; preserve every attempted variant and require prospective shadow evidence after historical PASS.
+- For an explicitly requested small TESTNET learning experiment, use the exact saved analysis with `stage_trade_candidate`. Preserve `profitability_qualified: false`, `mainnet_authorized: false`, `daily_loss_deferred_to_executor: true`, the mandatory stop, grant hash, daily-loss scope hash, expiry, and all blockers. Never describe the staged loss value as authoritative: only the isolated executor's complete same-tick refresh can permit entry. Staging is not approval or execution.
+- For learning, use `get_learning_review` for one cycle and `get_learning_summary` for exact-version descriptive aggregates. Report fees, slippage, latency, fills, venue-reported PnL, missing outcome/path evidence, and the no-causality/no-future-profitability boundary.
 - For a harness-produced candidate intent, call `validate_trade_intent`. It currently checks schema and canonical identity only; report that scope and its result unchanged. It does not perform portfolio risk review, approve, sign, or submit an order.
 
-No skill or model is the execution venue. Execution belongs to the deterministic harness and may proceed only when the harness explicitly exposes that capability and its independent authorization, risk, and freshness gates pass. Approval in chat is not authorization. Do not imply that an order was sent without immutable harness and venue records.
+No skill or model is the execution venue. Execution belongs to the isolated deterministic TESTNET worker and may proceed only after the separate direct-terminal control plane consumes an exact active staged ticket. Approval in chat is not authorization; never type, relay, or simulate the confirmation for the user. Do not imply that an order was sent without immutable harness and venue records. Mainnet remains unavailable.
 
 ## Report
 
-Return the current stage, evidence used with UTC timestamps, deterministic verdicts, unresolved risks, blocker or next safe step, and stable thesis/intent identifiers. Separate facts, calculations, and interpretation. Never expose credentials, request a private key, widen policy, or turn research output into trading authority.
+Return the current stage, evidence used with UTC timestamps, deterministic verdicts, unresolved risks, blocker or next safe step, and stable analysis/staging/cycle/command identifiers. Separate facts, calculations, and interpretation. Never expose credentials, request a private key, widen policy, or turn research output into trading authority.

@@ -18,17 +18,28 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Context, Decimal, DecimalException, localcontext
 from enum import Enum
+import hashlib
+import json
 import re
 from typing import TypeAlias
 
-from .canonical import canonical_decimal, domain_hash, validate_decimal_bounds
-from .errors import HarnessError, ValidationError
-from .execution_store import LegReconciliation, VenueFill
+from .canonical import canonical_decimal, canonical_json, domain_hash, validate_decimal_bounds
+from .errors import HarnessError, RecordNotFound, StateConflict, ValidationError
+from .execution_store import (
+    ExecutionStore,
+    LegReconciliation,
+    RecoveryVenueFill,
+    VenueFill,
+)
 from .hyperliquid_account import (
     HyperliquidAccountSnapshot,
     OrderSide,
 )
 from .hyperliquid_wire import HyperliquidNetwork
+from .hyperliquid_recovery import (
+    ReduceOnlyCloseAction,
+    recovery_action_from_material,
+)
 from .market_data import post_public_info, public_info_endpoint
 
 
@@ -40,12 +51,14 @@ VENUE_RECONCILIATION_HASH_DOMAIN = (
 )
 USER_FILLS_PAGE_LIMIT = 2_000
 USER_FILLS_RETENTION_LIMIT = 10_000
+FILL_LOOKBACK_MS = 5_000
 
 _ROLES = ("entry", "protective_stop", "take_profit")
 _CLOID_RE = re.compile(r"^0x[0-9a-f]{32}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _TX_HASH_RE = re.compile(r"^0x[0-9a-f]{64}$")
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+_TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9]{1,15}$")
 _ZERO = Decimal("0")
 _EXACT_CONTEXT = Context(prec=256)
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -53,6 +66,7 @@ _MAX_TIMESTAMP_MS = 253_402_300_799_999
 _MAX_SNAPSHOT_AGE_MS = 5_000
 _MAX_FUTURE_SKEW_MS = 5_000
 _MAX_FILL_PAGES = 6
+_LATE_WRITE_SETTLEMENT_MS = 5_000
 
 _ORDER_STATUSES = frozenset(
     {
@@ -103,6 +117,9 @@ _CANCELED_STATUSES = frozenset(
 )
 _REJECTED_STATUSES = frozenset(
     status for status in _ORDER_STATUSES if status == "rejected" or status.endswith("Rejected")
+)
+_AUXILIARY_TERMINAL_STATUSES = frozenset(
+    {"filled", *_CANCELED_STATUSES, *_REJECTED_STATUSES}
 )
 
 
@@ -247,6 +264,120 @@ class SignedFillEvidence:
         }
 
 
+def canonical_hyperliquid_fill_id(fill: SignedFillEvidence) -> str:
+    if not isinstance(fill, SignedFillEvidence):
+        raise TypeError("fill must be SignedFillEvidence")
+    return f"hyperliquid:{fill.symbol}:{fill.time_ms}:{fill.tid}:{fill.oid}"
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryOwnedOrder:
+    """A non-target order proven to belong to this parent lifecycle."""
+
+    owner_kind: str
+    owner_id: str
+    source_hash: str
+    role: str
+    cloid: str
+    symbol: str
+    side: OrderSide
+    requested_quantity: Decimal
+    is_trigger: bool
+    reduce_only: bool
+    expires_after_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.owner_kind not in {"parent_leg", "recovery_close"}:
+            raise ValidationError("auxiliary order owner kind is unsupported")
+        _input_text(self.owner_id, "auxiliary owner_id", maximum=128)
+        _input_text(self.role, "auxiliary role", maximum=64)
+        if not isinstance(self.source_hash, str) or not _HASH_RE.fullmatch(
+            self.source_hash
+        ):
+            raise ValidationError("auxiliary order source hash is invalid")
+        if not isinstance(self.cloid, str) or not _CLOID_RE.fullmatch(self.cloid):
+            raise ValidationError("auxiliary order CLOID is invalid")
+        if not isinstance(self.symbol, str) or not _SYMBOL_RE.fullmatch(self.symbol):
+            raise ValidationError("auxiliary order symbol is invalid")
+        if not isinstance(self.side, OrderSide):
+            raise TypeError("auxiliary order side must be OrderSide")
+        if not isinstance(self.requested_quantity, Decimal):
+            raise TypeError("auxiliary order quantity must be Decimal")
+        validate_decimal_bounds(
+            self.requested_quantity, field="auxiliary requested_quantity"
+        )
+        if self.requested_quantity <= _ZERO:
+            raise ValidationError("auxiliary order quantity must be positive")
+        if type(self.is_trigger) is not bool or type(self.reduce_only) is not bool:
+            raise TypeError("auxiliary order flags must be boolean")
+        if self.expires_after_ms is not None and (
+            type(self.expires_after_ms) is not int or self.expires_after_ms < 0
+        ):
+            raise ValidationError("auxiliary order expiry is invalid")
+
+    def canonical_record(self) -> dict[str, object]:
+        return {
+            "owner_kind": self.owner_kind,
+            "owner_id": self.owner_id,
+            "source_hash": self.source_hash,
+            "role": self.role,
+            "cloid": self.cloid,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "requested_quantity": canonical_decimal(self.requested_quantity),
+            "is_trigger": self.is_trigger,
+            "reduce_only": self.reduce_only,
+            "expires_after_ms": self.expires_after_ms,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryOrderEvidence:
+    order: AuxiliaryOwnedOrder
+    status: ParsedOrderStatus
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.order, AuxiliaryOwnedOrder):
+            raise TypeError("auxiliary order evidence requires an owned order")
+        if not isinstance(self.status, ParsedOrderStatus):
+            raise TypeError("auxiliary order evidence requires a parsed status")
+        if self.status.requested_cloid != self.order.cloid:
+            raise ValidationError("auxiliary status CLOID differs from its owner")
+
+    def canonical_record(self) -> dict[str, object]:
+        return {
+            "order": self.order.canonical_record(),
+            "status": self.status.canonical_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryFillEvidence:
+    owner_kind: str
+    owner_id: str
+    source_hash: str
+    fill: SignedFillEvidence
+
+    def __post_init__(self) -> None:
+        if self.owner_kind not in {"parent_leg", "recovery_close"}:
+            raise ValidationError("auxiliary fill owner kind is unsupported")
+        _input_text(self.owner_id, "auxiliary fill owner_id", maximum=128)
+        if not isinstance(self.source_hash, str) or not _HASH_RE.fullmatch(
+            self.source_hash
+        ):
+            raise ValidationError("auxiliary fill source hash is invalid")
+        if not isinstance(self.fill, SignedFillEvidence):
+            raise TypeError("auxiliary fill evidence requires signed fill evidence")
+
+    def canonical_record(self) -> dict[str, object]:
+        return {
+            "owner_kind": self.owner_kind,
+            "owner_id": self.owner_id,
+            "source_hash": self.source_hash,
+            "fill": self.fill.canonical_record(),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class FillCoverage:
     requested_start_time_ms: int
@@ -300,6 +431,8 @@ class VenueReconciliationBundle:
     complete: bool
     incomplete_reasons: tuple[str, ...]
     reconciliation_hash: str
+    auxiliary_order_statuses: tuple[AuxiliaryOrderEvidence, ...] = ()
+    auxiliary_fills: tuple[AuxiliaryFillEvidence, ...] = ()
 
     def execution_store_kwargs(self) -> dict[str, object]:
         """Return exactly the venue evidence fields consumed by ``reconcile``."""
@@ -328,6 +461,12 @@ class VenueReconciliationBundle:
             ),
             "order_statuses": [item.canonical_record() for item in self.order_statuses],
             "signed_fills": [item.canonical_record() for item in self.signed_fills],
+            "auxiliary_order_statuses": [
+                item.canonical_record() for item in self.auxiliary_order_statuses
+            ],
+            "auxiliary_fills": [
+                item.canonical_record() for item in self.auxiliary_fills
+            ],
             "fill_coverage": self.fill_coverage.as_dict(),
             "legs": [item.as_dict() for item in self.legs],
             "fills": [item.as_dict() for item in self.fills],
@@ -578,6 +717,228 @@ def _parse_order_status(
     )
 
 
+def _parse_auxiliary_order_status(
+    response: object,
+    owned: AuxiliaryOwnedOrder,
+    *,
+    now_ms: int,
+) -> AuxiliaryOrderEvidence:
+    """Parse one exact durable auxiliary order without weakening role flags."""
+
+    role = f"auxiliary:{owned.owner_id}:{owned.role}"
+    root = _mapping(response, f"orderStatus[{role}]")
+    if root == {"status": "unknownOid"}:
+        return AuxiliaryOrderEvidence(
+            owned,
+            ParsedOrderStatus(
+                role=role,
+                requested_cloid=owned.cloid,
+                state=VenueOrderState.MISSING,
+                venue_status=None,
+                status_timestamp_ms=None,
+                oid=None,
+                symbol=None,
+                remaining_size=None,
+                original_size=None,
+                is_trigger=None,
+                reduce_only=None,
+            ),
+        )
+    if set(root) != {"status", "order"} or root["status"] != "order":
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus root is unsupported"
+        )
+    outer = _mapping(root["order"], f"orderStatus[{role}].order")
+    if set(outer) != {"order", "status", "statusTimestamp"}:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus record fields are unsupported"
+        )
+    venue_status = outer["status"]
+    if not isinstance(venue_status, str) or venue_status not in _ORDER_STATUSES:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus venue status is unknown"
+        )
+    status_time = _integer(
+        outer["statusTimestamp"], f"orderStatus[{role}].statusTimestamp"
+    )
+    if status_time > now_ms:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary order status timestamp is in the future"
+        )
+    order = _mapping(outer["order"], f"orderStatus[{role}].order.order")
+    if set(order) != _ORDER_FIELDS:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus order fields are unsupported"
+        )
+    if order["cloid"] != owned.cloid or order["coin"] != owned.symbol:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus returned a foreign order"
+        )
+    if order["side"] != owned.side.wire_value:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus side differs from durable recovery"
+        )
+    remaining = _exact_decimal(order["sz"], "orderStatus.sz", nonnegative=True)
+    original = _exact_decimal(
+        order["origSz"], "orderStatus.origSz", nonnegative=True
+    )
+    if original != owned.requested_quantity or remaining > original:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus size differs from durable recovery"
+        )
+    is_trigger = _bool(order["isTrigger"], "orderStatus.isTrigger")
+    reduce_only = _bool(order["reduceOnly"], "orderStatus.reduceOnly")
+    if is_trigger != owned.is_trigger or reduce_only != owned.reduce_only:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus flags differ from durable recovery"
+        )
+    _exact_decimal(order["limitPx"], "orderStatus.limitPx", positive=True)
+    trigger_price = _exact_decimal(
+        order["triggerPx"], "orderStatus.triggerPx", nonnegative=True
+    )
+    if is_trigger != (trigger_price > _ZERO):
+        raise HyperliquidReconcileResponseError(
+            "auxiliary orderStatus trigger fields disagree"
+        )
+    oid = _integer(order["oid"], "orderStatus.oid", maximum=2**63 - 1)
+    order_time = _integer(order["timestamp"], "orderStatus.timestamp")
+    if order_time > status_time:
+        raise HyperliquidReconcileResponseError(
+            "auxiliary order timestamp postdates status"
+        )
+    _bool(order["isPositionTpsl"], "orderStatus.isPositionTpsl")
+    _text(order["triggerCondition"], "orderStatus.triggerCondition")
+    _text(order["orderType"], "orderStatus.orderType")
+    if order["tif"] is not None:
+        _text(order["tif"], "orderStatus.tif", maximum=64)
+    _array(order["children"], "orderStatus.children", maximum=20)
+    return AuxiliaryOrderEvidence(
+        owned,
+        ParsedOrderStatus(
+            role=role,
+            requested_cloid=owned.cloid,
+            state=VenueOrderState.ORDER,
+            venue_status=venue_status,
+            status_timestamp_ms=status_time,
+            oid=oid,
+            symbol=owned.symbol,
+            remaining_size=remaining,
+            original_size=original,
+            is_trigger=is_trigger,
+            reduce_only=reduce_only,
+        ),
+    )
+
+
+def _durable_recovery_close_orders(
+    store: ExecutionStore,
+    *,
+    parent_command_id: str,
+    symbol: str,
+) -> tuple[AuxiliaryOwnedOrder, ...]:
+    """Load only recovery closes that reached the durable send boundary."""
+
+    if not isinstance(store, ExecutionStore):
+        raise TypeError("store must be ExecutionStore")
+    if store.environment.value != "testnet":
+        raise ValidationError("auxiliary recovery attribution is testnet-only")
+    orders: list[AuxiliaryOwnedOrder] = []
+    for command in store.list_recovery_commands():
+        if (
+            command.parent_command_id != parent_command_id
+            or command.kind != "reduce_only_close"
+            or command.state == "terminal"
+        ):
+            continue
+        try:
+            attempt = store.get_recovery_attempt(command.recovery_command_id)
+        except RecordNotFound:
+            continue
+        if attempt.state == "prepared":
+            # No submission authority was consumed, so this signed artifact
+            # was unreachable by the transport and cannot own a venue fill.
+            continue
+        if attempt.state not in {"sending", "response_received", "unknown"}:
+            raise StateConflict("recovery attempt state is unsupported")
+        signed = store.get_signed_recovery_evidence(command.recovery_command_id)
+        if (
+            signed.evidence_hash != attempt.signed_evidence_hash
+            or signed.recovery_hash != command.recovery_hash
+        ):
+            raise StateConflict("recovery signed evidence differs from its command")
+        if attempt.state in {"response_received", "unknown"}:
+            transport = store.get_recovery_transport_evidence(
+                command.recovery_command_id
+            )
+            if (
+                transport.attempt_id != attempt.attempt_id
+                or transport.signed_evidence_hash != attempt.signed_evidence_hash
+            ):
+                raise StateConflict(
+                    "recovery transport does not prove one attempted venue write"
+                )
+            transport_proves_boundary = (
+                transport.evidence_basis == "transport_result"
+                and transport.venue_write_attempted is True
+            ) or (
+                transport.evidence_basis == "claim_expiry"
+                and attempt.state == "unknown"
+                and transport.outcome == "unknown"
+                and transport.venue_write_attempted is None
+            )
+            if not transport_proves_boundary:
+                raise StateConflict(
+                    "recovery transport did not cross the durable send boundary"
+                )
+        try:
+            material = json.loads(command.recovery_material_json)
+        except (TypeError, ValueError) as error:
+            raise StateConflict("recovery material is not valid JSON") from error
+        if (
+            not isinstance(material, dict)
+            or canonical_json(material) != command.recovery_material_json
+            or hashlib.sha256(command.recovery_material_json.encode("utf-8")).hexdigest()
+            != command.recovery_material_hash
+        ):
+            raise StateConflict("recovery material encoding differs from durable state")
+        try:
+            action = recovery_action_from_material(material)
+        except (TypeError, ValidationError) as error:
+            raise StateConflict("recovery material violates its schema") from error
+        if (
+            not isinstance(action, ReduceOnlyCloseAction)
+            or action.recovery_hash != command.recovery_hash
+            or action.symbol != symbol
+            or action.account_id != store.account_id
+        ):
+            raise StateConflict("recovery close differs from parent lifecycle")
+        orders.append(
+            AuxiliaryOwnedOrder(
+                owner_kind="recovery_close",
+                owner_id=command.recovery_command_id,
+                source_hash=command.recovery_hash,
+                role="recovery_close",
+                cloid=action.cloid,
+                symbol=action.symbol,
+                side=(
+                    OrderSide.SELL
+                    if action.original_signed_position > _ZERO
+                    else OrderSide.BUY
+                ),
+                requested_quantity=action.close_size,
+                is_trigger=False,
+                reduce_only=True,
+                expires_after_ms=signed.expires_after_ms,
+            )
+        )
+    if len(orders) > 4:
+        raise StateConflict("multiple unresolved recovery close attempts are unsafe")
+    ordered = tuple(sorted(orders, key=lambda item: item.owner_id))
+    if len({item.cloid for item in ordered}) != len(ordered):
+        raise StateConflict("recovery close CLOID is reused across durable attempts")
+    return ordered
+
+
 _FILL_REQUIRED_FIELDS = {
     "closedPnl",
     "coin",
@@ -699,8 +1060,10 @@ def _parse_fill(
     if time_ms > now_ms:
         raise HyperliquidReconcileResponseError("fill timestamp is in the future")
     fee_token = _text(root["feeToken"], f"{field}.feeToken", maximum=64)
+    if not _TOKEN_RE.fullmatch(fee_token):
+        raise HyperliquidReconcileResponseError(f"{field}.feeToken is invalid")
     return _RawFill(
-        identity=(time_ms, symbol, tid, oid),
+        identity=(time_ms, tx_hash, tid, oid),
         oid=oid,
         tid=tid,
         transaction_hash=tx_hash,
@@ -736,7 +1099,9 @@ def _fetch_fills(
     duplicates = 0
     page_saturated = False
     retention_limited = False
-    reason = "range_exhausted"
+    complete = False
+    reason = "maximum_fill_pages_exhausted"
+    required_overlap: set[tuple[int, str, int, int]] = set()
     while page_count < _MAX_FILL_PAGES:
         response = _post_info(
             endpoint,
@@ -761,7 +1126,7 @@ def _fetch_fills(
             fill = _parse_fill(
                 value,
                 index,
-                start_time_ms=start_time_ms,
+                start_time_ms=cursor,
                 end_time_ms=end_time_ms,
                 now_ms=now_ms,
             )
@@ -775,29 +1140,42 @@ def _fetch_fills(
                 raise HyperliquidReconcileResponseError(
                     "duplicate fill identity has conflicting economics"
                 )
-        if len(rows) < USER_FILLS_PAGE_LIMIT:
-            break
-        page_saturated = True
+        if any(
+            page[index].time_ms > page[index + 1].time_ms
+            for index in range(len(page) - 1)
+        ):
+            raise HyperliquidReconcileResponseError(
+                "userFillsByTime page is not ordered by ascending time"
+            )
+        page_identities = {item.identity for item in page}
+        if required_overlap and not required_overlap.issubset(page_identities):
+            raise HyperliquidReconcileResponseError(
+                "userFillsByTime inclusive page overlap is incomplete"
+            )
         if len(by_identity) >= USER_FILLS_RETENTION_LIMIT:
             retention_limited = True
             reason = "latest_10000_fill_retention_limit"
             break
+        if len(rows) < USER_FILLS_PAGE_LIMIT:
+            complete = True
+            reason = "range_exhausted"
+            break
         if not page:
             reason = "full_page_without_parseable_fill"
             break
-        next_cursor = max(fill.time_ms for fill in page)
-        if next_cursor <= cursor and not any(
-            fill.identity not in by_identity for fill in page
-        ):
+        next_cursor = page[-1].time_ms
+        if next_cursor <= cursor:
+            page_saturated = True
             reason = "inclusive_page_boundary_saturated"
             break
-        if next_cursor <= cursor:
-            reason = "inclusive_page_cursor_did_not_advance"
-            break
+        required_overlap = {
+            item.identity for item in page if item.time_ms == next_cursor
+        }
         cursor = next_cursor
     else:
+        page_saturated = True
         reason = "maximum_fill_pages_exhausted"
-    complete = not retention_limited and reason == "range_exhausted"
+    complete = complete and not retention_limited and not page_saturated
     ordered = tuple(
         by_identity[key]
         for key in sorted(by_identity)
@@ -859,6 +1237,7 @@ def reconcile_hyperliquid_venue(
     transport: InfoTransport = post_public_info,
     clock: Clock = lambda: datetime.now(timezone.utc),
     fills_end_time_ms: int | None = None,
+    store: ExecutionStore | None = None,
 ) -> VenueReconciliationBundle:
     """Build exact, store-ready reconciliation evidence without venue writes."""
 
@@ -903,6 +1282,22 @@ def reconcile_hyperliquid_venue(
     if snapshot_age > _MAX_SNAPSHOT_AGE_MS or snapshot_age < -_MAX_FUTURE_SKEW_MS:
         raise ValidationError("account snapshot is stale for venue reconciliation")
     endpoint = public_info_endpoint(network.value)
+    auxiliary_orders = (
+        ()
+        if store is None
+        else _durable_recovery_close_orders(
+            store,
+            parent_command_id=checked_command,
+            symbol=symbol,
+        )
+    )
+    if store is not None and (
+        store.account_id != checked_account or store.environment.value != network.value
+    ):
+        raise StateConflict("execution store scope differs from reconciliation")
+    primary_cloids = {item.cloid for item in selected_legs}
+    if primary_cloids & {item.cloid for item in auxiliary_orders}:
+        raise StateConflict("parent and recovery orders reuse a CLOID")
     statuses = tuple(
         _parse_order_status(
             _post_info(
@@ -919,8 +1314,31 @@ def reconcile_hyperliquid_venue(
         )
         for leg in selected_legs
     )
+    auxiliary_statuses = tuple(
+        _parse_auxiliary_order_status(
+            _post_info(
+                endpoint,
+                {
+                    "type": "orderStatus",
+                    "user": snapshot.main_account_address,
+                    "oid": order.cloid,
+                },
+                transport,
+            ),
+            order,
+            now_ms=now_ms,
+        )
+        for order in auxiliary_orders
+    )
     known_oids = [item.oid for item in statuses if item.oid is not None]
-    if len(set(known_oids)) != len(known_oids):
+    auxiliary_oids = [
+        item.status.oid
+        for item in auxiliary_statuses
+        if item.status.oid is not None
+    ]
+    if len(set(known_oids + auxiliary_oids)) != len(known_oids) + len(
+        auxiliary_oids
+    ):
         raise HyperliquidReconcileResponseError("orderStatus repeats a venue OID")
     raw_fills, fill_coverage = _fetch_fills(
         endpoint,
@@ -935,13 +1353,133 @@ def reconcile_hyperliquid_venue(
         for status, leg in zip(statuses, selected_legs)
         if status.oid is not None
     }
+    auxiliary_by_oid = {
+        evidence.status.oid: evidence
+        for evidence in auxiliary_statuses
+        if evidence.status.oid is not None
+    }
+    persisted_recovery_fills: dict[
+        tuple[int, str, int, int], tuple[RecoveryVenueFill, str]
+    ] = {}
+    if store is not None:
+        for persisted in store.list_recovery_fills(
+            parent_command_id=checked_command
+        ):
+            owner = store.get_recovery_command(persisted.recovery_command_id)
+            if owner.state != "terminal" or owner.kind != "reduce_only_close":
+                continue
+            occurred_ms = int(persisted.occurred_at.timestamp() * 1_000)
+            if not start_ms <= occurred_ms <= end_ms:
+                continue
+            identity = (
+                occurred_ms,
+                persisted.transaction_hash,
+                persisted.venue_trade_id,
+                persisted.venue_oid,
+            )
+            if identity in persisted_recovery_fills:
+                raise StateConflict("persisted recovery fill identity is repeated")
+            persisted_recovery_fills[identity] = (persisted, owner.recovery_hash)
     signed_fills: list[SignedFillEvidence] = []
+    auxiliary_fills: list[AuxiliaryFillEvidence] = []
+    observed_persisted_identities: set[tuple[int, str, int, int]] = set()
     venue_fills: list[VenueFill] = []
     unmatched = 0
     for fill in raw_fills:
         match = status_by_oid.get(fill.oid)
         if match is None:
-            unmatched += 1
+            auxiliary = auxiliary_by_oid.get(fill.oid)
+            if auxiliary is None:
+                persisted_match = persisted_recovery_fills.get(fill.identity)
+                if persisted_match is None:
+                    unmatched += 1
+                    continue
+                persisted, recovery_hash = persisted_match
+                observed_persisted_identities.add(fill.identity)
+                if (
+                    persisted.fill_id
+                    != f"hyperliquid:{fill.symbol}:{fill.time_ms}:{fill.tid}:{fill.oid}"
+                    or persisted.symbol != fill.symbol
+                    or persisted.side != fill.side.value
+                    or persisted.quantity != fill.quantity
+                    or persisted.signed_quantity != fill.signed_quantity
+                    or persisted.start_position != fill.start_position
+                    or persisted.end_position != fill.end_position
+                    or persisted.price != fill.price
+                    or persisted.fee != fill.fee
+                    or persisted.closed_pnl != fill.closed_pnl
+                    or persisted.fee_token != fill.fee_token
+                    or persisted.crossed is not fill.crossed
+                    or persisted.builder_fee != fill.builder_fee
+                ):
+                    raise HyperliquidReconcileResponseError(
+                        "venue recovery fill differs from durable economics"
+                    )
+                auxiliary_fills.append(
+                    AuxiliaryFillEvidence(
+                        owner_kind="recovery_close",
+                        owner_id=persisted.recovery_command_id,
+                        source_hash=recovery_hash,
+                        fill=SignedFillEvidence(
+                            fill_id=persisted.fill_id,
+                            role="recovery_close",
+                            cloid=persisted.cloid,
+                            oid=fill.oid,
+                            tid=fill.tid,
+                            transaction_hash=fill.transaction_hash,
+                            symbol=fill.symbol,
+                            side=fill.side,
+                            quantity=fill.quantity,
+                            signed_quantity=fill.signed_quantity,
+                            start_position=fill.start_position,
+                            end_position=fill.end_position,
+                            price=fill.price,
+                            fee=fill.fee,
+                            closed_pnl=fill.closed_pnl,
+                            fee_token=fill.fee_token,
+                            crossed=fill.crossed,
+                            builder_fee=fill.builder_fee,
+                            time_ms=fill.time_ms,
+                        ),
+                    )
+                )
+                continue
+            owned = auxiliary.order
+            if fill.symbol != owned.symbol or fill.side is not owned.side:
+                raise HyperliquidReconcileResponseError(
+                    "fill differs from its recovery-owned order"
+                )
+            auxiliary_fills.append(
+                AuxiliaryFillEvidence(
+                    owner_kind=owned.owner_kind,
+                    owner_id=owned.owner_id,
+                    source_hash=owned.source_hash,
+                    fill=SignedFillEvidence(
+                        fill_id=(
+                            f"hyperliquid:{fill.symbol}:{fill.time_ms}:"
+                            f"{fill.tid}:{fill.oid}"
+                        ),
+                        role=owned.role,
+                        cloid=owned.cloid,
+                        oid=fill.oid,
+                        tid=fill.tid,
+                        transaction_hash=fill.transaction_hash,
+                        symbol=fill.symbol,
+                        side=fill.side,
+                        quantity=fill.quantity,
+                        signed_quantity=fill.signed_quantity,
+                        start_position=fill.start_position,
+                        end_position=fill.end_position,
+                        price=fill.price,
+                        fee=fill.fee,
+                        closed_pnl=fill.closed_pnl,
+                        fee_token=fill.fee_token,
+                        crossed=fill.crossed,
+                        builder_fee=fill.builder_fee,
+                        time_ms=fill.time_ms,
+                    ),
+                )
+            )
             continue
         _, leg = match
         if fill.symbol != leg.symbol or fill.side is not leg.side:
@@ -978,8 +1516,50 @@ def reconcile_hyperliquid_venue(
                 price=fill.price,
                 fee=fill.fee,
                 occurred_at=_datetime_ms(fill.time_ms),
+                venue_oid=fill.oid,
+                venue_trade_id=fill.tid,
+                transaction_hash=fill.transaction_hash,
+                closed_pnl=fill.closed_pnl,
+                fee_token=fill.fee_token,
+                observed_at=_datetime_ms(snapshot.server_time_ms),
             )
         )
+    auxiliary_quantity: dict[str, Decimal] = {
+        item.owner_id: _ZERO for item in auxiliary_orders
+    }
+    with localcontext(_EXACT_CONTEXT) as context:
+        for item in auxiliary_fills:
+            if item.owner_id in auxiliary_quantity:
+                auxiliary_quantity[item.owner_id] = context.add(
+                    auxiliary_quantity[item.owner_id], item.fill.quantity
+                )
+    for order in auxiliary_orders:
+        if auxiliary_quantity[order.owner_id] > order.requested_quantity:
+            raise HyperliquidReconcileResponseError(
+                "recovery fills exceed the durable close quantity"
+            )
+    auxiliary_fill_detail_missing = any(
+        evidence.status.state is VenueOrderState.ORDER
+        and evidence.status.venue_status == "filled"
+        and auxiliary_quantity[evidence.order.owner_id]
+        != evidence.order.requested_quantity
+        for evidence in auxiliary_statuses
+    )
+    auxiliary_missing_unsettled = any(
+        evidence.status.state is VenueOrderState.MISSING
+        and evidence.order.expires_after_ms is not None
+        and end_ms
+        < evidence.order.expires_after_ms + _LATE_WRITE_SETTLEMENT_MS
+        for evidence in auxiliary_statuses
+    )
+    auxiliary_status_nonterminal = any(
+        evidence.status.state is VenueOrderState.ORDER
+        and evidence.status.venue_status not in _AUXILIARY_TERMINAL_STATUSES
+        for evidence in auxiliary_statuses
+    )
+    persisted_fill_missing = (
+        set(persisted_recovery_fills) != observed_persisted_identities
+    )
     fill_coverage = FillCoverage(
         requested_start_time_ms=fill_coverage.requested_start_time_ms,
         requested_end_time_ms=fill_coverage.requested_end_time_ms,
@@ -992,12 +1572,18 @@ def reconcile_hyperliquid_venue(
         unmatched_fills=unmatched,
         page_saturated=fill_coverage.page_saturated,
         retention_limited=fill_coverage.retention_limited,
-        complete=fill_coverage.complete and unmatched == 0,
+        complete=(
+            fill_coverage.complete
+            and unmatched == 0
+            and not persisted_fill_missing
+        ),
         reason=(
             fill_coverage.reason
             if not fill_coverage.complete
             else "unmatched_account_fills"
             if unmatched
+            else "persisted_recovery_fill_absent_from_window"
+            if persisted_fill_missing
             else "range_exhausted"
         ),
     )
@@ -1010,6 +1596,12 @@ def reconcile_hyperliquid_venue(
             )
     legs: list[LegReconciliation] = []
     incomplete: list[str] = []
+    if auxiliary_fill_detail_missing:
+        incomplete.append("recovery_close_fill_details_incomplete")
+    if auxiliary_missing_unsettled:
+        incomplete.append("recovery_close_missing_before_signed_expiry_settled")
+    if auxiliary_status_nonterminal:
+        incomplete.append("recovery_close_order_not_terminal")
     for status, leg in zip(statuses, selected_legs):
         cumulative = fills_by_role[leg.role]
         mapped_status = _leg_status(status, leg, cumulative)
@@ -1038,19 +1630,23 @@ def reconcile_hyperliquid_venue(
     position = snapshot.position(symbol)
     signed_position = _ZERO if position is None else position.signed_size
     ordered_signed_fills = sorted(
-        signed_fills,
+        [*signed_fills, *(item.fill for item in auxiliary_fills)],
         key=lambda item: (item.time_ms, item.tid, item.oid),
     )
     for left, right in zip(ordered_signed_fills, ordered_signed_fills[1:]):
         if left.end_position != right.start_position:
             incomplete.append("fill_position_chain_discontinuous")
             break
+    if ordered_signed_fills and ordered_signed_fills[0].start_position != _ZERO:
+        incomplete.append("fill_start_position_differs_from_flat_preflight")
     if (
         ordered_signed_fills
         and unmatched == 0
         and ordered_signed_fills[-1].end_position != signed_position
     ):
         incomplete.append("fill_end_position_differs_from_account")
+    if signed_position != _ZERO and not ordered_signed_fills:
+        incomplete.append("position_without_owned_fill_chain")
     stop_status = statuses[_ROLES.index("protective_stop")]
     stop_cloid = selected_legs[_ROLES.index("protective_stop")].cloid
     coverage = snapshot.protection_coverage(
@@ -1090,6 +1686,12 @@ def reconcile_hyperliquid_venue(
         "observed_at": observed_at,
         "order_statuses": [item.canonical_record() for item in statuses],
         "signed_fills": [item.canonical_record() for item in signed_fills],
+        "auxiliary_order_statuses": [
+            item.canonical_record() for item in auxiliary_statuses
+        ],
+        "auxiliary_fills": [
+            item.canonical_record() for item in auxiliary_fills
+        ],
         "fill_coverage": fill_coverage.as_dict(),
         "legs": [item.as_dict() for item in legs],
         "signed_position_quantity": canonical_decimal(signed_position),
@@ -1115,14 +1717,20 @@ def reconcile_hyperliquid_venue(
         complete=complete,
         incomplete_reasons=reasons,
         reconciliation_hash=domain_hash(VENUE_RECONCILIATION_HASH_DOMAIN, material),
+        auxiliary_order_statuses=auxiliary_statuses,
+        auxiliary_fills=tuple(auxiliary_fills),
     )
 
 
 __all__ = (
+    "FILL_LOOKBACK_MS",
     "USER_FILLS_PAGE_LIMIT",
     "USER_FILLS_RETENTION_LIMIT",
     "VENUE_RECONCILIATION_HASH_DOMAIN",
     "FillCoverage",
+    "AuxiliaryFillEvidence",
+    "AuxiliaryOrderEvidence",
+    "AuxiliaryOwnedOrder",
     "HyperliquidReconcileError",
     "HyperliquidReconcileResponseError",
     "HyperliquidReconcileTransportError",
@@ -1131,5 +1739,6 @@ __all__ = (
     "SignedFillEvidence",
     "VenueOrderState",
     "VenueReconciliationBundle",
+    "canonical_hyperliquid_fill_id",
     "reconcile_hyperliquid_venue",
 )

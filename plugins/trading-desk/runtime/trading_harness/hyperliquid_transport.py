@@ -24,6 +24,7 @@ from urllib import request as urlrequest
 from .canonical import canonical_json, domain_hash
 from .errors import HarnessError, ValidationError
 from .execution_store import (
+    EntrySubmissionAuthority,
     ExecutionStore,
     NoopFenceResponseEvidence,
     RecoverySubmissionAuthority,
@@ -570,6 +571,7 @@ def submit_signed_action(
     signed: SignedEnvelope,
     *,
     store: ExecutionStore | None = None,
+    command_id: str | None = None,
     attempt_id: str | None = None,
     signed_evidence_hash: str | None = None,
     worker_id: str | None = None,
@@ -608,19 +610,69 @@ def submit_signed_action(
         "recovery_signed_evidence_hash": None,
         "submission_authority_hash": None,
     }
-    recovery_arguments = (
-        store,
-        attempt_id,
-        signed_evidence_hash,
-        worker_id,
-        fencing_token,
-    )
     if isinstance(signed, SignedActionEnvelope):
-        if any(value is not None for value in recovery_arguments):
+        if (
+            type(store) is not ExecutionStore
+            or not isinstance(command_id, str)
+            or not command_id
+            or not isinstance(attempt_id, str)
+            or not attempt_id
+            or not isinstance(worker_id, str)
+            or not worker_id
+            or not isinstance(signed_evidence_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", signed_evidence_hash)
+            or type(fencing_token) is not int
+            or fencing_token <= 0
+        ):
             raise HyperliquidSubmissionError(
-                "protected submission cannot consume recovery authority"
+                "protected submission requires exact durable authority arguments"
+            )
+        if (
+            signed.network is not HyperliquidNetwork.TESTNET
+            or store.environment is not signed.network.environment
+            or store.account_id != signed.account_id
+        ):
+            raise HyperliquidSubmissionError(
+                "protected submission store scope is not exact testnet"
+            )
+        local_signed_evidence = signed.execution_store_evidence(command_id)
+        if local_signed_evidence.evidence_hash != signed_evidence_hash:
+            raise HyperliquidSubmissionError(
+                "protected signed evidence hash differs before submission"
+            )
+        authority = ExecutionStore.require_submission_authority(
+            store,
+            command_id,
+            attempt_id,
+            signed_evidence_hash,
+            worker_id,
+            fencing_token,
+            at=_EPOCH + timedelta(milliseconds=attempted_at_ms),
+        )
+        if not isinstance(authority, EntrySubmissionAuthority):
+            raise HyperliquidSubmissionError(
+                "store returned an invalid entry submission authority"
+            )
+        authority_lease_ms = _utc_ms(lambda: authority.lease_expires_at)
+        if (
+            authority.command_id != command_id
+            or authority.attempt_id != attempt_id
+            or authority.signed_evidence_hash != signed_evidence_hash
+            or authority.nonce != signed.nonce
+            or authority.action_hash != signed.action_hash
+            or authority.wire_hash != signed.wire_hash
+            or authority.worker_id != worker_id
+            or authority.fencing_token != fencing_token
+            or attempted_at_ms >= authority_lease_ms
+        ):
+            raise HyperliquidSubmissionError(
+                "entry submission authority differs from signed attempt"
             )
     else:
+        if command_id is not None:
+            raise HyperliquidSubmissionError(
+                "recovery submission cannot bind an entry command_id"
+            )
         if type(store) is not ExecutionStore:
             raise HyperliquidSubmissionError(
                 "recovery submission requires an exact ExecutionStore"
@@ -822,7 +874,7 @@ def submit_signed_action(
             http_status=200,
             response_json=None,
             response_hash=None,
-            detail_code="unexpected_noop_response",
+            detail_code="noop_response_not_canonical_default",
         )
     response_hash = domain_hash(SUBMISSION_RESPONSE_HASH_DOMAIN, decoded)
     return _attempt(

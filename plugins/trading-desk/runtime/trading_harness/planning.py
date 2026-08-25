@@ -20,9 +20,10 @@ from .canonical import (
 )
 from .domain import Environment, OrderType, SemanticIntent, Side
 from .errors import ValidationError
+from .execution_grant import SignedInfrastructureGrant, TrustedInfrastructureGrant
 from .policy import BASIS_POINTS, exact_decimal
 from .registered_decision import RegisteredOpportunityAssessment, RegisteredVerdict
-from .strategy import RegisteredStrategy
+from .strategy import CANDIDATE_V0, RegisteredStrategy
 
 
 _ZERO = Decimal("0")
@@ -510,6 +511,7 @@ def quote_risk_ticket(
     at: datetime,
     policy: RiskSizingPolicy = RiskSizingPolicy(),
     strategy: RegisteredStrategy | None = None,
+    _infrastructure_learning: bool = False,
 ) -> RiskTicket:
     if not isinstance(
         assessment,
@@ -522,6 +524,8 @@ def quote_risk_ticket(
         raise TypeError("account must be AccountRiskSnapshot")
     if not isinstance(policy, RiskSizingPolicy):
         raise TypeError("policy must be RiskSizingPolicy")
+    if type(_infrastructure_learning) is not bool:
+        raise TypeError("_infrastructure_learning must be bool")
     checked_ticket = _text(ticket_id, "ticket_id")
     checked_at = _utc(at, "at")
     reasons: list[str] = []
@@ -562,11 +566,20 @@ def quote_risk_ticket(
         signal_hash = assessment.signal_hash
         if assessment.strategy_hash != strategy.registration_hash:
             reasons.append("registered_strategy_hash_mismatch")
-        if assessment.asset_id != identity.instrument:
+        if identity.instrument not in {
+            assessment.instrument,
+            f"{assessment.instrument}-PERP",
+        }:
             reasons.append("registered_asset_scope_mismatch")
     if not directional:
         reasons.append("assessment_not_directional")
-    if not assessment.eligible_for_risk_quote:
+    learning_eligible = (
+        _infrastructure_learning
+        and isinstance(assessment, RegisteredOpportunityAssessment)
+        and directional
+        and identity.environment is Environment.TESTNET
+    )
+    if not assessment.eligible_for_risk_quote and not learning_eligible:
         reasons.append("assessment_not_risk_eligible")
     if not assessment.is_fresh(checked_at):
         reasons.append("assessment_stale")
@@ -766,6 +779,67 @@ def quote_risk_ticket(
     )
 
 
+def quote_infrastructure_learning_ticket(
+    *,
+    ticket_id: str,
+    assessment: RegisteredOpportunityAssessment,
+    identity: PlanIdentity,
+    account: AccountRiskSnapshot,
+    grant: SignedInfrastructureGrant | TrustedInfrastructureGrant,
+    at: datetime,
+    policy: RiskSizingPolicy = RiskSizingPolicy(),
+    strategy: RegisteredStrategy = CANDIDATE_V0,
+) -> RiskTicket:
+    """Quote a bounded TESTNET learning ticket without a profitability claim."""
+
+    if not isinstance(assessment, RegisteredOpportunityAssessment):
+        raise TypeError("learning quote requires RegisteredOpportunityAssessment")
+    if not isinstance(
+        grant, (SignedInfrastructureGrant, TrustedInfrastructureGrant)
+    ):
+        raise TypeError("grant must be a signed or trusted infrastructure scope")
+    checked_at = _utc(at, "at")
+    if (
+        identity.environment is not Environment.TESTNET
+        or account.environment is not Environment.TESTNET
+        or grant.environment is not Environment.TESTNET
+        or grant.account_id != identity.account_id
+        or grant.account_id != account.account_id
+        or identity.instrument not in grant.allowed_instruments
+        or identity.instrument not in {
+            assessment.instrument,
+            f"{assessment.instrument}-PERP",
+        }
+        or policy.policy_hash != grant.risk_policy_hash
+        or not grant.is_active(checked_at)
+    ):
+        raise ValidationError("learning quote differs from infrastructure grant scope")
+    ticket = quote_risk_ticket(
+        ticket_id=ticket_id,
+        assessment=assessment,
+        technical=None,
+        identity=identity,
+        account=account,
+        at=checked_at,
+        policy=policy,
+        strategy=strategy,
+        _infrastructure_learning=True,
+    )
+    if ticket.status is RiskTicketStatus.AWAITING_APPROVAL:
+        assert ticket.plan is not None
+        entry = ticket.plan.entry
+        assert entry.price_bound is not None
+        notional = entry.quantity * entry.price_bound
+        if (
+            ticket.stressed_loss > grant.max_loss
+            or notional > grant.max_notional
+            or entry.leverage is None
+            or entry.leverage > grant.max_leverage
+        ):
+            raise ValidationError("learning ticket exceeds infrastructure grant caps")
+    return ticket
+
+
 def _parse_instant(value: object, field: str) -> datetime:
     if not isinstance(value, str) or not value or value != value.strip():
         raise ValidationError(f"{field} must be an ISO-8601 string")
@@ -916,6 +990,7 @@ __all__ = (
     "RiskTicket",
     "RiskTicketStatus",
     "quote_risk_ticket",
+    "quote_infrastructure_learning_ticket",
     "protected_trade_plan_from_dict",
     "risk_ticket_from_dict",
 )

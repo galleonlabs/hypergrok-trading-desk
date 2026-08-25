@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import nullcontext
 from datetime import timedelta
 import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
 from trading_harness import hyperliquid_transport
 from trading_harness.errors import StateConflict
+from trading_harness.domain import Environment
+from trading_harness.execution_store import (
+    EntrySubmissionAuthority,
+    ExecutionStore,
+)
 from trading_harness.hyperliquid_transport import (
     HttpExchangeResponse,
     HyperliquidSubmissionError,
@@ -15,7 +23,7 @@ from trading_harness.hyperliquid_transport import (
     SubmissionOutcome,
     submit_signed_action,
 )
-from trading_harness.hyperliquid_signer import sign_recovery_action
+from trading_harness.hyperliquid_signer import SignedActionEnvelope, sign_recovery_action
 from trading_harness.hyperliquid_wire import HyperliquidNetwork
 from tests.test_execution_store import ExecutionStoreTestCase
 from tests.test_hyperliquid_signer import (
@@ -43,12 +51,62 @@ class FakeSender:
 
 
 def submit(signed, sender, *, clock, **kwargs):
-    with mock.patch.object(
-        hyperliquid_transport,
-        "_default_sender",
-        side_effect=sender,
-    ):
-        return submit_signed_action(signed, clock=clock, **kwargs)
+    if isinstance(signed, SignedActionEnvelope) and "store" not in kwargs:
+        temporary = tempfile.TemporaryDirectory()
+        store = ExecutionStore(
+            Path(temporary.name) / "execution.sqlite3",
+            environment=Environment.TESTNET,
+            account_id=signed.account_id,
+            max_reserved_loss="100",
+            max_reserved_notional="10000",
+        )
+        command_id = "command-1"
+        attempt_id = "attempt-1"
+        try:
+            evidence_hash = signed.execution_store_evidence(command_id).evidence_hash
+        except Exception:
+            evidence_hash = "b" * 64
+        authority = EntrySubmissionAuthority(
+            command_id=command_id,
+            attempt_id=attempt_id,
+            signed_evidence_hash=evidence_hash,
+            nonce=signed.nonce,
+            action_hash=signed.action_hash,
+            wire_hash=signed.wire_hash,
+            worker_id="transport-test-worker",
+            fencing_token=1,
+            lease_expires_at=NOW + timedelta(seconds=30),
+            authority_hash="a" * 64,
+        )
+        kwargs = {
+            "store": store,
+            "command_id": command_id,
+            "attempt_id": attempt_id,
+            "signed_evidence_hash": evidence_hash,
+            "worker_id": "transport-test-worker",
+            "fencing_token": 1,
+        }
+        authority_patch = mock.patch.object(
+            ExecutionStore,
+            "require_submission_authority",
+            return_value=authority,
+        )
+    else:
+        temporary = None
+        authority_patch = nullcontext()
+    try:
+        with (
+            authority_patch,
+            mock.patch.object(
+                hyperliquid_transport,
+                "_default_sender",
+                side_effect=sender,
+            ),
+        ):
+            return submit_signed_action(signed, clock=clock, **kwargs)
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
 
 
 def successful_response(endpoint: str) -> HttpExchangeResponse:
@@ -71,6 +129,67 @@ def successful_response(endpoint: str) -> HttpExchangeResponse:
 
 
 class SingleAttemptTransportTests(unittest.TestCase):
+    def test_protected_submission_requires_and_consumes_durable_authority(self) -> None:
+        signed = make_signed()
+        sender = FakeSender(successful_response(signed.exchange_url))
+        with mock.patch.object(
+            hyperliquid_transport, "_default_sender", side_effect=sender
+        ):
+            with self.assertRaisesRegex(
+                HyperliquidSubmissionError, "durable authority"
+            ):
+                submit_signed_action(signed, clock=lambda: NOW)
+        self.assertEqual([], sender.calls)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = ExecutionStore(
+                Path(directory) / "execution.sqlite3",
+                environment=Environment.TESTNET,
+                account_id=signed.account_id,
+                max_reserved_loss="100",
+                max_reserved_notional="10000",
+            )
+            evidence = signed.execution_store_evidence("command-1")
+            authority = EntrySubmissionAuthority(
+                command_id="command-1",
+                attempt_id="attempt-1",
+                signed_evidence_hash=evidence.evidence_hash,
+                nonce=signed.nonce,
+                action_hash=signed.action_hash,
+                wire_hash=signed.wire_hash,
+                worker_id="worker-1",
+                fencing_token=1,
+                lease_expires_at=NOW + timedelta(seconds=30),
+                authority_hash="c" * 64,
+            )
+            arguments = {
+                "store": store,
+                "command_id": "command-1",
+                "attempt_id": "attempt-1",
+                "signed_evidence_hash": evidence.evidence_hash,
+                "worker_id": "worker-1",
+                "fencing_token": 1,
+            }
+            with (
+                mock.patch.object(
+                    ExecutionStore,
+                    "require_submission_authority",
+                    side_effect=[
+                        authority,
+                        StateConflict("authority already consumed"),
+                    ],
+                ),
+                mock.patch.object(
+                    hyperliquid_transport,
+                    "_default_sender",
+                    side_effect=sender,
+                ),
+            ):
+                submit_signed_action(signed, clock=lambda: NOW, **arguments)
+                with self.assertRaises(StateConflict):
+                    submit_signed_action(signed, clock=lambda: NOW, **arguments)
+        self.assertEqual(1, len(sender.calls))
+
     def test_posts_exact_frozen_wire_once_to_network_endpoint(self) -> None:
         signed = make_signed()
         sender = FakeSender(successful_response(signed.exchange_url))
@@ -537,7 +656,9 @@ class DurableRecoveryTransportTests(ExecutionStoreTestCase):
             **self.recovery_submit_arguments(evidence, prepared, claim),
         )
         self.assertIs(result.outcome, SubmissionOutcome.UNKNOWN)
-        self.assertEqual(result.detail_code, "unexpected_noop_response")
+        self.assertEqual(
+            result.detail_code, "noop_response_not_canonical_default"
+        )
         with self.assertRaisesRegex(HyperliquidSubmissionError, "canonical"):
             result.noop_fence_response_evidence(
                 command.recovery_command_id,

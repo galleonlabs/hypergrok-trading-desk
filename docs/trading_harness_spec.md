@@ -1,7 +1,7 @@
 # Agent-Assisted Trading Harness Specification
 
-Status: Draft v0.4 — research implementation and unqualified TESTNET execution boundary
-Decision date: 2026-08-24
+Status: Draft v0.5 — infrastructure-learning implementation and unqualified TESTNET worker
+Decision date: 2026-08-25
 Upstream source: [`galleonlabs/hypergrok-trading-desk`](https://github.com/galleonlabs/hypergrok-trading-desk)
 Working fork: [`jawndiego/hypergrok-trading-desk`](https://github.com/jawndiego/hypergrok-trading-desk)
 Verified fork `main`: `62cbe227a2ec531e0efa37254d4b6fae043fbfe5`
@@ -50,14 +50,21 @@ The implemented research interface must let a user:
 3. Separate descriptive TA from the frozen registered strategy result.
 4. Add sourced sentiment through either an explicit manual X session or a future compliant API collector.
 5. Receive exactly `buy`, `sell`, `nothing`, or `unavailable`, with machine-readable blockers.
-6. Run costed historical validation and require prospective shadow evidence before profitability promotion.
-7. Reach a deterministic risk ticket only from an active, hash-matched profitability attestation and fresh flat-account snapshot.
+6. Run costed historical validation when making an edge/profitability claim.
+7. For an explicitly requested infrastructure-learning experiment, stage a
+   deterministic TESTNET ticket from an exact saved directional analysis, an
+   active bounded grant, complete fresh daily-loss evidence and a fresh flat
+   account without claiming profitability.
 8. Carry an entry, reduce-only stop and take-profit in every risk-increasing plan.
+9. Persist analyses, abstentions, tickets, approval/execution references,
+   fills, fees, latency, venue-reported PnL and post-trade reviews by exact
+   component version.
 
 The always-on research node is credential-free and permanently records
 `capability=research_only` and `risk_gate=halted`. Codex, ChatGPT and OpenCode
-may write the local asset registry and sentiment evidence, but they cannot
-create a trusted approval, access the signer, or write to Hyperliquid.
+may write the local asset registry, sentiment, analysis, learning and
+non-authoritative staging records, but they cannot create a trusted approval,
+reserve risk, access the signer, or write to Hyperliquid.
 
 Manual use of the user's signed-in X browser is interactive only. The harness
 does not script the website, store cookies/tokens/raw post text, or treat manual
@@ -74,7 +81,11 @@ The first implemented `candidate-v0/1` ETH 4h evaluation was `REJECTED` on
 2026-08-24: 116 trades, -0.0331R net expectancy, 0.9401 profit factor,
 -0.2484R one-sided bootstrap lower bound, 19.4628R maximum drawdown and
 negative stressed expectancy. The harness must retain that failure and refuse
-to trade it. It may not optimize the inspected window until it passes.
+to label the rule profitable or grant strategy/mainnet authority. It may still
+run a small attended TESTNET infrastructure-learning experiment under an
+explicit `profitability_qualified: false` grant, because that experiment is
+collecting mechanics/process evidence rather than claiming edge. It may not
+optimize the inspected window until a new preregistered evaluation permits it.
 
 `SMA-outfits` is currently a draft hypothesis source only. The reviewed commit
 contains a README and license but no advertised data or scripts, and it does
@@ -86,14 +97,55 @@ not define complete entry/exit/stop/cost rules. See
 The deterministic core must not import, invoke, or depend on ChatGPT, Codex, Grok, Claude, or another model runtime.
 
 - ChatGPT and Codex are the first supported interfaces through the installable [`trading-desk` plugin](../plugins/trading-desk), repository [`AGENTS.md`](../AGENTS.md), and six focused packaged skills. ChatGPT and Codex share the same plugin and typed MCP contract.
-- OpenCode is a compatible second interface over a byte-identical mirror under `.agents/skills` and the same local MCP server. Its checked-in [`opencode.json`](../opencode.json) defaults to `ask`, denies external-directory and sensitive-file access, omits a model/provider, allows the reviewed read tools by exact name, and keeps the three local research writes at `ask` and unavailable to plan mode.
+- OpenCode is a compatible second interface over a byte-identical mirror under `.agents/skills` and the same local MCP server. Its checked-in [`opencode.json`](../opencode.json) defaults to `ask`, denies external-directory and sensitive-file access, omits a model/provider, allows the reviewed read tools by exact name, and keeps local research/staging writes at `ask` and unavailable to plan mode.
 - Repository skills contain workflow guidance only; they call typed core interfaces and cannot confer credentials, evidence status, deployment grants, or exchange authority.
-- The current eleven-tool MCP surface adds asset tracking, manual sentiment persistence, deterministic analysis, historical validation and node status to harness status, public briefs and intent hashing. Its only mutations are local research state. It cannot read credentials, authorize or admit an intent, reserve exposure, sign, or write to a venue.
+- The current fifteen-tool MCP surface adds asset tracking, manual sentiment persistence, immutable deterministic analysis, historical validation, non-authoritative staging, learning review and node status to harness status, public briefs and intent hashing. Its only mutations are local research/learning/staging state. It cannot read the API wallet, authorize or admit an intent, reserve exposure, sign, or write to a venue.
 - Future private data, authentication, authorization, and controlled actions belong in narrow server-side tools rather than skill prose. Any write tool requires a separate qualification milestone and must enforce its own authorization at the side-effect boundary.
 - The same domain, validation, risk, admission, OMS, ledger, and adapter APIs must work without any agent attached.
 - Removing or replacing the agent interface must not change deterministic results or capital-path behavior.
 
 This follows the official Codex model: [`AGENTS.md`](https://learn.chatgpt.com/docs/agent-configuration/agents-md) for durable repository guidance, [repo skills](https://learn.chatgpt.com/docs/build-skills) for focused repeatable workflows, and a [plugin/MCP server](https://developers.openai.com/plugins/concepts/plugins) only when installable connected tools are needed. OpenCode documents the same [`AGENTS.md`](https://opencode.ai/docs/rules/) and [`.agents/skills`](https://opencode.ai/docs/skills/) conventions.
+
+### 2.4 Current infrastructure-learning loop
+
+The implemented loop is intentionally asymmetric:
+
+1. Agent-facing tools save an exact analysis and append its BUY/SELL/NOTHING/
+   UNAVAILABLE decision cycle.
+2. `stage_trade_candidate` accepts only asset ID, exact analysis hash and an
+   idempotency key. All economic fields come from the trusted quote callback;
+   every authority flag is structurally false.
+3. A signed TESTNET infrastructure grant is account-, instrument-, policy-,
+   cap- and time-bound for at most 24 hours. It states that profitability and
+   mainnet authority are false. The research process treats it only as a
+   non-authoritative quote scope; the control process authenticates its MAC.
+4. A separate operator CLI reads the active staged ticket, displays its exact
+   mandatory-stop bracket and accepts confirmation only from `/dev/tty`. This
+   is attended TESTNET friction, not human cryptographic authentication; the
+   agent and control UIDs must be separate.
+5. The execution store registers the grant/ticket/opaque verified approval,
+   atomically consumes approval, reserves risk and queues exactly one command.
+6. The isolated worker synchronizes fills/funding to a fresh exact watermark,
+   performs startup reconciliation, then serializes recovery, protection,
+   safety and entry. Unknown writes are never retried without reconciliation.
+7. Execution state and complete parent/recovery-fill economics are projected into the
+   immutable learning ledger. Review remains descriptive and flags missing
+   funding, market-path or close evidence rather than inventing it.
+8. The agent process has no filesystem capability for execution, nonce,
+   daily-loss or control state. Agent quotes defer daily loss; a one-tick
+   executor capability is minted only by a complete authoritative refresh and
+   is required at the actual entry-dispatch decision.
+9. Parent and recovery reads begin at exact venue-server source snapshot
+   watermarks. Venue evidence time and local mutation/lease time are distinct;
+   canonical parent/recovery fills are attributed into one continuous position
+   chain, persisted once and never hidden as unmatched account activity.
+
+The MCP server never exposes approval, admission, signing, cancellation,
+flattening or venue-write tools. The separate executor config accepts only
+TESTNET and has distinct signer, approval, recovery and grant Keychain
+references. Dynamic plan CLOIDs are trusted only from the exact durable
+three-leg plan; flatten CLOIDs are domain-separated derivatives of the exact
+incident and fresh position snapshot and are rechecked by the live signer.
 
 ## 3. Why HyperGrok Is Unsafe for Mainnet As-Is
 
@@ -329,6 +381,22 @@ Model orthogonal dimensions rather than one overloaded status:
 
 Legal transitions and cross-dimension invariants must cover partially-filled-then-canceled orders and every replacement/trigger path. Venue events are deduplicated and ordered by explicit precedence rules; corrections append compensating records rather than rewriting history. Contradictory venue reports fail closed for new risk and remain unresolved until reconciled.
 
+Fill identity is the canonical venue tuple (time, transaction hash, trade ID,
+order ID), not caller text. Parent and reduce-only recovery fills share one
+global ownership namespace. A recovery order reported missing is not safely
+absent until its signed expiry plus settlement grace and complete coverage at
+that cutoff; open or otherwise nonterminal recovery orders keep parent risk
+reserved. Reconciliation acquires its mutation lease only after read/parse
+validation and uses a fresh local mutation time, separately preserving the
+venue snapshot cutoff.
+
+An entry's final runtime capability is revocable through preflight and signing.
+The dispatcher must enter the runtime submission guard immediately before the
+store consumes the one-shot submission authority; that guard is held through
+the bounded transport call. Entering it is the point of no return: a shutdown
+or manual halt observed earlier prevents the send, while one arriving after it
+waits for that single attempt to finish and then drains/reconciles it.
+
 ## 6. Thesis Validation Is a Mandatory Gate
 
 Every strategy, indicator, event rule, agent-generated idea, or imported framework begins as an unvalidated thesis. This includes the SMA configurations documented by `unfairmarket/SMA-outfits`.
@@ -541,12 +609,16 @@ Generic cancel-all is forbidden while positions remain if it would remove protec
 
 Grants are capability-, environment-, account-, and thesis-version-specific, reversible, expiring, and recorded. Mainnet is never inferred from successful testnet operation. Testnet validates mechanics; it does not establish mainnet liquidity or execution quality. Infrastructure qualification may use synthetic strategies, but strategy-specific exchange activity requires the corresponding thesis and deployment grant.
 
-The current foundation implements local `infrastructure_testnet` admission and
-an isolated Hyperliquid TESTNET writer/recovery boundary, but no live
-qualification or model-facing execution grant. Strategy-specific admission
-still requires a qualified profitability/shadow attestation. Every mainnet and
-systematic grant remains rejected until its evidence, governance, attestation,
-qualification, and deployment milestones are implemented.
+The current foundation implements an authenticated, expiring
+`infrastructure_learning` TESTNET grant, non-authoritative model-facing
+staging, direct-terminal per-ticket approval, atomic admission and an isolated
+Hyperliquid writer/recovery worker. It has not completed live qualification.
+Infrastructure-learning tickets explicitly bypass profitability qualification
+only to collect small attended TESTNET mechanics/process evidence; they cannot
+be reinterpreted as strategy, systematic or mainnet authority. Strategy
+promotion still requires qualified profitability/shadow evidence. Every
+mainnet and systematic grant remains rejected until its evidence, governance,
+attestation, qualification, and deployment milestones are implemented.
 
 ## 9. Fork and Audit Plan
 
@@ -691,9 +763,11 @@ Systematic operation inherits all technical, security, account-safety, reconcili
 4. **Trade kernel:** implement canonical schemas, risk engine, authorization service, OMS, outbox, and ledger.
 5. **Signer and adapter:** add isolated signing and one pinned venue SDK behind an adapter.
 6. **Reconciliation and protection:** implement independent watchers, recovery, incidents, and paging.
-7. **Testnet qualification:** rehearse every supported action and fault scenario.
-8. **Capped mainnet:** use a dedicated funded account with per-ticket approval and conservative limits.
-9. **Systematic qualification:** promote only frozen validated strategies into expiring policy envelopes.
+7. **Learning loop:** bind saved analyses through non-authoritative staging and
+   attended admission to immutable execution/fill reviews.
+8. **Testnet qualification:** rehearse every supported action and fault scenario.
+9. **Capped mainnet:** future separate architecture using a dedicated funded account with per-ticket approval and conservative limits.
+10. **Systematic qualification:** promote only frozen validated strategies into expiring policy envelopes.
 
 ## 14. Definition of Done
 
@@ -709,5 +783,7 @@ The harness is complete only when a reviewer can reproduce and prove, from immut
 - How the system recovered from missing or contradictory responses.
 - Whether protection remained aligned with exposure.
 - What the trade cost and whether process and outcome met their separate criteria.
+- Which abstentions and unavailable decisions occurred under the same exact
+  versions, so selection and opportunity costs are not silently discarded.
 
 An agent's assertion is never the final evidence for any of these questions.

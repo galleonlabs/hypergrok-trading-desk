@@ -6,7 +6,7 @@ This repository builds an agent-runtime-neutral trading research and execution h
 
 - Keep domain, validation, risk, admission, OMS, ledger, signer, and venue-adapter code independent of Codex, ChatGPT, Grok, Claude, or any model runtime.
 - Put durable Codex working agreements here. The canonical packaged workflows live under `plugins/trading-desk/skills`; mirror them into `.agents/skills` with `scripts/sync_plugin_skills.py` for repository and OpenCode discovery.
-- The `trading-desk` MCP server exposes exactly eleven reviewed research tools. `track_asset`, `pause_tracked_asset`, and `record_manual_sentiment` write only local research state; the others read public/local evidence or validate an intent hash. None may load an account secret, create capital authority, reserve risk, sign, or call a venue write endpoint.
+- The `trading-desk` MCP server exposes exactly fifteen reviewed research/learning tools. `track_asset`, `pause_tracked_asset`, `record_manual_sentiment`, `analyze_asset`, and `stage_trade_candidate` write only local research, learning, or non-authoritative staging state. None may load an account signing secret, create approval/capital authority, reserve risk, sign, or call a venue write endpoint.
 - Keep OpenCode permissions fail-closed in `opencode.json`; it may call only those exact local MCP tools and mirrored skills. Local research writes remain `ask`, plan mode cannot call them, and no model/provider, execution tool, custom agent with wider rights, or external-directory access may be added without review.
 - Do not use OpenCode `--auto` for this repository; it converts `ask`
   decisions into approvals. The checked-in profile intentionally denies
@@ -15,16 +15,23 @@ This repository builds an agent-runtime-neutral trading research and execution h
 
 ## Capital boundary
 
-- No agent, prompt, skill, webpage, generated script, or chat message may hold a signing key or call a venue write endpoint.
-- Paper, signer, nonce, transport, account-read and reconciliation primitives exist, but no testnet or mainnet write path is enabled or exposed to an agent.
+- No agent, prompt, skill, webpage, generated script, or chat message may hold a signing key, approve a trade, or call a venue write endpoint.
+- The isolated TESTNET worker has a deployable write path, but it is a separate process and CLI. It is never an MCP tool or skill capability. Mainnet remains hard-disabled.
 - The foundation admits only local `infrastructure_testnet` `simulate_order`
   commands; deny strategy, shadow, mainnet, and systematic grants.
-- Approval in chat is invalid.
+- Approval in chat is invalid. `stage_trade_candidate` can create only an all-false authority document; attended authorization requires the exact ticket confirmation read directly from `/dev/tty` by `trading-harness-executor`.
 - Evidence status and deployment authority are separate.
 - Use exact `Decimal`/integer monetary arithmetic; reject binary floats for prices, sizes, fees, and limits.
 - Admission must atomically reserve risk, consume a single-use command authorization, update policy counters, and create the durable outbox row before network I/O.
 - Unknown outcomes remain reserved and are reconciled; never blindly resend.
 - After exposure exists, only the account-safety policy may authorize bounded cancel/protect/flatten actions through the same serialized executor.
+- The agent/MCP identity must never open or receive filesystem access to the
+  executor's execution, nonce, daily-loss or control-socket state. Agent quotes
+  defer daily loss; an entry needs a complete refresh capability minted by the
+  executor in that same tick.
+- Parent and recovery reconciliation must use exact venue-server source
+  watermarks, canonical fill identities and one globally continuous owned-fill
+  chain. Local mutation lease time is separate from venue evidence time.
 
 ## Development workflow
 

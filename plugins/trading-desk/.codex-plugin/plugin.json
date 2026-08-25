@@ -1,7 +1,7 @@
 {
   "name": "trading-desk",
   "version": "0.2.0",
-  "description": "Asset tracking, deterministic market research, sentiment evidence, and validation for the trading harness.",
+  "description": "Asset tracking, deterministic research, sentiment evidence, TESTNET learning-ticket staging, and immutable trade review.",
   "author": {
     "name": "JawnDiego",
     "url": "https://github.com/jawndiego"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Trading Desk",
     "shortDescription": "Track and assess markets through deterministic research.",
-    "longDescription": "A ChatGPT and Codex interface for local asset tracking, completed-candle TA, manual or API sentiment evidence, registered buy/sell/nothing signals, costed profitability validation, public market briefs, and intent hashing. Local research records may be written; credentials, trade authorization, signing, and venue writes remain unavailable.",
+    "longDescription": "A ChatGPT and Codex interface for local asset tracking, completed-candle TA, sourced sentiment evidence, registered buy/sell/nothing signals, optional validation, public market briefs, non-authoritative TESTNET learning-ticket staging, and immutable post-trade review. Credentials, approval, signing, and venue writes remain outside the plugin.",
     "developerName": "JawnDiego",
     "category": "Finance",
     "capabilities": [
@@ -31,7 +31,8 @@
     "defaultPrompt": [
       "Track ETH and assess whether the registered setup is buy, sell, or nothing.",
       "Record this manual X sentiment sample and analyze ETH.",
-      "Run the costed historical validation for the registered candidate."
+      "Run the costed historical validation for the registered candidate.",
+      "Stage the exact directional analysis as a bounded TESTNET learning ticket, without approving it."
     ]
   }
 }

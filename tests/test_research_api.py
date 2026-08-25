@@ -163,6 +163,15 @@ class ResearchServiceTests(unittest.TestCase):
         self.assertFalse(result["profitability_attested"])
         self.assertFalse(result["venue_writes_enabled"])
         self.assertFalse(result["order_submitted"])
+        self.assertRegex(result["analysis_hash"], r"^[0-9a-f]{64}$")
+        self.assertRegex(result["analysis_record_hash"], r"^[0-9a-f]{64}$")
+        persisted = self.store.get_asset_analysis(result["analysis_hash"])
+        self.assertEqual(result["analysis_hash"], persisted.analysis_hash)
+        self.assertEqual("eth", persisted.asset_id)
+        self.assertEqual(
+            result["registered_signal"]["signal_hash"],
+            persisted.signal_hash,
+        )
 
     def test_missing_sentiment_is_unavailable_for_directional_signal_while_ta_remains_visible(self) -> None:
         self.track()

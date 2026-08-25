@@ -8,11 +8,17 @@ The module is not exposed through MCP or the research CLI.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ContextManager
 
-from .errors import StateConflict, ValidationError
+from .errors import (
+    AdmissionDenied,
+    EntrySubmissionRevoked,
+    StateConflict,
+    ValidationError,
+)
 from .execution_store import (
     CommandRecord,
     DispatchPreflight,
@@ -53,6 +59,7 @@ Signer = Callable[
     ],
     SignedActionEnvelope,
 ]
+SubmissionGuard = Callable[[], ContextManager[None]]
 
 
 def _clock() -> datetime:
@@ -133,6 +140,29 @@ class DispatchResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchDenialResult:
+    command_id: str
+    outcome: str
+    command_state: str
+    detail_code: str
+    venue_write_attempted: bool = False
+    retry_performed: bool = False
+    reconciliation_required: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "execution_dispatch_denial.v1",
+            "command_id": self.command_id,
+            "outcome": self.outcome,
+            "command_state": self.command_state,
+            "detail_code": self.detail_code,
+            "venue_write_attempted": self.venue_write_attempted,
+            "retry_performed": self.retry_performed,
+            "reconciliation_required": self.reconciliation_required,
+        }
+
+
 class ExecutionDispatcher:
     """Claim, preflight, sign, persist-before-send, send once, and hand off."""
 
@@ -144,6 +174,7 @@ class ExecutionDispatcher:
         signer: Signer,
         clock: Clock = _clock,
         lease_seconds: int = 15,
+        submission_guard: SubmissionGuard | None = None,
     ) -> None:
         if not isinstance(store, ExecutionStore):
             raise TypeError("store must be ExecutionStore")
@@ -154,13 +185,16 @@ class ExecutionDispatcher:
         ):
             if not callable(value):
                 raise TypeError(f"{field} must be callable")
-        if type(lease_seconds) is not int or not 5 <= lease_seconds <= 60:
-            raise ValidationError("lease_seconds must be an integer from 5 to 60")
+        if type(lease_seconds) is not int or not 5 <= lease_seconds <= 180:
+            raise ValidationError("lease_seconds must be an integer from 5 to 180")
         self.store = store
         self.preparer = preparer
         self.signer = signer
         self.clock = clock
         self.lease_seconds = lease_seconds
+        if submission_guard is not None and not callable(submission_guard):
+            raise TypeError("submission_guard must be callable or None")
+        self.submission_guard = submission_guard
 
     def _now(self) -> datetime:
         try:
@@ -169,7 +203,9 @@ class ExecutionDispatcher:
             raise ValidationError(f"dispatcher clock failed: {type(error).__name__}") from error
         return _utc(value, "dispatcher clock")
 
-    def dispatch_next(self, worker_id: str) -> DispatchResult | None:
+    def dispatch_next(
+        self, worker_id: str
+    ) -> DispatchResult | DispatchDenialResult | None:
         claim_time = self._now()
         outbox = self.store.claim_next(
             worker_id,
@@ -187,20 +223,39 @@ class ExecutionDispatcher:
         )
         if ticket.plan != plan:
             raise StateConflict("persisted ticket and plan payloads disagree")
-        prepared_at = self._now()
-        package = self.preparer(command, ticket, plan, prepared_at)
-        if not isinstance(package, DispatchPackage):
-            raise TypeError("preparer must return DispatchPackage")
-        if (
-            package.preflight.command_id != command.command_id
-            or package.preflight.ticket_hash != command.ticket_hash
-            or package.preflight.plan_hash != command.plan_hash
-        ):
-            raise StateConflict("dispatch package targets another command")
-        preflight = self.store.register_preflight(
-            package.preflight,
-            at=self._now(),
-        )
+        try:
+            prepared_at = self._now()
+            package = self.preparer(command, ticket, plan, prepared_at)
+            if not isinstance(package, DispatchPackage):
+                raise TypeError("preparer must return DispatchPackage")
+            if (
+                package.preflight.command_id != command.command_id
+                or package.preflight.ticket_hash != command.ticket_hash
+                or package.preflight.plan_hash != command.plan_hash
+            ):
+                raise StateConflict("dispatch package targets another command")
+            preflight = self.store.register_preflight(
+                package.preflight,
+                at=self._now(),
+            )
+        except (AdmissionDenied, StateConflict, ValidationError) as error:
+            terminal = self.store.void_unsent_command(
+                command.command_id,
+                reason="preflight_permanent_failure:" + type(error).__name__,
+                at=self._now(),
+                worker_id=worker_id,
+                fencing_token=outbox.fencing_token,
+            )
+            return DispatchDenialResult(
+                command_id=command.command_id,
+                outcome="preflight_denied",
+                command_state=terminal.state,
+                detail_code=(
+                    error.code
+                    if isinstance(error, AdmissionDenied)
+                    else type(error).__name__
+                ),
+            )
         try:
             signed = self.signer(
                 package.protected_action,
@@ -231,18 +286,27 @@ class ExecutionDispatcher:
                 command.command_id,
                 reason="signing_or_binding_failure:" + type(error).__name__,
                 at=self._now(),
+                worker_id=worker_id,
+                fencing_token=outbox.fencing_token,
             )
             raise
         attempt_id = f"dispatch-{command.command_id}-{signed.wire_hash[:24]}"
         signed_evidence = signed.execution_store_evidence(command.command_id)
         attempt_time = self._now()
         if attempt_time >= preflight.expires_at:
-            self.store.void_unsent_command(
+            terminal = self.store.void_unsent_command(
                 command.command_id,
                 reason="dispatch_preflight_expired_before_attempt",
                 at=attempt_time,
+                worker_id=worker_id,
+                fencing_token=outbox.fencing_token,
             )
-            raise StateConflict("dispatch preflight expired before attempt preparation")
+            return DispatchDenialResult(
+                command_id=command.command_id,
+                outcome="preflight_expired",
+                command_state=terminal.state,
+                detail_code="dispatch_preflight_expired_before_attempt",
+            )
         self.store.prepare_attempt(
             command.command_id,
             worker_id,
@@ -255,7 +319,38 @@ class ExecutionDispatcher:
             wire_hash=signed.wire_hash,
             at=attempt_time,
         )
-        transport = submit_signed_action(signed, clock=self.clock)
+        guard = (
+            nullcontext()
+            if self.submission_guard is None
+            else self.submission_guard()
+        )
+        try:
+            with guard:
+                transport = submit_signed_action(
+                    signed,
+                    store=self.store,
+                    command_id=command.command_id,
+                    attempt_id=attempt_id,
+                    signed_evidence_hash=signed_evidence.evidence_hash,
+                    worker_id=worker_id,
+                    fencing_token=outbox.fencing_token,
+                    clock=self.clock,
+                )
+        except EntrySubmissionRevoked:
+            terminal = self.store.void_unsent_command(
+                command.command_id,
+                reason="runtime_submission_capability_revoked",
+                at=self._now(),
+                worker_id=worker_id,
+                fencing_token=outbox.fencing_token,
+                prepared_attempt_id=attempt_id,
+            )
+            return DispatchDenialResult(
+                command_id=command.command_id,
+                outcome="submission_revoked",
+                command_state=terminal.state,
+                detail_code="runtime_submission_capability_revoked",
+            )
         if not isinstance(transport, SubmissionAttempt):
             raise TypeError("transport must return SubmissionAttempt")
         transport.verify_integrity()
@@ -380,6 +475,7 @@ class ExecutionDispatcher:
 
 __all__ = (
     "DispatchPackage",
+    "DispatchDenialResult",
     "DispatchResult",
     "ExecutionDispatcher",
 )

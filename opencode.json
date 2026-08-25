@@ -39,7 +39,15 @@
       "trading-harness doctor*": "allow",
       "git commit*": "ask",
       "git push*": "deny",
-      "rm *": "deny"
+      "rm *": "deny",
+      "*;*": "deny",
+      "*&&*": "deny",
+      "*||*": "deny",
+      "*|*": "deny",
+      "*>*": "deny",
+      "*<*": "deny",
+      "*$(*": "deny",
+      "*`*": "deny"
     },
     "external_directory": "deny",
     "skill": {
@@ -52,14 +60,18 @@
       "test-strategy": "allow"
     },
     "trading_desk_*": "deny",
-    "trading_desk_analyze_asset": "allow",
+    "trading_desk_analyze_asset": "ask",
     "trading_desk_get_latest_sentiment": "allow",
+    "trading_desk_get_learning_review": "allow",
+    "trading_desk_get_learning_summary": "allow",
     "trading_desk_get_node_status": "allow",
     "trading_desk_get_harness_status": "allow",
     "trading_desk_get_market_brief": "allow",
+    "trading_desk_get_trade_stage": "allow",
     "trading_desk_list_tracked_assets": "allow",
     "trading_desk_pause_tracked_asset": "ask",
     "trading_desk_record_manual_sentiment": "ask",
+    "trading_desk_stage_trade_candidate": "ask",
     "trading_desk_track_asset": "ask",
     "trading_desk_validate_candidate_profitability": "allow",
     "trading_desk_validate_trade_intent": "allow",
@@ -84,11 +96,13 @@
           "test-strategy": "allow"
         },
         "trading_desk_*": "deny",
-        "trading_desk_analyze_asset": "allow",
         "trading_desk_get_latest_sentiment": "allow",
+        "trading_desk_get_learning_review": "allow",
+        "trading_desk_get_learning_summary": "allow",
         "trading_desk_get_node_status": "allow",
         "trading_desk_get_harness_status": "allow",
         "trading_desk_get_market_brief": "allow",
+        "trading_desk_get_trade_stage": "allow",
         "trading_desk_list_tracked_assets": "allow",
         "trading_desk_validate_candidate_profitability": "allow",
         "trading_desk_validate_trade_intent": "allow",
@@ -99,12 +113,8 @@
   },
   "mcp": {
     "trading_desk": {
-      "type": "local",
-      "command": [
-        "python3",
-        "plugins/trading-desk/server.py"
-      ],
-      "cwd": ".",
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp",
       "enabled": true,
       "timeout": 30000
     }

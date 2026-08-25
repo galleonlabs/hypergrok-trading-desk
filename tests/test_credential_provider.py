@@ -142,6 +142,31 @@ class SuccessfulLoadTests(unittest.TestCase):
         self.assertIsInstance(wallet, FakeWallet)
         self.assertEqual(received, ["0x" + PRIVATE_KEY])
 
+    def test_explicit_system_keychain_path_is_bound_into_argv(self) -> None:
+        result = BoundedCommandResult(
+            0, bytearray((PRIVATE_KEY + "\n").encode()), bytearray()
+        )
+        runner = FakeRunner(result)
+        selected = MacOSKeychainCredentialProvider(
+            KeychainCredentialConfig(
+                SERVICE,
+                ACCOUNT,
+                EXPECTED,
+                keychain_path="/Library/Keychains/System.keychain",
+            ),
+            _runner=runner,
+            _wallet_factory=lambda _key: FakeWallet(),
+            _version_reader=versions(),
+            _platform_system=lambda: "Darwin",
+        )
+
+        selected.load_wallet()
+
+        self.assertEqual(
+            "/Library/Keychains/System.keychain",
+            runner.calls[0][0][-1],
+        )
+
     def test_status_is_static_redacted_and_performs_no_lookup(self) -> None:
         runner = FakeRunner(AssertionError("must not run"))
         selected = provider(runner)

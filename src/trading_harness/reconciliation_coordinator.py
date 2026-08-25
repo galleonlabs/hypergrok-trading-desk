@@ -41,6 +41,7 @@ from .hyperliquid_reconcile import (
     VenueOrderState,
     VenueReconciliationBundle,
     reconcile_hyperliquid_venue,
+    canonical_hyperliquid_fill_id,
 )
 from .hyperliquid_wire import HyperliquidNetwork
 from .market_data import post_public_info
@@ -117,6 +118,12 @@ def _bundle_material(bundle: VenueReconciliationBundle) -> dict[str, object]:
         "observed_at": bundle.observed_at,
         "order_statuses": [item.canonical_record() for item in bundle.order_statuses],
         "signed_fills": [item.canonical_record() for item in bundle.signed_fills],
+        "auxiliary_order_statuses": [
+            item.canonical_record() for item in bundle.auxiliary_order_statuses
+        ],
+        "auxiliary_fills": [
+            item.canonical_record() for item in bundle.auxiliary_fills
+        ],
         "fill_coverage": bundle.fill_coverage.as_dict(),
         "legs": [item.as_dict() for item in bundle.legs],
         "signed_position_quantity": canonical_decimal(
@@ -239,6 +246,7 @@ class HyperliquidVenueReconciler:
         network: HyperliquidNetwork,
         fills_start_time_ms: int,
         fills_end_time_ms: int | None = None,
+        store: ExecutionStore | None = None,
     ) -> VenueReconciliationBundle:
         bundle = reconcile_hyperliquid_venue(
             snapshot,
@@ -251,6 +259,7 @@ class HyperliquidVenueReconciler:
             fills_end_time_ms=fills_end_time_ms,
             transport=self.transport,
             clock=self.clock,
+            store=store,
         )
         if not isinstance(bundle, VenueReconciliationBundle):
             raise TypeError("venue reconciler did not return VenueReconciliationBundle")
@@ -344,15 +353,10 @@ class MainEntryReconciliationCoordinator:
             raise TypeError("reconciler must be HyperliquidVenueReconciler")
         if not isinstance(snapshot, HyperliquidAccountSnapshot):
             raise TypeError("snapshot must be HyperliquidAccountSnapshot")
-        command = self.store.get_command(command_id)
-        owned = _owned_legs(self.store, command_id, snapshot)
-        bundle = reconciler.reconcile(
+        bundle = self.read_bundle(
+            reconciler,
             snapshot,
-            owned,
-            account_id=self.store.account_id,
-            command_id=command.command_id,
-            plan_hash=command.plan_hash,
-            network=self.network,
+            command_id=command_id,
             fills_start_time_ms=fills_start_time_ms,
             fills_end_time_ms=fills_end_time_ms,
         )
@@ -362,6 +366,35 @@ class MainEntryReconciliationCoordinator:
             worker_id=worker_id,
             fencing_token=fencing_token,
             reconciliation_id=reconciliation_id,
+        )
+
+    def read_bundle(
+        self,
+        reconciler: HyperliquidVenueReconciler,
+        snapshot: HyperliquidAccountSnapshot,
+        *,
+        command_id: str,
+        fills_start_time_ms: int,
+        fills_end_time_ms: int | None = None,
+    ) -> VenueReconciliationBundle:
+        """Perform only allowlisted venue reads before acquiring a mutation lease."""
+
+        if not isinstance(reconciler, HyperliquidVenueReconciler):
+            raise TypeError("reconciler must be HyperliquidVenueReconciler")
+        if not isinstance(snapshot, HyperliquidAccountSnapshot):
+            raise TypeError("snapshot must be HyperliquidAccountSnapshot")
+        command = self.store.get_command(command_id)
+        owned = _owned_legs(self.store, command_id, snapshot)
+        return reconciler.reconcile(
+            snapshot,
+            owned,
+            account_id=self.store.account_id,
+            command_id=command.command_id,
+            plan_hash=command.plan_hash,
+            network=self.network,
+            fills_start_time_ms=fills_start_time_ms,
+            fills_end_time_ms=fills_end_time_ms,
+            store=self.store,
         )
 
     def apply_bundle(
@@ -387,6 +420,9 @@ class MainEntryReconciliationCoordinator:
         reserved_before = self.store.get_reserved_exposure()
         store_arguments = bundle.execution_store_kwargs()
         store_arguments["complete"] = effective_complete
+        store_arguments["mutation_at"] = _EPOCH + timedelta(
+            milliseconds=now_ms
+        )
         applied_reconciliation_id = (
             reconciliation_id
             if fence is None
@@ -406,6 +442,50 @@ class MainEntryReconciliationCoordinator:
             reconciliation_id=applied_reconciliation_id,
             **store_arguments,
         )
+        if (
+            command_after.state == "reconciling"
+            and self.store.get_attempt(bundle.command_id).state == "unknown"
+            and bundle.fill_coverage.complete
+            and not bundle.signed_fills
+            and len(bundle.order_statuses) == 3
+            and all(
+                status.state is VenueOrderState.MISSING
+                for status in bundle.order_statuses
+            )
+            and bundle.signed_position_quantity == _ZERO
+            and not set(item.requested_cloid for item in bundle.order_statuses)
+            & set(order.cloid for order in snapshot.all_open_orders() if order.cloid)
+        ):
+            existing_ambiguity = tuple(
+                item
+                for item in self.store.list_incidents(bundle.command_id)
+                if item.code == "UNKNOWN_SUBMISSION_ALL_CLOIDS_MISSING"
+                and item.state != "closed"
+            )
+            if not existing_ambiguity:
+                attempt = self.store.get_attempt(bundle.command_id)
+                self.store.record_incident(
+                    incident_id=domain_hash(
+                        "trading-harness/unknown-submission-ambiguity/v1",
+                        {
+                            "command_id": bundle.command_id,
+                            "attempt_id": attempt.attempt_id,
+                            "nonce": attempt.nonce,
+                            "action_hash": attempt.action_hash,
+                            "wire_hash": attempt.wire_hash,
+                        },
+                    ),
+                    command_id=bundle.command_id,
+                    code="UNKNOWN_SUBMISSION_ALL_CLOIDS_MISSING",
+                    severity="critical",
+                    at=bundle.observed_at,
+                    details={
+                        "attempt_id": attempt.attempt_id,
+                        "account_snapshot_hash": bundle.account_snapshot_hash,
+                        "venue_reconciliation_hash": bundle.reconciliation_hash,
+                        "requires_same_nonce_fence": True,
+                    },
+                )
         reserved_after = self.store.get_reserved_exposure()
         protection = self.store.get_protection(bundle.command_id)
         terminal = command_after.state == "terminal"
@@ -514,7 +594,11 @@ class MainEntryReconciliationCoordinator:
         if len(venue_fill_by_id) != len(bundle.fills):
             raise StateConflict("bundle contains duplicate VenueFill identities")
         for fill in bundle.signed_fills:
-            if fill.fill_id in fill_ids or fill.role not in owned_by_role:
+            if (
+                fill.fill_id != canonical_hyperliquid_fill_id(fill)
+                or fill.fill_id in fill_ids
+                or fill.role not in owned_by_role
+            ):
                 raise StateConflict("bundle contains duplicate or foreign signed fill")
             fill_ids.add(fill.fill_id)
             leg = owned_by_role[fill.role]
@@ -540,17 +624,211 @@ class MainEntryReconciliationCoordinator:
                 price=fill.price,
                 fee=fill.fee,
                 occurred_at=_EPOCH + timedelta(milliseconds=fill.time_ms),
+                venue_oid=fill.oid,
+                venue_trade_id=fill.tid,
+                transaction_hash=fill.transaction_hash,
+                closed_pnl=fill.closed_pnl,
+                fee_token=fill.fee_token,
+                observed_at=_EPOCH + timedelta(
+                    milliseconds=snapshot.server_time_ms
+                ),
             ):
                 raise StateConflict("VenueFill projection differs from signed fill evidence")
             signed_fills_by_role[fill.role].append(fill)
         if set(venue_fill_by_id) != fill_ids:
             raise StateConflict("bundle VenueFill and signed-fill sets differ")
+        symbol = owned[0].symbol
+        expected_auxiliary = {
+            item.owner_id: item
+            for item in _venue_module._durable_recovery_close_orders(
+                self.store,
+                parent_command_id=bundle.command_id,
+                symbol=symbol,
+            )
+        }
+        observed_auxiliary = {
+            item.order.owner_id: item
+            for item in bundle.auxiliary_order_statuses
+        }
+        if (
+            len(observed_auxiliary) != len(bundle.auxiliary_order_statuses)
+            or set(observed_auxiliary) != set(expected_auxiliary)
+        ):
+            raise StateConflict(
+                "bundle auxiliary order set differs from durable recoveries"
+            )
+        auxiliary_status_oids: dict[int, object] = {}
+        auxiliary_missing_unsettled = False
+        auxiliary_status_nonterminal = False
+        for owner_id, evidence in observed_auxiliary.items():
+            expected_order = expected_auxiliary[owner_id]
+            status = evidence.status
+            if (
+                evidence.order != expected_order
+                or status.requested_cloid != expected_order.cloid
+                or (
+                    status.status_timestamp_ms is not None
+                    and status.status_timestamp_ms > snapshot.server_time_ms
+                )
+            ):
+                raise StateConflict(
+                    "bundle auxiliary status differs from durable recovery"
+                )
+            if status.state is VenueOrderState.ORDER:
+                if (
+                    status.oid is None
+                    or status.symbol != expected_order.symbol
+                    or status.original_size != expected_order.requested_quantity
+                    or status.is_trigger is not expected_order.is_trigger
+                    or status.reduce_only is not expected_order.reduce_only
+                ):
+                    raise StateConflict(
+                        "bundle auxiliary order semantics are inconsistent"
+                    )
+                if status.oid in auxiliary_status_oids:
+                    raise StateConflict("bundle auxiliary venue OID is repeated")
+                auxiliary_status_oids[status.oid] = evidence
+                if (
+                    status.venue_status
+                    not in _venue_module._AUXILIARY_TERMINAL_STATUSES
+                ):
+                    auxiliary_status_nonterminal = True
+            elif any(
+                value is not None
+                for value in (
+                    status.oid,
+                    status.symbol,
+                    status.original_size,
+                    status.remaining_size,
+                    status.is_trigger,
+                    status.reduce_only,
+                )
+            ):
+                raise StateConflict("missing auxiliary order retains venue fields")
+            elif (
+                expected_order.expires_after_ms is not None
+                and bundle.fill_coverage.requested_end_time_ms
+                < expected_order.expires_after_ms
+                + _venue_module._LATE_WRITE_SETTLEMENT_MS
+            ):
+                auxiliary_missing_unsettled = True
+        primary_oids = {
+            item.oid for item in bundle.order_statuses if item.oid is not None
+        }
+        if primary_oids & set(auxiliary_status_oids):
+            raise StateConflict("parent and recovery orders share a venue OID")
+        auxiliary_by_owner: dict[str, list[SignedFillEvidence]] = {
+            owner_id: [] for owner_id in expected_auxiliary
+        }
+        persisted_auxiliary: dict[str, tuple[object, str]] = {}
+        for persisted in self.store.list_recovery_fills(
+            parent_command_id=bundle.command_id
+        ):
+            owner = self.store.get_recovery_command(
+                persisted.recovery_command_id
+            )
+            occurred_ms = _datetime_ms(persisted.occurred_at)
+            if (
+                owner.state == "terminal"
+                and bundle.fill_coverage.requested_start_time_ms
+                <= occurred_ms
+                <= bundle.fill_coverage.requested_end_time_ms
+            ):
+                persisted_auxiliary[persisted.fill_id] = (
+                    persisted,
+                    owner.recovery_hash,
+                )
+        observed_persisted: set[str] = set()
+        for attributed in bundle.auxiliary_fills:
+            fill = attributed.fill
+            if fill.fill_id in fill_ids:
+                raise StateConflict("bundle repeats a fill across ownership lanes")
+            fill_ids.add(fill.fill_id)
+            expected_order = expected_auxiliary.get(attributed.owner_id)
+            status_evidence = auxiliary_status_oids.get(fill.oid)
+            persisted_match = persisted_auxiliary.get(fill.fill_id)
+            persisted_valid = False
+            if persisted_match is not None:
+                persisted, recovery_hash = persisted_match
+                persisted_valid = (
+                    attributed.owner_id == persisted.recovery_command_id
+                    and attributed.source_hash == recovery_hash
+                    and fill.role == "recovery_close"
+                    and fill.cloid == persisted.cloid
+                    and fill.symbol == persisted.symbol
+                    and fill.side.value == persisted.side
+                    and fill.quantity == persisted.quantity
+                    and fill.signed_quantity == persisted.signed_quantity
+                    and fill.start_position == persisted.start_position
+                    and fill.end_position == persisted.end_position
+                    and fill.price == persisted.price
+                    and fill.fee == persisted.fee
+                    and fill.closed_pnl == persisted.closed_pnl
+                    and fill.fee_token == persisted.fee_token
+                    and fill.crossed is persisted.crossed
+                    and fill.builder_fee == persisted.builder_fee
+                    and fill.oid == persisted.venue_oid
+                    and fill.tid == persisted.venue_trade_id
+                    and fill.transaction_hash == persisted.transaction_hash
+                    and fill.time_ms == _datetime_ms(persisted.occurred_at)
+                )
+            if (
+                fill.fill_id != canonical_hyperliquid_fill_id(fill)
+                or attributed.owner_kind != "recovery_close"
+                or (
+                    not persisted_valid
+                    and (
+                        expected_order is None
+                        or attributed.source_hash != expected_order.source_hash
+                        or status_evidence is None
+                        or getattr(status_evidence, "order") != expected_order
+                        or fill.role != "recovery_close"
+                        or fill.cloid != expected_order.cloid
+                        or fill.symbol != expected_order.symbol
+                        or fill.side is not expected_order.side
+                    )
+                )
+                or fill.quantity != abs(fill.signed_quantity)
+                or fill.end_position != fill.start_position + fill.signed_quantity
+                or fill.time_ms > snapshot.server_time_ms
+            ):
+                raise StateConflict(
+                    "bundle auxiliary fill differs from durable recovery"
+                )
+            if persisted_valid:
+                observed_persisted.add(fill.fill_id)
+            else:
+                auxiliary_by_owner[attributed.owner_id].append(fill)
+        if observed_persisted != set(persisted_auxiliary):
+            raise StateConflict(
+                "bundle omits a durable recovery fill in its covered window"
+            )
+        for owner_id, fills_for_owner in auxiliary_by_owner.items():
+            expected_order = expected_auxiliary[owner_id]
+            if _sum_decimal([item.quantity for item in fills_for_owner]) > (
+                expected_order.requested_quantity
+            ):
+                raise StateConflict("auxiliary fills exceed recovery close size")
+        auxiliary_fill_detail_missing = any(
+            observed_auxiliary[owner_id].status.state is VenueOrderState.ORDER
+            and observed_auxiliary[owner_id].status.venue_status == "filled"
+            and _sum_decimal([item.quantity for item in fills_for_owner])
+            != expected_auxiliary[owner_id].requested_quantity
+            for owner_id, fills_for_owner in auxiliary_by_owner.items()
+        )
         ordered_fills = sorted(
-            bundle.signed_fills, key=lambda item: (item.time_ms, item.tid, item.oid)
+            [
+                *bundle.signed_fills,
+                *(item.fill for item in bundle.auxiliary_fills),
+            ],
+            key=lambda item: (item.time_ms, item.tid, item.oid),
         )
         discontinuous_fill_chain = any(
             left.end_position != right.start_position
             for left, right in zip(ordered_fills, ordered_fills[1:])
+        )
+        fill_chain_not_from_flat = bool(
+            ordered_fills and ordered_fills[0].start_position != _ZERO
         )
 
         for role in _ROLES:
@@ -596,13 +874,27 @@ class MainEntryReconciliationCoordinator:
                 raise StateConflict("store leg update is not derived from venue evidence")
 
         coverage = bundle.fill_coverage
+        preflight = self.store.get_preflight(bundle.command_id)
+        if preflight.account_server_time_ms is None:
+            raise StateConflict(
+                "parent reconciliation lacks venue-server fill watermark"
+            )
+        expected_fill_start_ms = preflight.account_server_time_ms
+        if coverage.requested_start_time_ms != expected_fill_start_ms:
+            raise StateConflict(
+                "fill coverage does not start at the flat preflight watermark"
+            )
         coverage_hazard = (
             not coverage.complete
             or coverage.page_saturated
             or coverage.retention_limited
             or coverage.unmatched_fills != 0
         )
-        if coverage.unique_fills != len(bundle.signed_fills) + coverage.unmatched_fills:
+        if coverage.unique_fills != (
+            len(bundle.signed_fills)
+            + len(bundle.auxiliary_fills)
+            + coverage.unmatched_fills
+        ):
             raise StateConflict("fill coverage counts disagree with signed evidence")
         if coverage.requested_end_time_ms > snapshot.server_time_ms:
             raise StateConflict("fill coverage ends after account snapshot")
@@ -636,10 +928,15 @@ class MainEntryReconciliationCoordinator:
             and set(bundle.incomplete_reasons) == fenced_missing_reasons
         )
         effective_complete = bundle.complete or fenced_absence
+        if effective_complete and (
+            coverage.requested_end_time_ms != snapshot.server_time_ms
+        ):
+            raise StateConflict(
+                "complete fill coverage must end at the account snapshot"
+            )
         if effective_complete and coverage_hazard:
             raise StateConflict("saturated or incomplete fill coverage cannot be complete")
 
-        symbol = owned[0].symbol
         position = snapshot.position(symbol)
         signed_position = _ZERO if position is None else position.signed_size
         stop_cloid = owned_by_role["protective_stop"].cloid
@@ -681,13 +978,21 @@ class MainEntryReconciliationCoordinator:
             account_hazards
             or summary_contradiction
             or discontinuous_fill_chain
+            or fill_chain_not_from_flat
             or completed_fill_detail_missing
+            or auxiliary_fill_detail_missing
+            or auxiliary_missing_unsettled
+            or auxiliary_status_nonterminal
             or (
                 any(
                     item.state is VenueOrderState.MISSING
                     for item in statuses.values()
                 )
                 and not fenced_absence
+            )
+            or (
+                bundle.signed_position_quantity != _ZERO
+                and not ordered_fills
             )
         ):
             raise StateConflict(

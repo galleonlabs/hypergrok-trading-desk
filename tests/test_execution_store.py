@@ -22,6 +22,7 @@ from trading_harness.assessment import (
 from trading_harness.domain import Environment
 from trading_harness.errors import (
     AdmissionDenied,
+    PolicyViolation,
     RecordNotFound,
     StateConflict,
     StorageError,
@@ -40,6 +41,7 @@ from trading_harness.execution_store import (
     TrustedApproval,
     VenueFill,
 )
+from trading_harness.execution_grant import TrustedInfrastructureGrant
 from trading_harness.hyperliquid_response import parse_order_response
 from trading_harness.planning import (
     AccountRiskSnapshot,
@@ -206,6 +208,32 @@ def make_approval(
     )
 
 
+def make_infrastructure_grant(
+    ticket: RiskTicket,
+    *,
+    grant_id: str = "infrastructure-grant-1",
+    account_id: str = "testnet-account",
+) -> TrustedInfrastructureGrant:
+    assert ticket.plan is not None
+    return TrustedInfrastructureGrant(
+        grant_hash=digest(f"grant:{grant_id}:{ticket.policy_hash}:{account_id}"),
+        grant_id=grant_id,
+        generation=1,
+        account_id=account_id,
+        environment=Environment.TESTNET,
+        allowed_instruments=(ticket.plan.entry.instrument,),
+        risk_policy_hash=ticket.policy_hash,
+        max_loss=Decimal("100"),
+        max_notional=Decimal("2000"),
+        max_leverage=Decimal("2"),
+        issuer_id="test-learning-authority",
+        audience="test-executor",
+        issued_at=NOW - timedelta(seconds=1),
+        not_before=NOW - timedelta(seconds=1),
+        expires_at=NOW + timedelta(hours=1),
+    )
+
+
 class ExecutionStoreTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -227,8 +255,12 @@ class ExecutionStoreTestCase(unittest.TestCase):
         approval_id: str = "approval-1",
     ) -> tuple[RiskTicket, TrustedApproval]:
         ticket = make_ticket(ticket_id)
+        grant = make_infrastructure_grant(ticket)
+        self.store.register_infrastructure_grant(grant, at=NOW)
         self.store.register_ticket(
-            ticket, stored_at=NOW + timedelta(milliseconds=1)
+            ticket,
+            infrastructure_grant_hash=grant.grant_hash,
+            stored_at=NOW + timedelta(milliseconds=1),
         )
         approval = make_approval(ticket, approval_id)
         self.store.register_approval(approval)
@@ -313,6 +345,9 @@ class ExecutionStoreTestCase(unittest.TestCase):
                 digest("send-time-account")
                 if account_snapshot_hash is None
                 else account_snapshot_hash
+            ),
+            account_server_time_ms=int(
+                (observed_at - timedelta(milliseconds=500)).timestamp() * 1_000
             ),
             metadata_hash=digest("metadata"),
             market_snapshot_hash=digest("market"),
@@ -583,7 +618,10 @@ class MigrationAndIdentityTests(ExecutionStoreTestCase):
             }
         finally:
             connection.close()
-        self.assertEqual([1, 2, 3, 4, 5], [row[0] for row in migrations])
+        self.assertEqual(
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            [row[0] for row in migrations],
+        )
         self.assertTrue(all(len(row[1]) == 64 for row in migrations))
         self.assertIn("commands", tables)
         self.assertIn("execution_commands", tables)
@@ -665,7 +703,9 @@ class MigrationAndIdentityTests(ExecutionStoreTestCase):
         )
         with self.assertRaises(ValidationError):
             self.store.register_ticket(
-                mainnet_ticket, stored_at=NOW + timedelta(milliseconds=1)
+                mainnet_ticket,
+                infrastructure_grant_hash="0" * 64,
+                stored_at=NOW + timedelta(milliseconds=1),
             )
 
     def test_v1_database_migrates_forward_to_preflight_schema(self) -> None:
@@ -723,7 +763,7 @@ class MigrationAndIdentityTests(ExecutionStoreTestCase):
             ).fetchone()
         finally:
             connection.close()
-        self.assertEqual([1, 2, 3, 4, 5], versions)
+        self.assertEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], versions)
         self.assertIn("preflight_hash", columns)
         self.assertIn("signed_evidence_hash", columns)
         self.assertIn("transport_evidence_hash", columns)
@@ -731,6 +771,48 @@ class MigrationAndIdentityTests(ExecutionStoreTestCase):
 
 
 class TicketApprovalAdmissionTests(ExecutionStoreTestCase):
+    def test_ticket_requires_registered_active_matching_learning_grant(self) -> None:
+        ticket = make_ticket("grant-required-ticket")
+        with self.assertRaises(TypeError):
+            self.store.register_ticket(  # type: ignore[call-arg]
+                ticket,
+                stored_at=NOW + timedelta(milliseconds=1),
+            )
+        with self.assertRaises(RecordNotFound):
+            self.store.register_ticket(
+                ticket,
+                infrastructure_grant_hash="0" * 64,
+                stored_at=NOW + timedelta(milliseconds=1),
+            )
+
+        wrong_policy = replace(
+            make_infrastructure_grant(ticket, grant_id="wrong-policy-grant"),
+            risk_policy_hash=digest("wrong-policy"),
+        )
+        self.store.register_infrastructure_grant(wrong_policy, at=NOW)
+        with self.assertRaises(PolicyViolation):
+            self.store.register_ticket(
+                ticket,
+                infrastructure_grant_hash=wrong_policy.grant_hash,
+                stored_at=NOW + timedelta(milliseconds=1),
+            )
+
+        too_small = replace(
+            make_infrastructure_grant(ticket, grant_id="small-grant"),
+            max_loss=Decimal("0.01"),
+        )
+        self.store.register_infrastructure_grant(too_small, at=NOW)
+        with self.assertRaises(PolicyViolation):
+            self.store.register_ticket(
+                ticket,
+                infrastructure_grant_hash=too_small.grant_hash,
+                stored_at=NOW + timedelta(milliseconds=1),
+            )
+
+        approval = make_approval(ticket, "orphan-approval")
+        with self.assertRaises(RecordNotFound):
+            self.store.register_approval(approval)
+
     def test_exact_plan_ticket_and_opaque_approval_survive_restart(self) -> None:
         ticket, approval = self.register_approve()
         self.assertEqual(
@@ -744,7 +826,9 @@ class TicketApprovalAdmissionTests(ExecutionStoreTestCase):
         self.assertEqual(
             ticket.ticket_hash,
             self.store.register_ticket(
-                ticket, stored_at=NOW + timedelta(seconds=1)
+                ticket,
+                infrastructure_grant_hash=make_infrastructure_grant(ticket).grant_hash,
+                stored_at=NOW + timedelta(seconds=1),
             ),
         )
         self.assertEqual(approval, self.store.register_approval(approval))
@@ -826,7 +910,16 @@ class TicketApprovalAdmissionTests(ExecutionStoreTestCase):
                 instrument=("ETH-PERP" if index == 1 else "SOL-PERP"),
                 symbol=("ETH" if index == 1 else "SOL"),
             )
-            store.register_ticket(ticket, stored_at=NOW + timedelta(milliseconds=1))
+            grant = make_infrastructure_grant(
+                ticket,
+                grant_id=f"capped-grant-{index}",
+            )
+            store.register_infrastructure_grant(grant, at=NOW)
+            store.register_ticket(
+                ticket,
+                infrastructure_grant_hash=grant.grant_hash,
+                stored_at=NOW + timedelta(milliseconds=1),
+            )
             approval = make_approval(ticket, f"approval-{index}", token_text=f"token-{index}")
             store.register_approval(approval)
             pairs.append((ticket, approval))
@@ -867,13 +960,16 @@ class TicketApprovalAdmissionTests(ExecutionStoreTestCase):
 
     def test_void_unsent_permanently_consumes_authority_and_releases_risk(self) -> None:
         ticket, approval = self.admit_one()
-        self.store.claim_next(
+        claim = self.store.claim_next(
             "dispatcher", at=NOW + timedelta(seconds=1), lease_seconds=10
         )
+        assert claim is not None
         command = self.store.void_unsent_command(
             "command-1",
             reason="signer failed before attempt persistence",
             at=NOW + timedelta(seconds=2),
+            worker_id="dispatcher",
+            fencing_token=claim.fencing_token,
         )
         self.assertEqual("terminal", command.state)
         self.assertEqual("terminal", self.store.get_outbox("command-1").state)
@@ -891,6 +987,39 @@ class TicketApprovalAdmissionTests(ExecutionStoreTestCase):
                 at=NOW + timedelta(seconds=3),
             )
         self.assertEqual(ticket.ticket_hash, command.ticket_hash)
+
+    def test_stale_worker_cannot_void_replacement_claim(self) -> None:
+        self.admit_one()
+        stale = self.store.claim_next(
+            "stale-worker", at=NOW + timedelta(seconds=1), lease_seconds=5
+        )
+        assert stale is not None
+        replacement = self.store.claim_next(
+            "replacement-worker",
+            at=NOW + timedelta(seconds=6),
+            lease_seconds=5,
+        )
+        assert replacement is not None
+        with self.assertRaisesRegex(StateConflict, "stale"):
+            self.store.void_unsent_command(
+                "command-1",
+                reason="stale preflight denial",
+                at=NOW + timedelta(seconds=6, milliseconds=1),
+                worker_id="stale-worker",
+                fencing_token=stale.fencing_token,
+            )
+        current = self.store.get_outbox("command-1")
+        self.assertEqual("replacement-worker", current.worker_id)
+        self.assertEqual(replacement.fencing_token, current.fencing_token)
+
+        terminal = self.store.void_unsent_command(
+            "command-1",
+            reason="replacement denial",
+            at=NOW + timedelta(seconds=6, milliseconds=2),
+            worker_id="replacement-worker",
+            fencing_token=replacement.fencing_token,
+        )
+        self.assertEqual("terminal", terminal.state)
 
     def test_void_rejects_any_prepared_attempt(self) -> None:
         ticket, _ = self.admit_one()
@@ -962,8 +1091,12 @@ class TicketApprovalAdmissionTests(ExecutionStoreTestCase):
         approvals = []
         for index in (1, 2):
             ticket = make_ticket(f"instrument-ticket-{index}")
+            grant = make_infrastructure_grant(ticket)
+            self.store.register_infrastructure_grant(grant, at=NOW)
             self.store.register_ticket(
-                ticket, stored_at=NOW + timedelta(milliseconds=1)
+                ticket,
+                infrastructure_grant_hash=grant.grant_hash,
+                stored_at=NOW + timedelta(milliseconds=1),
             )
             approval = make_approval(
                 ticket,
@@ -1344,6 +1477,14 @@ class OutboxCrashAndReplayTests(ExecutionStoreTestCase):
         self.assertEqual(1_777_777_777_777, attempt.nonce)
         self.assertEqual(digest("wire"), attempt.wire_hash)
         self.assertEqual(preflight.preflight_hash, attempt.preflight_hash)
+        self.store.require_submission_authority(
+            "command-1",
+            attempt.attempt_id,
+            signed.evidence_hash,
+            "dispatcher",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=2, milliseconds=1),
+        )
         self.assertIsNone(
             self.store.claim_next(
                 "another-dispatcher",
@@ -1381,6 +1522,40 @@ class OutboxCrashAndReplayTests(ExecutionStoreTestCase):
         )
         self.assertEqual("reconciling", reconciliation.state)
 
+    def test_prepared_entry_without_submission_authority_expires_proven_unsent(self) -> None:
+        ticket, _ = self.admit_one()
+        claim = self.store.claim_next(
+            "dispatcher", at=NOW + timedelta(seconds=1), lease_seconds=5
+        )
+        assert claim is not None
+        preflight = self.register_preflight(ticket)
+        signed = self.make_signed_evidence(preflight)
+        attempt = self.store.prepare_attempt(
+            "command-1",
+            "dispatcher",
+            claim.fencing_token,
+            attempt_id="prepared-never-authorized",
+            preflight_hash=preflight.preflight_hash,
+            signed_evidence=signed,
+            nonce=1_777_777_777_777,
+            action_hash=digest("action"),
+            wire_hash=digest("wire"),
+            at=NOW + timedelta(seconds=2),
+        )
+
+        self.assertIsNone(
+            self.store.claim_next(
+                "replacement", at=NOW + timedelta(seconds=6), lease_seconds=5
+            )
+        )
+        self.assertEqual("terminal", self.store.get_command("command-1").state)
+        self.assertEqual("terminal", self.store.get_outbox("command-1").state)
+        self.assertEqual("prepared", self.store.get_attempt("command-1").state)
+        self.assertEqual(attempt.attempt_id, self.store.get_outbox("command-1").current_attempt_id)
+        self.assertEqual((Decimal("0"), Decimal("0")), self.store.get_reserved_exposure())
+        with self.assertRaises(RecordNotFound):
+            self.store.get_transport_evidence("command-1")
+
     def test_explicit_unknown_path_retains_full_reservation(self) -> None:
         ticket, token = self.prepare_unknown()
         self.assertGreater(token, 0)
@@ -1417,6 +1592,32 @@ class ResponseAndReconciliationTests(ExecutionStoreTestCase):
             at=NOW + timedelta(seconds=2),
         )
         return ticket, claim, signed
+
+    def test_entry_submission_authority_is_exact_and_single_use(self) -> None:
+        _, claim, signed = self._prepared_response_command()
+
+        authority = self.store.require_submission_authority(
+            "command-1",
+            "attempt-1",
+            signed.evidence_hash,
+            "dispatcher",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=2, milliseconds=100),
+        )
+
+        self.assertEqual("command-1", authority.command_id)
+        self.assertEqual("attempt-1", authority.attempt_id)
+        self.assertEqual(123, authority.nonce)
+        self.assertRegex(authority.authority_hash, r"^[0-9a-f]{64}$")
+        with self.assertRaisesRegex(StateConflict, "already consumed"):
+            self.store.require_submission_authority(
+                "command-1",
+                "attempt-1",
+                signed.evidence_hash,
+                "dispatcher",
+                claim.fencing_token,
+                at=NOW + timedelta(seconds=2, milliseconds=200),
+            )
 
     def test_three_leg_response_persists_oids_and_requires_reconciliation(self) -> None:
         ticket, _ = self.admit_one()
@@ -1511,18 +1712,52 @@ class ResponseAndReconciliationTests(ExecutionStoreTestCase):
             fills=(fill,),
         )
         self.assertEqual("reconciling", partial.state)
+        released_parent_claim = self.store.get_outbox("command-1")
+        self.assertIsNone(released_parent_claim.worker_id)
+        self.assertIsNone(released_parent_claim.lease_expires_at)
         self.assertEqual(ticket.stressed_loss, self.store.get_reserved_exposure()[0])
         self.assertEqual(half, self.store.get_position("ETH-PERP").signed_quantity)
         self.assertEqual("under_protected", self.store.get_protection("command-1").state)
-        self.assertEqual((fill,), self.store.list_fills("command-1"))
+        self.assertEqual(
+            (replace(fill, observed_at=NOW + timedelta(seconds=5)),),
+            self.store.list_fills("command-1"),
+        )
         incidents = self.store.list_incidents("command-1")
         self.assertIn("POSITION_UNDER_PROTECTED", {item.code for item in incidents})
+        self.assertTrue(
+            all(
+                item.severity == "critical"
+                for item in incidents
+                if item.code == "POSITION_UNDER_PROTECTED"
+            )
+        )
+        ambiguity = self.store.record_incident(
+            incident_id="unknown-submission-ambiguity",
+            command_id="command-1",
+            code="UNKNOWN_SUBMISSION_ALL_CLOIDS_MISSING",
+            severity="critical",
+            at=NOW + timedelta(seconds=5, milliseconds=250),
+            details={"requires_same_nonce_fence": True},
+        )
+        unrelated = self.store.record_incident(
+            incident_id="unrelated-open-critical",
+            command_id="command-1",
+            code="UNRELATED_OPEN_CRITICAL",
+            severity="critical",
+            at=NOW + timedelta(seconds=5, milliseconds=300),
+        )
 
         updated_legs = self.store.get_legs("command-1")
+        next_claim = self.store.claim_reconciliation(
+            "command-1",
+            "reconciler",
+            at=NOW + timedelta(seconds=5, milliseconds=500),
+            lease_seconds=30,
+        )
         terminal = self.store.reconcile(
             "command-1",
             "reconciler",
-            fencing,
+            next_claim.fencing_token,
             reconciliation_id="reconciliation-2",
             account_snapshot_hash=digest("snapshot-2"),
             observed_at=NOW + timedelta(seconds=6),
@@ -1544,6 +1779,13 @@ class ResponseAndReconciliationTests(ExecutionStoreTestCase):
         self.assertEqual((Decimal("0"), Decimal("0")), self.store.get_reserved_exposure())
         self.assertEqual("terminal", self.store.get_outbox("command-1").state)
         self.assertEqual("flat", self.store.get_protection("command-1").state)
+        incidents_by_id = {
+            item.incident_id: item
+            for item in self.store.list_incidents("command-1")
+        }
+        self.assertEqual("closed", incidents_by_id[ambiguity.incident_id].state)
+        self.assertEqual("open", incidents_by_id[unrelated.incident_id].state)
+        self.assertTrue(self.store.verify_event_chain())
 
     def test_filled_entry_rejected_stop_opens_critical_failed_protection(self) -> None:
         ticket, claim, signed = self._prepared_response_command()
@@ -2040,6 +2282,17 @@ class RecoveryLifecycleTests(ExecutionStoreTestCase):
             incident_resolution=None,
         )
         self.assertEqual("reconciling", incomplete.state)
+        released_recovery_claim = self.store.get_recovery_outbox(
+            command.recovery_command_id
+        )
+        self.assertIsNone(released_recovery_claim.worker_id)
+        self.assertIsNone(released_recovery_claim.lease_expires_at)
+        next_recon_claim = self.store.claim_recovery_reconciliation(
+            command.recovery_command_id,
+            "reconciler",
+            at=NOW + timedelta(seconds=12, milliseconds=250),
+            lease_seconds=10,
+        )
         adversarial = replace(
             self.make_recovery_proof(
                 command,
@@ -2054,7 +2307,7 @@ class RecoveryLifecycleTests(ExecutionStoreTestCase):
             self.store.reconcile_recovery(
                 command.recovery_command_id,
                 "reconciler",
-                recon_claim.fencing_token,
+                next_recon_claim.fencing_token,
                 reconciliation_id="recovery-adversarial",
                 proof=adversarial,
                 incident_resolution=None,
@@ -2062,7 +2315,7 @@ class RecoveryLifecycleTests(ExecutionStoreTestCase):
         terminal = self.store.reconcile_recovery(
             command.recovery_command_id,
             "reconciler",
-            recon_claim.fencing_token,
+            next_recon_claim.fencing_token,
             reconciliation_id="recovery-complete",
             proof=self.make_recovery_proof(
                 command,
@@ -2093,13 +2346,21 @@ class RecoveryLifecycleTests(ExecutionStoreTestCase):
             command,
             signing_authority_hash=signing_authority.authority_hash,
         )
-        self.store.prepare_recovery_attempt(
+        attempt = self.store.prepare_recovery_attempt(
             command.recovery_command_id,
             "recovery-worker",
             claim.fencing_token,
             attempt_id="recovery-attempt",
             signed_evidence=signed,
             at=NOW + timedelta(seconds=9),
+        )
+        self.store.require_recovery_submission_authority(
+            command.recovery_command_id,
+            attempt.attempt_id,
+            signed.evidence_hash,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=9, milliseconds=1),
         )
         self.assertIsNone(
             self.store.claim_next_recovery(
@@ -2123,6 +2384,51 @@ class RecoveryLifecycleTests(ExecutionStoreTestCase):
                 signed_evidence=signed,
                 at=NOW + timedelta(seconds=14),
             )
+
+    def test_recovery_prepare_without_submission_authority_expires_proven_unsent(self) -> None:
+        _, _, command = self.queue_recovery_fixture()
+        claim = self.store.claim_next_recovery(
+            "recovery-worker", at=NOW + timedelta(seconds=8), lease_seconds=5
+        )
+        assert claim is not None
+        authority = self.store.require_recovery_signing_authority(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            at=NOW + timedelta(seconds=8, milliseconds=1),
+        )
+        signed = self.make_signed_recovery(
+            command,
+            signing_authority_hash=authority.authority_hash,
+        )
+        attempt = self.store.prepare_recovery_attempt(
+            command.recovery_command_id,
+            "recovery-worker",
+            claim.fencing_token,
+            attempt_id="recovery-never-authorized",
+            signed_evidence=signed,
+            at=NOW + timedelta(seconds=9),
+        )
+
+        self.assertIsNone(
+            self.store.claim_next_recovery(
+                "replacement", at=NOW + timedelta(seconds=14), lease_seconds=5
+            )
+        )
+        self.assertEqual(
+            "terminal",
+            self.store.get_recovery_command(command.recovery_command_id).state,
+        )
+        self.assertEqual(
+            "prepared",
+            self.store.get_recovery_attempt(command.recovery_command_id).state,
+        )
+        self.assertEqual(
+            attempt.attempt_id,
+            self.store.get_recovery_outbox(command.recovery_command_id).current_attempt_id,
+        )
+        with self.assertRaises(RecordNotFound):
+            self.store.get_recovery_transport_evidence(command.recovery_command_id)
 
 
 class TamperDetectionTests(ExecutionStoreTestCase):
@@ -2241,8 +2547,15 @@ class TamperDetectionTests(ExecutionStoreTestCase):
         second_ticket = make_ticket(
             "ticket-2", instrument="SOL-PERP", symbol="SOL"
         )
+        second_grant = make_infrastructure_grant(
+            second_ticket,
+            grant_id="infrastructure-grant-sol",
+        )
+        self.store.register_infrastructure_grant(second_grant, at=NOW)
         self.store.register_ticket(
-            second_ticket, stored_at=NOW + timedelta(milliseconds=1)
+            second_ticket,
+            infrastructure_grant_hash=second_grant.grant_hash,
+            stored_at=NOW + timedelta(milliseconds=1),
         )
         second = make_approval(second_ticket, "approval-2", token_text="token-2")
         self.store.register_approval(second)

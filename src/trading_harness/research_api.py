@@ -17,10 +17,11 @@ from urllib.parse import urlparse
 
 from .analysis import TechnicalConfig, analyze_technical
 from .backtest import CostModel, validate_profitability
-from .canonical import canonical_data
+from .canonical import canonical_data, domain_hash
 from .domain import Environment
 from .errors import RecordNotFound, StateConflict, ValidationError
 from .history import CandleHistory, fetch_candle_history, interval_duration_ms
+from .learning_bridge import LearningRecorder
 from .node import node_status
 from .registered_decision import build_registered_assessment
 from .research_store import ResearchStore
@@ -103,6 +104,7 @@ class ResearchService:
         history_reader: HistoryReader = _default_history_reader,
         analysis_bars: int = 1_200,
         validation_bars: int = 4_999,
+        learning_recorder: LearningRecorder | None = None,
     ) -> None:
         if not isinstance(store, ResearchStore):
             raise TypeError("store must be ResearchStore")
@@ -114,12 +116,17 @@ class ResearchService:
         ):
             if type(value) is not int or not 1_001 <= value <= 5_000:
                 raise ValidationError(f"{field} must be an integer from 1001 to 5000")
+        if learning_recorder is not None and not isinstance(
+            learning_recorder, LearningRecorder
+        ):
+            raise TypeError("learning_recorder must be LearningRecorder or None")
         self.store = store
         self.clock = clock
         self.history_reader = history_reader
         self.analysis_bars = analysis_bars
         self.validation_bars = validation_bars
         self.technical_config = TechnicalConfig()
+        self.learning_recorder = learning_recorder
 
     def _now(self) -> datetime:
         try:
@@ -434,7 +441,7 @@ class ResearchService:
         if not isinstance(signal_document, dict):
             raise TypeError("registered signal did not canonicalize to an object")
         signal_document["signal_hash"] = signal.signal_hash
-        return {
+        analysis: dict[str, Any] = {
             "schema_version": "asset_analysis.v1",
             "asset": asset.as_dict(),
             "observed_at": at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
@@ -452,6 +459,24 @@ class ResearchService:
             "venue_writes_enabled": False,
             "order_submitted": False,
         }
+        analysis_hash = domain_hash(
+            "trading-harness/asset-analysis/v1",
+            analysis,
+        )
+        analysis["analysis_hash"] = analysis_hash
+        stored = self.store.put_asset_analysis(
+            checked_id,
+            analysis,
+            stored_at=at,
+        )
+        analysis["analysis_record_hash"] = stored.record_hash
+        analysis["learning_cycle_id"] = None
+        analysis["learning_event_hash"] = None
+        if self.learning_recorder is not None:
+            cycle, event = self.learning_recorder.record_analysis(stored)
+            analysis["learning_cycle_id"] = cycle.cycle_id
+            analysis["learning_event_hash"] = event.event_hash
+        return analysis
 
     def validate_candidate(self, asset_id: object) -> dict[str, Any]:
         checked_id = _text(asset_id, "asset_id", maximum=128)

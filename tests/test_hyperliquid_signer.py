@@ -21,6 +21,7 @@ from trading_harness.hyperliquid_recovery import (
     build_cancel_by_cloid,
     build_noop_fence,
     build_reduce_only_close,
+    derive_recovery_close_cloid,
     recovery_action_material,
 )
 from trading_harness.hyperliquid_signer import (
@@ -55,6 +56,7 @@ from tests.test_hyperliquid_account import (
     FixtureTransport as RecoveryFixtureTransport,
     TARGET_CLOID as RECOVERY_TARGET_CLOID,
     fetch as fetch_recovery_account,
+    raw_order as raw_recovery_order,
     valid_clearing as valid_recovery_clearing,
 )
 from tests.test_hyperliquid_wire import metadata as metadata_fixture, protected_plan
@@ -137,6 +139,9 @@ def dispatch_preflight(
         environment=environment,
         account_id=account_id,
         account_snapshot_hash=digest("account"),
+        account_server_time_ms=int(
+            (observed_at - timedelta(milliseconds=500)).timestamp() * 1_000
+        ),
         metadata_hash=metadata_hash,
         market_snapshot_hash=digest("market"),
         risk_policy_hash=digest("risk"),
@@ -298,7 +303,9 @@ def durable_recovery_policy(
                 main_account_address=RECOVERY_MAIN_ACCOUNT,
                 signer_address=signer_address,
                 owned_cloids=frozenset(
-                    {RECOVERY_CLOSE_CLOID, RECOVERY_TARGET_CLOID}
+                    {RECOVERY_CLOSE_CLOID}
+                    if kind is RecoveryKind.CANCEL_BY_CLOID
+                    else {RECOVERY_CLOSE_CLOID, RECOVERY_TARGET_CLOID}
                 ),
             ),
         ),
@@ -314,6 +321,7 @@ def prepare_durable_recovery_fixture(
     lease_seconds: int = 7,
     signer_address: str = SIGNER,
     kind: RecoveryKind = RecoveryKind.REDUCE_ONLY_CLOSE,
+    close_cloid: str | None = None,
 ):
     """Create one exact consumed permit and claimed close command for tests."""
 
@@ -327,19 +335,47 @@ def prepare_durable_recovery_fixture(
     )
     evidence_at = STORE_NOW + timedelta(seconds=6)
     evidence_ms = int(evidence_at.timestamp() * 1_000)
+    durable_target_cloid = next(
+        item.cloid
+        for item in case.store.get_legs("command-1")
+        if item.role == "take_profit"
+    )
+    recovery_orders = (
+        [
+            raw_recovery_order(
+                oid=102,
+                cloid=durable_target_cloid,
+                order_type="Take Market",
+                trigger_price="3000",
+                trigger_condition="Triggered above 3000",
+            )
+        ]
+        if kind is RecoveryKind.CANCEL_BY_CLOID
+        else None
+    )
     snapshot, _ = fetch_recovery_account(
         RecoveryFixtureTransport(
-            clearing=valid_recovery_clearing(server_time=evidence_ms)
+            clearing=valid_recovery_clearing(server_time=evidence_ms),
+            orders=recovery_orders,
         ),
         received_at_ms=evidence_ms,
         network="testnet",
     )
     if kind is RecoveryKind.REDUCE_ONLY_CLOSE:
+        selected_close_cloid = (
+            derive_recovery_close_cloid(
+                account_id="testnet-account",
+                incident_id=incident.incident_id,
+                position_snapshot_hash=snapshot.snapshot_hash,
+            )
+            if close_cloid is None
+            else close_cloid
+        )
         recovery = build_reduce_only_close(
             snapshot,
             symbol="ETH",
             price_bound=Decimal("2400"),
-            cloid=RECOVERY_CLOSE_CLOID,
+            cloid=selected_close_cloid,
             incident=incident,
             account_id="testnet-account",
             network=HyperliquidNetwork.TESTNET,
@@ -349,8 +385,8 @@ def prepare_durable_recovery_fixture(
     elif kind is RecoveryKind.CANCEL_BY_CLOID:
         recovery = build_cancel_by_cloid(
             snapshot,
-            (CancelRequest("ETH", RECOVERY_TARGET_CLOID),),
-            owned_cloids=(RECOVERY_TARGET_CLOID,),
+            (CancelRequest("ETH", durable_target_cloid),),
+            owned_cloids=(durable_target_cloid,),
             incident=incident,
             account_id="testnet-account",
             network=HyperliquidNetwork.TESTNET,
@@ -790,6 +826,7 @@ class IndependentActionValidationTests(unittest.TestCase):
             "environment",
             "account_id",
             "account_snapshot_hash",
+            "account_server_time_ms",
             "metadata_hash",
             "market_snapshot_hash",
             "risk_policy_hash",
@@ -1083,6 +1120,10 @@ class DurableRecoverySigningTests(ExecutionStoreTestCase):
             sign_l1_action=FakeSigner(events),
         )
         self.assertEqual(events, ["nonce_committed", "signed"])
+        self.assertNotIn(
+            recovery.requests[0].cloid,
+            selected_policy.account("testnet-account").owned_cloids,
+        )
         self.assertIs(signed.recovery_kind, RecoveryKind.CANCEL_BY_CLOID)
         self.assertEqual(signed.envelope()["action"], recovery.action)
         signed.verify_integrity()
@@ -1172,6 +1213,46 @@ class DurableRecoverySigningTests(ExecutionStoreTestCase):
         self.assertEqual(replay_events, [])
         self.assertEqual(replay_wallet.calls, 0)
 
+    def test_live_store_rejects_static_but_non_derived_close_cloid_before_key_use(self) -> None:
+        (
+            recovery,
+            snapshot,
+            selected_policy,
+            _,
+            _,
+            command,
+            claim,
+        ) = prepare_durable_recovery_fixture(
+            self,
+            close_cloid=RECOVERY_CLOSE_CLOID,
+        )
+        self.assertIn(
+            RECOVERY_CLOSE_CLOID,
+            selected_policy.account("testnet-account").owned_cloids,
+        )
+        events: list[str] = []
+        wallet = GuardWallet()
+        with self.assertRaisesRegex(SignerPolicyError, "exact derived CLOID"):
+            sign_recovery_action(
+                recovery,
+                store=self.store,
+                recovery_command_id=command.recovery_command_id,
+                worker_id="recovery-worker",
+                fencing_token=claim.fencing_token,
+                evidence=snapshot,
+                policy=selected_policy,
+                wallet=wallet,
+                nonce_allocator=FakeNonceAllocator(events),
+                clock=lambda: STORE_NOW + timedelta(seconds=8, milliseconds=1),
+                sign_l1_action=FakeSigner(events),
+            )
+        self.assertEqual(events, [])
+        self.assertEqual(wallet.calls, 0)
+        self.assertEqual(
+            self.store.get_recovery_outbox(command.recovery_command_id).state,
+            "claimed",
+        )
+
     def test_valid_but_different_recovery_is_denied_before_key_use(self) -> None:
         (
             recovery,
@@ -1187,7 +1268,7 @@ class DurableRecoverySigningTests(ExecutionStoreTestCase):
             symbol="ETH",
             price_bound=Decimal("2400"),
             close_size=Decimal("0.2"),
-            cloid=RECOVERY_CLOSE_CLOID,
+            cloid=recovery.cloid,
             incident=incident,
             account_id="testnet-account",
             network=HyperliquidNetwork.TESTNET,

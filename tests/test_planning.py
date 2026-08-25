@@ -15,6 +15,7 @@ from trading_harness.assessment import (
 )
 from trading_harness.domain import Environment, Side
 from trading_harness.errors import ValidationError
+from trading_harness.execution_grant import TrustedInfrastructureGrant
 from trading_harness.planning import (
     AccountRiskSnapshot,
     PlanIdentity,
@@ -23,6 +24,7 @@ from trading_harness.planning import (
     RiskTicketStatus,
     protected_trade_plan_from_dict,
     quote_risk_ticket,
+    quote_infrastructure_learning_ticket,
     risk_ticket_from_dict,
 )
 from trading_harness.sentiment import (
@@ -172,6 +174,68 @@ def identity() -> PlanIdentity:
 
 
 class RiskPlanningTests(unittest.TestCase):
+    def test_infrastructure_learning_can_quote_without_profitability_claim(self) -> None:
+        registered = build_registered_assessment(
+            assessment_id="learning-risk",
+            asset_id="ETH-PERP",
+            signal=REGISTERED_SIGNAL,
+            sentiment=registered_sentiment(),
+            profitability=None,
+            at=REGISTERED_AT,
+        )
+        self.assertFalse(registered.eligible_for_risk_quote)
+        policy = RiskSizingPolicy(
+            version="learning-test-mechanics-v1",
+            entry_slippage_bps=Decimal("0"),
+            exit_slippage_bps=Decimal("0"),
+            stop_gap_bps=Decimal("0"),
+            round_trip_fee_bps=Decimal("0"),
+        )
+        grant = TrustedInfrastructureGrant(
+            grant_hash=digest("learning-grant"),
+            grant_id="learning-grant",
+            generation=1,
+            account_id="testnet-account",
+            environment=Environment.TESTNET,
+            allowed_instruments=("ETH-PERP",),
+            risk_policy_hash=policy.policy_hash,
+            max_loss=Decimal("25"),
+            max_notional=Decimal("1000"),
+            max_leverage=Decimal("2"),
+            issuer_id="test-authority",
+            audience="test-executor",
+            issued_at=REGISTERED_AT - timedelta(seconds=1),
+            not_before=REGISTERED_AT - timedelta(seconds=1),
+            expires_at=REGISTERED_AT + timedelta(hours=1),
+        )
+        ticket = quote_infrastructure_learning_ticket(
+            ticket_id="learning-ticket",
+            assessment=registered,
+            identity=PlanIdentity(
+                thesis_id="candidate-v0",
+                thesis_version="1",
+                strategy_version="1",
+                venue="hyperliquid",
+                account_id="testnet-account",
+                environment=Environment.TESTNET,
+                instrument="ETH-PERP",
+            ),
+            account=account(
+                observed_at=REGISTERED_AT - timedelta(seconds=1),
+                received_at=REGISTERED_AT,
+                max_notional=Decimal("1000"),
+            ),
+            grant=grant,
+            at=REGISTERED_AT,
+            policy=policy,
+        )
+
+        self.assertIs(ticket.status, RiskTicketStatus.AWAITING_APPROVAL)
+        self.assertIsNotNone(ticket.plan)
+        self.assertFalse(registered.eligible_to_trade)
+        self.assertTrue(ticket.plan.protective_stop.reduce_only)
+        self.assertEqual("normalTpsl", ticket.plan.grouping.value)
+
     def test_long_ticket_is_plan_bound_stopped_and_awaiting_approval(self) -> None:
         selected = technical()
         result = quote_risk_ticket(

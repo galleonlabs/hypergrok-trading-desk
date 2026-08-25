@@ -1,0 +1,54 @@
+schema_version = 1
+environment = "testnet"
+venue = "hyperliquid"
+node_id = "trading-desk-testnet-executor"
+account_id = "__REVIEWED_TESTNET_ACCOUNT_ID__"
+main_account_address = "__REVIEWED_MAIN_ACCOUNT_ADDRESS__"
+api_wallet_address = "__REVIEWED_API_WALLET_ADDRESS__"
+daily_loss_limit = "25"
+max_reserved_loss = "5"
+max_reserved_notional = "100"
+max_leverage = "2"
+risk_policy_hash = "d055493151391f0b360dad8169344ac6eee6eff2d63b01bdada0bf2177dc1ac9"
+allowed_instruments = ["__REVIEWED_INSTRUMENT__"]
+allowed_asset_ids = [__REVIEWED_ASSET_ID__]
+recovery_cloids = ["__REVIEWED_RECOVERY_CLOID__"]
+settlement_currency = "USDC"
+poll_interval_ms = 1000
+reconcile_interval_ms = 5000
+
+[credential]
+provider = "macos_keychain_generic_password"
+service = "__REVIEWED_SIGNER_KEYCHAIN_SERVICE__"
+account = "__REVIEWED_SIGNER_KEYCHAIN_ACCOUNT__"
+keychain_path = "/Library/Keychains/System.keychain"
+timeout_seconds = 5
+
+[approval_credential]
+provider = "macos_keychain_generic_password"
+service = "__REVIEWED_APPROVAL_KEYCHAIN_SERVICE__"
+account = "__REVIEWED_APPROVAL_KEYCHAIN_ACCOUNT__"
+keychain_path = "/Library/Keychains/System.keychain"
+timeout_seconds = 5
+
+[recovery_credential]
+provider = "macos_keychain_generic_password"
+service = "__REVIEWED_RECOVERY_KEYCHAIN_SERVICE__"
+account = "__REVIEWED_RECOVERY_KEYCHAIN_ACCOUNT__"
+keychain_path = "/Library/Keychains/System.keychain"
+timeout_seconds = 5
+
+[grant_credential]
+provider = "macos_keychain_generic_password"
+service = "__REVIEWED_GRANT_KEYCHAIN_SERVICE__"
+account = "__REVIEWED_GRANT_KEYCHAIN_ACCOUNT__"
+keychain_path = "/Library/Keychains/System.keychain"
+timeout_seconds = 5
+
+[paths]
+execution_database = "__REVIEWED_EXECUTOR_STATE_DIR__/execution.sqlite3"
+nonce_database = "__REVIEWED_EXECUTOR_STATE_DIR__/nonce.sqlite3"
+daily_loss_database = "__REVIEWED_EXECUTOR_STATE_DIR__/daily-loss.sqlite3"
+learning_database = "__REVIEWED_LEARNING_STATE_DIR__/learning.sqlite3"
+staging_database = "__REVIEWED_LEARNING_STATE_DIR__/staging.sqlite3"
+control_socket = "__REVIEWED_EXECUTOR_STATE_DIR__/executor.sock"

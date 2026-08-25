@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jawndiego.trading-desk-learning-mcp</string>
+  <key>UserName</key>
+  <string>__REVIEWED_RESEARCH_USER__</string>
+  <key>GroupName</key>
+  <string>__REVIEWED_RESEARCH_GROUP__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REVIEWED_VENV_BIN__/trading-harness-mcp</string>
+    <string>--transport</string>
+    <string>streamable-http</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>__REVIEWED_MCP_PORT__</string>
+    <string>--learning-executor-config</string>
+    <string>__REVIEWED_CONFIG_FILE__</string>
+    <string>--learning-research-db</string>
+    <string>__REVIEWED_RESEARCH_DB__</string>
+    <string>--learning-grant</string>
+    <string>__REVIEWED_GRANT_FILE__</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REVIEWED_REPO_DIR__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>__REVIEWED_LOG_DIR__/learning-mcp.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REVIEWED_LOG_DIR__/learning-mcp.stderr.log</string>
+</dict>
+</plist>

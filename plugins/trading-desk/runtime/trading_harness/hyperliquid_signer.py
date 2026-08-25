@@ -48,6 +48,7 @@ from .hyperliquid_recovery import (
     RecoveryKind,
     ReduceOnlyCloseAction,
     ambiguous_attempt_hash,
+    derive_recovery_close_cloid,
     recovery_action_material,
 )
 from .hyperliquid_wire import (
@@ -1050,8 +1051,15 @@ def _validate_close_material(
         "expires_at_ms",
         "action",
     }
+    if "position_snapshot_time_ms" in material:
+        expected.add("position_snapshot_time_ms")
     if set(material) != expected:
         raise SignerPolicyError("close recovery binding fields are unsupported")
+    snapshot_time = material.get("position_snapshot_time_ms")
+    if snapshot_time is not None and (
+        type(snapshot_time) is not int or snapshot_time < 0
+    ):
+        raise SignerPolicyError("close recovery snapshot time is invalid")
     original = _signed_wire_decimal(
         material["original_signed_position"], "original signed position"
     )
@@ -1108,8 +1116,15 @@ def _validate_cancel_material(
         "expires_at_ms",
         "action",
     }
+    if "account_snapshot_time_ms" in material:
+        expected.add("account_snapshot_time_ms")
     if set(material) != expected:
         raise SignerPolicyError("cancel recovery binding fields are unsupported")
+    snapshot_time = material.get("account_snapshot_time_ms")
+    if snapshot_time is not None and (
+        type(snapshot_time) is not int or snapshot_time < 0
+    ):
+        raise SignerPolicyError("cancel recovery snapshot time is invalid")
     requests = material["requests"]
     if not isinstance(requests, list) or not 1 <= len(requests) <= 20:
         raise SignerPolicyError("cancel recovery requests are invalid")
@@ -1228,6 +1243,13 @@ def _validated_recovery_action(
             raise SignerPolicyError("close recovery requires fresh account evidence")
         if evidence.snapshot_hash != recovery.position_snapshot_hash:
             raise SignerPolicyError("close recovery snapshot hash does not match evidence")
+        if (
+            recovery.position_snapshot_time_ms is not None
+            and evidence.server_time_ms != recovery.position_snapshot_time_ms
+        ):
+            raise SignerPolicyError(
+                "close recovery snapshot time does not match evidence"
+            )
         if evidence.network != recovery.network.value:
             raise SignerPolicyError("close recovery snapshot network differs")
         if evidence.main_account_address != recovery.main_account_address:
@@ -1256,6 +1278,10 @@ def _validated_recovery_action(
             "expires_at_ms": recovery.expires_at_ms,
             "action": action,
         }
+        if recovery.position_snapshot_time_ms is not None:
+            material["position_snapshot_time_ms"] = (
+                recovery.position_snapshot_time_ms
+            )
         source_hash = recovery.position_snapshot_hash
         asset_ids = (recovery.asset_id,)
         cloids = (recovery.cloid,)
@@ -1264,6 +1290,13 @@ def _validated_recovery_action(
             raise SignerPolicyError("cancel recovery requires fresh account evidence")
         if evidence.snapshot_hash != recovery.account_snapshot_hash:
             raise SignerPolicyError("cancel recovery snapshot hash does not match evidence")
+        if (
+            recovery.account_snapshot_time_ms is not None
+            and evidence.server_time_ms != recovery.account_snapshot_time_ms
+        ):
+            raise SignerPolicyError(
+                "cancel recovery snapshot time does not match evidence"
+            )
         if evidence.network != recovery.network.value:
             raise SignerPolicyError("cancel recovery snapshot network differs")
         if evidence.main_account_address != recovery.main_account_address:
@@ -1317,6 +1350,10 @@ def _validated_recovery_action(
             "expires_at_ms": recovery.expires_at_ms,
             "action": action,
         }
+        if recovery.account_snapshot_time_ms is not None:
+            material["account_snapshot_time_ms"] = (
+                recovery.account_snapshot_time_ms
+            )
         source_hash = recovery.account_snapshot_hash
         asset_ids = recovery.asset_ids
         cloids = tuple(request.cloid for request in recovery.requests)
@@ -1445,6 +1482,7 @@ def _validate_protected_sources(
             environment=preflight.environment,
             account_id=preflight.account_id,
             account_snapshot_hash=preflight.account_snapshot_hash,
+            account_server_time_ms=preflight.account_server_time_ms,
             metadata_hash=preflight.metadata_hash,
             market_snapshot_hash=preflight.market_snapshot_hash,
             risk_policy_hash=preflight.risk_policy_hash,
@@ -1888,10 +1926,35 @@ def _freeze_signed_recovery(
     return result
 
 
+def _require_derived_live_close_cloid(
+    recovery: ReduceOnlyCloseAction,
+    command: RecoveryCommand,
+) -> str:
+    if (
+        command.incident_id != recovery.incident_id
+        or command.source_hash != recovery.position_snapshot_hash
+    ):
+        raise SignerPolicyError(
+            "durable close recovery source binding is inconsistent"
+        )
+    expected = derive_recovery_close_cloid(
+        account_id=recovery.account_id,
+        incident_id=recovery.incident_id,
+        position_snapshot_hash=recovery.position_snapshot_hash,
+    )
+    if recovery.cloid != expected:
+        raise SignerPolicyError(
+            "live close recovery requires its exact derived CLOID"
+        )
+    return expected
+
+
 def _validate_recovery_allowlists(
     recovery: RecoveryAction,
     *,
     policy: SignerPolicy,
+    store: ExecutionStore | None = None,
+    command: RecoveryCommand | None = None,
     asset_ids: tuple[int, ...],
     cloids: tuple[str, ...],
 ) -> SigningAccount:
@@ -1906,7 +1969,55 @@ def _validate_recovery_allowlists(
         raise SignerPolicyError("recovery main account differs from signer policy")
     if not set(asset_ids).issubset(policy.allowed_asset_ids):
         raise SignerPolicyError("recovery asset is not allowlisted")
-    if not set(cloids).issubset(account.owned_cloids):
+    if (store is None) != (command is None):
+        raise SignerPolicyError("durable recovery allowlist binding is incomplete")
+    selected_cloids = set(cloids)
+    if (
+        isinstance(recovery, ReduceOnlyCloseAction)
+        and store is not None
+        and command is not None
+    ):
+        if recovery.position_snapshot_time_ms is None:
+            raise SignerPolicyError(
+                "live close recovery lacks venue-server source watermark"
+            )
+        expected_close_cloid = _require_derived_live_close_cloid(recovery, command)
+        if selected_cloids != {expected_close_cloid}:
+            raise SignerPolicyError(
+                "live close recovery requires its exact derived CLOID"
+            )
+        allowed_cloids = {expected_close_cloid}
+    elif isinstance(recovery, ReduceOnlyCloseAction):
+        # Store-less golden vectors retain the legacy explicit static
+        # allowlist.  They cannot claim live durable signing authority.
+        allowed_cloids = set(account.owned_cloids)
+    elif (
+        isinstance(recovery, CancelByCloidAction)
+        and store is not None
+        and command is not None
+    ):
+        if recovery.account_snapshot_time_ms is None:
+            raise SignerPolicyError(
+                "live cancel recovery lacks venue-server source watermark"
+            )
+        legs = ExecutionStore.get_legs(store, command.parent_command_id)
+        if (
+            len(legs) != 3
+            or {item.role for item in legs}
+            != {"entry", "protective_stop", "take_profit"}
+        ):
+            raise SignerPolicyError(
+                "cancel recovery parent lacks its durable protected legs"
+            )
+        allowed_cloids = {item.cloid for item in legs}
+    elif isinstance(recovery, NoopFenceAction):
+        allowed_cloids = set()
+    else:
+        # Golden-vector tests have no live store capability.  Their fixed
+        # policy retains the legacy explicit CLOID allowlist, while the live
+        # signer must use the exact durable parent legs above.
+        allowed_cloids = set(account.owned_cloids)
+    if not selected_cloids.issubset(allowed_cloids):
         raise SignerPolicyError("recovery references a foreign CLOID")
     return account
 
@@ -2015,7 +2126,10 @@ def _sign_recovery_action_for_test(
         now_ms=now_ms,
     )
     account = _validate_recovery_allowlists(
-        recovery, policy=policy, asset_ids=asset_ids, cloids=cloids
+        recovery,
+        policy=policy,
+        asset_ids=asset_ids,
+        cloids=cloids,
     )
     remaining = recovery.expires_at_ms - now_ms
     if not policy.minimum_expiry_remaining_ms <= remaining <= min(
@@ -2122,6 +2236,16 @@ def sign_recovery_action(
     now = now.astimezone(timezone.utc)
     now_ms = _datetime_ms(now, "signer clock")
 
+    command = ExecutionStore.get_recovery_command(store, checked_command_id)
+    if not isinstance(command, RecoveryCommand):
+        raise SignerPolicyError("store returned an invalid recovery command")
+    # Reject a static/foreign close identifier before transitioning the
+    # durable claim into the conservative `signing` state.  This preserves
+    # liveness without moving any wallet, nonce, or SDK operation ahead of the
+    # store's sole signing capability transition.
+    if isinstance(recovery, ReduceOnlyCloseAction):
+        _require_derived_live_close_cloid(recovery, command)
+
     # This store transition is the sole public recovery-signing capability.
     # It happens before any wallet lookup, nonce allocation, or SDK access.
     authority = ExecutionStore.require_recovery_signing_authority(
@@ -2161,7 +2285,12 @@ def sign_recovery_action(
     )
     policy = _verified_recovery_policy(policy)
     account = _validate_recovery_allowlists(
-        recovery, policy=policy, asset_ids=asset_ids, cloids=cloids
+        recovery,
+        policy=policy,
+        store=store,
+        command=command,
+        asset_ids=asset_ids,
+        cloids=cloids,
     )
     permit_expires_at_ms, lease_expires_at_ms = _validate_durable_recovery_binding(
         recovery,

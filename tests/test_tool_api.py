@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+import tempfile
 import unittest
 
 from trading_harness.canonical import semantic_intent_hash
@@ -11,6 +13,10 @@ from trading_harness.tool_api import (
     ToolInputError,
     ToolService,
     tool_catalog,
+)
+from trading_harness.staging_inbox import (
+    TradeStagingInbox,
+    TrustedQuoteDecision,
 )
 
 
@@ -42,12 +48,16 @@ class ToolCatalogTests(unittest.TestCase):
             {
                 "analyze_asset",
                 "get_latest_sentiment",
+                "get_learning_review",
+                "get_learning_summary",
                 "get_node_status",
                 "get_harness_status",
                 "get_market_brief",
+                "get_trade_stage",
                 "list_tracked_assets",
                 "pause_tracked_asset",
                 "record_manual_sentiment",
+                "stage_trade_candidate",
                 "track_asset",
                 "validate_candidate_profitability",
                 "validate_trade_intent",
@@ -55,7 +65,13 @@ class ToolCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             {definition.name for definition in TOOL_CATALOG if not definition.read_only},
-            {"track_asset", "pause_tracked_asset", "record_manual_sentiment"},
+            {
+                "analyze_asset",
+                "stage_trade_candidate",
+                "track_asset",
+                "pause_tracked_asset",
+                "record_manual_sentiment",
+            },
         )
         self.assertTrue(all(not definition.destructive for definition in TOOL_CATALOG))
         forbidden = {"submit_order", "cancel_order", "approve_trade", "place_order"}
@@ -121,6 +137,43 @@ class ToolCatalogTests(unittest.TestCase):
 
 
 class ToolServiceTests(unittest.TestCase):
+    def test_stage_tools_write_only_non_authoritative_idempotent_inbox(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            analysis_hash = "a" * 64
+            inbox = TradeStagingInbox(
+                Path(directory) / "staging.sqlite3",
+                quote_callback=lambda request: TrustedQuoteDecision.blocked(
+                    block_code="nothing_to_trade",
+                    analysis_hash=request.expected_analysis_hash,
+                ),
+            )
+            service = ToolService(
+                market_brief_reader=lambda *_args, **_kwargs: {},
+                staging_inbox=inbox,
+            )
+            first = service.stage_trade_candidate("eth", analysis_hash, "cycle-1")
+            second = service.stage_trade_candidate("eth", analysis_hash, "cycle-1")
+            loaded = service.get_trade_stage(first["document"]["document_id"])
+
+            self.assertEqual(first, second)
+            self.assertEqual(first, loaded)
+            self.assertEqual("blocked", first["state"])
+            self.assertEqual("nothing_to_trade", first["document"]["block_code"])
+            self.assertFalse(first["authoritative"])
+            self.assertTrue(
+                all(value is False for value in first["document"]["authority"].values())
+            )
+            with self.assertRaisesRegex(ToolInputError, "arguments"):
+                service.invoke(
+                    "stage_trade_candidate",
+                    {
+                        "asset_id": "eth",
+                        "expected_analysis_hash": analysis_hash,
+                        "idempotency_key": "cycle-2",
+                        "quantity": "1",
+                    },
+                )
+
     def test_status_is_explicitly_fail_closed(self) -> None:
         status = ToolService(market_brief_reader=lambda *_args, **_kwargs: {}).get_harness_status()
 
@@ -128,6 +181,8 @@ class ToolServiceTests(unittest.TestCase):
         self.assertEqual(status["mode"], "research_only")
         self.assertFalse(status["venue_writes_enabled"])
         self.assertFalse(status["credential_loading_enabled"])
+        self.assertFalse(status["learning"]["staging_profile_configured"])
+        self.assertFalse(status["learning"]["approval_tool_exposed"])
         self.assertEqual(status["execution"]["adapter"], "disabled")
         self.assertEqual(status["market_data"]["access"], "public_read_only")
         self.assertEqual(status["market_data"]["networks"], ["mainnet", "testnet"])

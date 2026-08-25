@@ -220,6 +220,12 @@ class RecoveryDispatcherTests(ExecutionStoreTestCase):
         self.assertEqual("unknown", self.store.get_recovery_attempt(
             command.recovery_command_id
         ).state)
+        self.assertEqual(
+            "noop_response_not_canonical_default",
+            self.store.get_recovery_transport_evidence(
+                command.recovery_command_id
+            ).detail_code,
+        )
 
     def test_duplicate_dispatch_never_reaches_sender_twice(self) -> None:
         dispatcher, _, signer, _, _, _ = self.close_fixture()
@@ -312,7 +318,7 @@ class RecoveryDispatcherTests(ExecutionStoreTestCase):
         with self.assertRaises(RecordNotFound):
             self.store.get_recovery_attempt(command.recovery_command_id)
 
-    def test_crash_after_signing_becomes_unknown_and_never_resigns(self) -> None:
+    def test_crash_after_signing_terminalizes_proven_unsent_and_never_resigns(self) -> None:
         dispatcher, _, signer, _, command, at = self.close_fixture()
         crash_signer = SignThenCrash(signer.inner)
         dispatcher.signer = crash_signer
@@ -331,11 +337,11 @@ class RecoveryDispatcherTests(ExecutionStoreTestCase):
             )
         )
         self.assertEqual(
-            "submitted_unknown",
+            "terminal",
             self.store.get_recovery_outbox(command.recovery_command_id).state,
         )
 
-    def test_crash_after_attempt_persistence_becomes_unknown_without_send(self) -> None:
+    def test_crash_before_submission_authority_terminalizes_proven_unsent(self) -> None:
         dispatcher, _, _, _, command, at = self.close_fixture()
         with mock.patch.object(
             recovery_dispatcher,
@@ -360,9 +366,17 @@ class RecoveryDispatcherTests(ExecutionStoreTestCase):
             )
         )
         self.assertEqual(
-            "unknown",
+            "prepared",
             self.store.get_recovery_attempt(command.recovery_command_id).state,
         )
+        self.assertEqual(
+            "terminal",
+            self.store.get_recovery_command(command.recovery_command_id).state,
+        )
+        with self.assertRaises(RecordNotFound):
+            self.store.get_recovery_transport_evidence(
+                command.recovery_command_id
+            )
 
     def test_crash_after_send_never_sends_again_and_normalizes_unknown(self) -> None:
         dispatcher, _, signer, _, command, at = self.close_fixture()

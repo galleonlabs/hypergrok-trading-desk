@@ -26,6 +26,7 @@ from .execution_store import (
     AttemptRecord,
     ExecutionStore,
     RecoveryCommand,
+    TransportOutcomeEvidence,
 )
 from .hyperliquid_account import HyperliquidAccountSnapshot
 from .hyperliquid_recovery import (
@@ -44,6 +45,7 @@ from .hyperliquid_signer import (
     sign_recovery_action,
 )
 from .hyperliquid_transport import (
+    HyperliquidSubmissionError,
     SubmissionOutcome,
     submit_signed_action,
 )
@@ -468,16 +470,39 @@ class RecoveryExecutionDispatcher:
         )
         record_at = self._now()
         noop_response = None
+        recorded_outcome = submission.outcome
         if (
             command.kind == RecoveryKind.NOOP_FENCE.value
             and submission.outcome is SubmissionOutcome.RESPONSE_RECEIVED
         ):
-            noop_response = submission.noop_fence_response_evidence(
-                command.recovery_command_id,
-                attempt.attempt_id,
-                signed_evidence.evidence_hash,
-                parsed_at=record_at,
-            )
+            try:
+                noop_response = submission.noop_fence_response_evidence(
+                    command.recovery_command_id,
+                    attempt.attempt_id,
+                    signed_evidence.evidence_hash,
+                    parsed_at=record_at,
+                )
+            except HyperliquidSubmissionError:
+                # A late-winning original action can make the same-nonce noop
+                # return a deterministic nonce/error body instead of the exact
+                # default success.  Persist that as unknown and reconcile the
+                # parent/account; never crash, retry, or claim a fence.
+                transport_evidence = TransportOutcomeEvidence(
+                    command_id=command.recovery_command_id,
+                    attempt_id=attempt.attempt_id,
+                    signed_evidence_hash=signed_evidence.evidence_hash,
+                    endpoint=submission.endpoint,
+                    attempted_at_ms=submission.attempted_at_ms,
+                    outcome="unknown",
+                    http_status=submission.http_status,
+                    detail_code="noop_response_not_canonical_default",
+                    response_hash=submission.response_hash,
+                    transport_attempt_hash=submission.attempt_hash,
+                    send_count=submission.send_count,
+                    retry_performed=submission.retry_performed,
+                    venue_write_attempted=True,
+                )
+                recorded_outcome = SubmissionOutcome.UNKNOWN
         updated = ExecutionStore.record_recovery_outcome(
             self.store,
             command.recovery_command_id,
@@ -492,7 +517,7 @@ class RecoveryExecutionDispatcher:
             attempt_id=attempt.attempt_id,
             kind=RecoveryKind(command.kind),
             state=updated.state,
-            outcome=submission.outcome,
+            outcome=recorded_outcome,
             signed_evidence_hash=signed_evidence.evidence_hash,
             transport_evidence_hash=transport_evidence.evidence_hash,
             noop_response_evidence_hash=(

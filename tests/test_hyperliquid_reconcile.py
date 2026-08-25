@@ -539,10 +539,54 @@ class FillPaginationTests(unittest.TestCase):
         self.assertFalse(bundle.complete)
         self.assertEqual(bundle.fill_coverage.unmatched_fills, len(unrelated))
 
+    def test_inclusive_page_must_repeat_every_boundary_identity(self) -> None:
+        prefix = [
+            raw_fill(
+                oid=999,
+                tid=2_000 + index,
+                size="0.001",
+                time_ms=START_MS + index,
+            )
+            for index in range(USER_FILLS_PAGE_LIMIT - 1)
+        ]
+        boundary = raw_fill(
+            tid=30,
+            size="0.2",
+            start_position="0",
+            time_ms=START_MS + USER_FILLS_PAGE_LIMIT,
+        )
+        later = raw_fill(
+            tid=31,
+            size="0.3",
+            start_position="0.2",
+            time_ms=START_MS + USER_FILLS_PAGE_LIMIT + 1,
+        )
+        transport = ReconcileTransport(
+            full_statuses(),
+            [[*prefix, boundary], [later]],
+        )
+
+        with self.assertRaisesRegex(
+            HyperliquidReconcileResponseError, "overlap"
+        ):
+            reconcile(transport)
+
+    def test_fill_page_must_be_ascending(self) -> None:
+        later = raw_fill(tid=41, time_ms=START_MS + 2)
+        earlier = raw_fill(tid=40, time_ms=START_MS + 1)
+        with self.assertRaisesRegex(
+            HyperliquidReconcileResponseError, "ascending"
+        ):
+            reconcile(
+                ReconcileTransport(full_statuses(), [[later, earlier]])
+            )
+
     def test_latest_10000_fill_limit_is_explicitly_incomplete(self) -> None:
         class RetentionTransport(ReconcileTransport):
             def __init__(self) -> None:
                 super().__init__(full_statuses(), [])
+                self.next_tid = 1
+                self.boundary = None
 
             def __call__(self, endpoint: str, payload: Mapping[str, object]) -> object:
                 if payload["type"] == "orderStatus":
@@ -551,16 +595,22 @@ class FillPaginationTests(unittest.TestCase):
                 self.calls.append((endpoint, request))
                 page = self.fill_call
                 self.fill_call += 1
-                base = START_MS + page * USER_FILLS_PAGE_LIMIT
-                return [
-                    raw_fill(
-                        oid=999,
-                        tid=page * USER_FILLS_PAGE_LIMIT + index + 1,
-                        size="0.001",
-                        time_ms=base + index,
+                page_size = USER_FILLS_PAGE_LIMIT if page < 5 else 5
+                values = (
+                    [] if self.boundary is None else [deepcopy(self.boundary)]
+                )
+                while len(values) < page_size:
+                    values.append(
+                        raw_fill(
+                            oid=999,
+                            tid=self.next_tid,
+                            size="0.001",
+                            time_ms=START_MS + self.next_tid,
+                        )
                     )
-                    for index in range(USER_FILLS_PAGE_LIMIT)
-                ]
+                    self.next_tid += 1
+                self.boundary = values[-1]
+                return values
 
         bundle = reconcile(RetentionTransport())
 

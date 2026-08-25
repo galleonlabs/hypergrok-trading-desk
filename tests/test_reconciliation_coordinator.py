@@ -100,7 +100,9 @@ def make_bundle(store, snapshot, *, complete: bool = True, reason: str | None = 
     saturated = reason == "page_saturated"
     retention_limited = reason == "retention_limited"
     coverage = FillCoverage(
-        requested_start_time_ms=snapshot.server_time_ms - 60_000,
+        requested_start_time_ms=store.get_preflight(
+            "command-1"
+        ).account_server_time_ms,
         requested_end_time_ms=snapshot.server_time_ms,
         page_count=1,
         page_limit=2_000,

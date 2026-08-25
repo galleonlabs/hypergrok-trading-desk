@@ -222,6 +222,7 @@ def build_dispatch_preflight(
         environment=entry.environment,
         account_id=entry.account_id,
         account_snapshot_hash=account.artifact_hash,
+        account_server_time_ms=venue_account.server_time_ms,
         metadata_hash=metadata.source_hash,
         market_snapshot_hash=_market_hash(dict(market)),
         risk_policy_hash=ticket.policy_hash,

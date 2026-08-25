@@ -12,6 +12,7 @@ from trading_harness.registered_decision import (
     ProfitabilityAttestationStatus,
     RegisteredVerdict,
     build_registered_assessment,
+    registered_assessment_from_dict,
 )
 from trading_harness.sentiment import (
     CollectionMethod,
@@ -117,6 +118,11 @@ class RegisteredAssessmentTests(unittest.TestCase):
             reward = result.target_price - result.reference_price
             self.assertEqual(reward, risk * Decimal("2"))
         self.assertFalse(result.as_dict()["order_submitted"])
+        self.assertEqual(result, registered_assessment_from_dict(result.as_dict()))
+        tampered = result.as_dict()
+        tampered["instrument"] = "BTC"
+        with self.assertRaisesRegex(ValidationError, "artifact_hash"):
+            registered_assessment_from_dict(tampered)
 
     def test_missing_gate_or_manual_browser_is_advisory_only(self) -> None:
         missing = build_registered_assessment(

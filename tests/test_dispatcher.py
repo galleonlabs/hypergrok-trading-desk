@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta
+from decimal import Decimal
 import json
 from pathlib import Path
 import tempfile
@@ -9,6 +11,12 @@ from unittest.mock import patch
 
 from trading_harness.dispatcher import DispatchPackage, ExecutionDispatcher
 from trading_harness.domain import Environment
+from trading_harness.errors import (
+    AdmissionDenied,
+    EntrySubmissionRevoked,
+    RecordNotFound,
+    StateConflict,
+)
 from trading_harness.execution_store import DispatchPreflight, ExecutionStore
 from trading_harness.hyperliquid_signer import (
     SignerPolicy,
@@ -22,7 +30,13 @@ from trading_harness.hyperliquid_wire import (
     HyperliquidNetwork,
     build_protected_order_action,
 )
-from tests.test_execution_store import NOW, digest, make_approval, make_ticket
+from tests.test_execution_store import (
+    NOW,
+    digest,
+    make_approval,
+    make_infrastructure_grant,
+    make_ticket,
+)
 from tests.test_hyperliquid_signer import FakeNonceAllocator, FakeSigner, FakeWallet
 from tests.test_hyperliquid_wire import metadata
 
@@ -52,8 +66,11 @@ class DispatcherTests(unittest.TestCase):
             max_reserved_notional="2000",
         )
         self.ticket = make_ticket()
+        grant = make_infrastructure_grant(self.ticket)
+        self.store.register_infrastructure_grant(grant, at=NOW)
         self.store.register_ticket(
             self.ticket,
+            infrastructure_grant_hash=grant.grant_hash,
             stored_at=NOW + timedelta(milliseconds=1),
         )
         approval = make_approval(self.ticket)
@@ -85,6 +102,9 @@ class DispatcherTests(unittest.TestCase):
             environment=Environment.TESTNET,
             account_id="testnet-account",
             account_snapshot_hash=digest("fresh-account"),
+            account_server_time_ms=int(
+                (at - timedelta(milliseconds=500)).timestamp() * 1_000
+            ),
             metadata_hash=unsigned.metadata_hash,
             market_snapshot_hash=digest("fresh-market"),
             risk_policy_hash=ticket.policy_hash,
@@ -217,6 +237,31 @@ class DispatcherTests(unittest.TestCase):
         )
         self.assertIsNone(self.dispatcher().dispatch_next("dispatcher-2"))
 
+    def test_permanent_preflight_denial_voids_unsent_command_without_signing(self) -> None:
+        def deny(*_arguments):
+            raise AdmissionDenied("TEST_DENIAL", "permanent fixture denial")
+
+        dispatcher = ExecutionDispatcher(
+            self.store,
+            preparer=deny,
+            signer=self.sign,
+            clock=self.clock,
+            lease_seconds=15,
+        )
+        result = dispatcher.dispatch_next("dispatcher")
+
+        assert result is not None
+        self.assertEqual("preflight_denied", result.outcome)
+        self.assertEqual("TEST_DENIAL", result.detail_code)
+        self.assertFalse(result.venue_write_attempted)
+        self.assertEqual("terminal", self.store.get_command("command-1").state)
+        self.assertEqual(
+            (Decimal("0"), Decimal("0")), self.store.get_reserved_exposure()
+        )
+        self.assertEqual("terminal", self.store.get_outbox("command-1").state)
+        self.assertEqual([], self.signing_events)
+        self.assertIsNone(dispatcher.dispatch_next("dispatcher-2"))
+
     def test_timeout_becomes_unknown_without_retry(self) -> None:
         def timeout(_endpoint, _body, _timeout):
             raise TimeoutError("private timeout")
@@ -231,6 +276,45 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(result.detail_code, "timeout")
         self.assertFalse(result.retry_performed)
         self.assertEqual(self.store.get_attempt("command-1").state, "unknown")
+
+    def test_revoked_final_submission_guard_blocks_after_preflight_and_signing(self) -> None:
+        revoked = False
+
+        def prepare_and_revoke(command, ticket, plan, at):
+            nonlocal revoked
+            package = self.prepare(command, ticket, plan, at)
+            revoked = True
+            return package
+
+        @contextmanager
+        def guard():
+            if revoked:
+                raise EntrySubmissionRevoked(
+                    "runtime submission capability was revoked"
+                )
+            yield
+
+        dispatcher = ExecutionDispatcher(
+            self.store,
+            preparer=prepare_and_revoke,
+            signer=self.sign,
+            clock=self.clock,
+            lease_seconds=15,
+            submission_guard=guard,
+        )
+        with patch(
+            "trading_harness.hyperliquid_transport._default_sender",
+            side_effect=AssertionError("revoked entry must not reach sender"),
+        ):
+            result = dispatcher.dispatch_next("dispatcher")
+
+        assert result is not None
+        self.assertEqual("submission_revoked", result.outcome)
+        self.assertFalse(result.venue_write_attempted)
+        self.assertEqual("terminal", self.store.get_command("command-1").state)
+        self.assertEqual("prepared", self.store.get_attempt("command-1").state)
+        with self.assertRaises(RecordNotFound):
+            self.store.get_transport_evidence("command-1")
 
     def test_filled_entry_rejected_stop_returns_critical_recovery_state(self) -> None:
         def sender(endpoint, _body, _timeout):

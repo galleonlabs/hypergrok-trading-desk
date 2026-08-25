@@ -122,6 +122,21 @@ def _address(value: object) -> str:
     return value.lower()
 
 
+def _keychain_path(value: object) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 1024
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise ValidationError("keychain_path is invalid")
+    if not os.path.isabs(value) or os.path.normpath(value) != value:
+        raise ValidationError("keychain_path must be normalized and absolute")
+    return value
+
+
 def _zero(buffer: bytearray) -> None:
     for index in range(len(buffer)):
         buffer[index] = 0
@@ -233,6 +248,7 @@ class KeychainCredentialConfig:
     account: str
     expected_signer_address: str
     timeout_seconds: int = 5
+    keychain_path: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "service", _text(self.service, "service"))
@@ -244,6 +260,7 @@ class KeychainCredentialConfig:
         )
         if type(self.timeout_seconds) is not int or not 1 <= self.timeout_seconds <= 10:
             raise ValidationError("timeout_seconds must be an integer from 1 to 10")
+        object.__setattr__(self, "keychain_path", _keychain_path(self.keychain_path))
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,6 +420,7 @@ class MacOSKeychainCredentialProvider:
             "-a",
             self._config.account,
             "-w",
+            *((self._config.keychain_path,) if self._config.keychain_path else ()),
         )
         try:
             result = self._runner(

@@ -1,4 +1,4 @@
-"""Agent-neutral, bounded, read-only tools for every model interface.
+"""Agent-neutral, bounded research/learning tools for every model interface.
 
 This module has no dependency on MCP or a model SDK.  Protocol adapters use
 the immutable catalog and :class:`ToolService`; the service repeats all
@@ -22,9 +22,20 @@ from .canonical import (
 )
 from .domain import SemanticIntent
 from .executor import disabled_executor
+from .errors import RecordNotFound
+from .learning_bridge import LearningRecorder
+from .learning_ledger import LearningLedger
+from .post_trade_review import PostTradeReviewer
 from .node import default_state_database
 from .research_api import ResearchService
 from .research_store import ResearchStore
+from .staging_inbox import (
+    StagingState,
+    StagingView,
+    TradeStagingInbox,
+    TrustedQuoteDecision,
+    TrustedQuoteRequest,
+)
 
 
 JsonObject = dict[str, Any]
@@ -205,12 +216,16 @@ _STATUS_OUTPUT_SCHEMA: JsonObject = {
         "exposed_tools",
         "market_data",
         "research",
+        "learning",
         "venue_writes_enabled",
         "credential_loading_enabled",
     ],
     "properties": {
         "component": {"type": "string", "const": "trading-harness"},
-        "mode": {"type": "string", "const": "research_only"},
+        "mode": {
+            "type": "string",
+            "enum": ["research_only", "research_and_testnet_learning_staging"],
+        },
         "ok": {"type": "boolean"},
         "execution": {
             "type": "object",
@@ -235,19 +250,23 @@ _STATUS_OUTPUT_SCHEMA: JsonObject = {
                 "enum": [
                     "analyze_asset",
                     "get_latest_sentiment",
+                    "get_learning_review",
+                    "get_learning_summary",
                     "get_node_status",
                     "get_harness_status",
                     "get_market_brief",
+                    "get_trade_stage",
                     "list_tracked_assets",
                     "pause_tracked_asset",
                     "record_manual_sentiment",
+                    "stage_trade_candidate",
                     "track_asset",
                     "validate_trade_intent",
                     "validate_candidate_profitability",
                 ],
             },
-            "minItems": 11,
-            "maxItems": 11,
+            "minItems": 15,
+            "maxItems": 15,
             "uniqueItems": True,
         },
         "research": {
@@ -289,6 +308,24 @@ _STATUS_OUTPUT_SCHEMA: JsonObject = {
                     "maxItems": 2,
                     "uniqueItems": True,
                 },
+            },
+        },
+        "learning": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "staging_profile_configured",
+                "stage_is_authoritative",
+                "approval_tool_exposed",
+                "execution_tool_exposed",
+                "mainnet_authorized",
+            ],
+            "properties": {
+                "staging_profile_configured": {"type": "boolean"},
+                "stage_is_authoritative": {"type": "boolean", "const": False},
+                "approval_tool_exposed": {"type": "boolean", "const": False},
+                "execution_tool_exposed": {"type": "boolean", "const": False},
+                "mainnet_authorized": {"type": "boolean", "const": False},
             },
         },
         "venue_writes_enabled": {"type": "boolean", "const": False},
@@ -765,6 +802,10 @@ _ANALYSIS_OUTPUT_SCHEMA: JsonObject = {
     "additionalProperties": False,
     "required": [
         "schema_version",
+        "analysis_hash",
+        "analysis_record_hash",
+        "learning_cycle_id",
+        "learning_event_hash",
         "asset",
         "observed_at",
         "history",
@@ -778,6 +819,14 @@ _ANALYSIS_OUTPUT_SCHEMA: JsonObject = {
     ],
     "properties": {
         "schema_version": {"type": "string", "const": "asset_analysis.v1"},
+        "analysis_hash": deepcopy(_HASH_SCHEMA),
+        "analysis_record_hash": deepcopy(_HASH_SCHEMA),
+        "learning_cycle_id": {
+            "anyOf": [_text_schema(128), {"type": "null"}]
+        },
+        "learning_event_hash": {
+            "anyOf": [deepcopy(_HASH_SCHEMA), {"type": "null"}]
+        },
         "asset": deepcopy(_TRACKED_ASSET_SCHEMA),
         "observed_at": deepcopy(_TIMESTAMP_SCHEMA),
         "history": {
@@ -909,6 +958,61 @@ _VALIDATION_SUMMARY_OUTPUT_SCHEMA: JsonObject = {
         "deployment_qualified": {"type": "boolean", "const": False},
         "profit_guaranteed": {"type": "boolean", "const": False},
         "order_submitted": {"type": "boolean", "const": False},
+    },
+}
+
+_TRADE_STAGE_OUTPUT_SCHEMA: JsonObject = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema_version",
+        "document",
+        "state",
+        "expired_at",
+        "latest_event_sequence",
+        "chain_hash",
+        "authoritative",
+    ],
+    "properties": {
+        "schema_version": {"type": "string", "const": "trade_stage_view.v1"},
+        "document": {
+            "type": "object",
+            "required": [
+                "schema_version",
+                "document_id",
+                "request",
+                "decision",
+                "created_at",
+                "expires_at",
+                "authority",
+                "document_hash",
+            ],
+            "properties": {
+                "schema_version": {
+                    "type": "string",
+                    "const": "trade_staging_document.v1",
+                },
+                "document_id": _text_schema(80),
+                "decision": {"type": "string", "enum": ["staged", "blocked"]},
+                "document_hash": deepcopy(_HASH_SCHEMA),
+                "created_at": deepcopy(_TIMESTAMP_SCHEMA),
+                "expires_at": deepcopy(_TIMESTAMP_SCHEMA),
+                "authority": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean",
+                        "const": False,
+                    },
+                },
+            },
+        },
+        "state": {"type": "string", "enum": ["staged", "blocked", "expired"]},
+        "expired_at": {
+            "anyOf": [deepcopy(_TIMESTAMP_SCHEMA), {"type": "null"}]
+        },
+        "latest_event_sequence": {"type": "integer", "minimum": 1},
+        "chain_hash": deepcopy(_HASH_SCHEMA),
+        "authoritative": {"type": "boolean", "const": False},
     },
 }
 
@@ -1089,6 +1193,7 @@ TOOL_CATALOG: tuple[ToolDefinition, ...] = (
         },
         output_schema=deepcopy(_ANALYSIS_OUTPUT_SCHEMA),
         open_world=True,
+        read_only=False,
     ),
     ToolDefinition(
         name="validate_candidate_profitability",
@@ -1105,6 +1210,80 @@ TOOL_CATALOG: tuple[ToolDefinition, ...] = (
         },
         output_schema=deepcopy(_VALIDATION_SUMMARY_OUTPUT_SCHEMA),
         open_world=True,
+    ),
+    ToolDefinition(
+        name="stage_trade_candidate",
+        title="Stage a non-authoritative trade candidate",
+        description=(
+            "Write an immutable local staging request for one exact saved analysis. "
+            "The request cannot specify economics, account data, approval, credentials, "
+            "or execution fields and never creates trade authority."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "asset_id",
+                "expected_analysis_hash",
+                "idempotency_key",
+            ],
+            "properties": {
+                "asset_id": _text_schema(128),
+                "expected_analysis_hash": deepcopy(_HASH_SCHEMA),
+                "idempotency_key": {
+                    **_text_schema(128),
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                },
+            },
+        },
+        output_schema=deepcopy(_TRADE_STAGE_OUTPUT_SCHEMA),
+        read_only=False,
+        idempotent=True,
+        open_world=True,
+    ),
+    ToolDefinition(
+        name="get_trade_stage",
+        title="Get an immutable trade stage",
+        description=(
+            "Read and integrity-check one local non-authoritative staging document."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["document_id"],
+            "properties": {"document_id": _text_schema(80)},
+        },
+        output_schema=deepcopy(_TRADE_STAGE_OUTPUT_SCHEMA),
+    ),
+    ToolDefinition(
+        name="get_learning_review",
+        title="Get a deterministic learning-cycle review",
+        description=(
+            "Read a descriptive review of one immutable decision/trade cycle. "
+            "The review makes no causality or profitability claim."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["cycle_id"],
+            "properties": {"cycle_id": _text_schema(128)},
+        },
+        output_schema={"type": "object"},
+    ),
+    ToolDefinition(
+        name="get_learning_summary",
+        title="Get versioned descriptive learning metrics",
+        description=(
+            "Aggregate immutable learning cycles by exact strategy/configuration "
+            "version without inferring causality or future profitability."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+            "maxProperties": 0,
+        },
+        output_schema={"type": "object"},
     ),
     ToolDefinition(
         name="get_node_status",
@@ -1324,11 +1503,25 @@ class ToolService:
         market_transport: object | None = None,
         research_service: ResearchService | None = None,
         research_store_path: str | Path | None = None,
+        staging_inbox: TradeStagingInbox | None = None,
+        learning_ledger_path: str | Path | None = None,
+        learning_ledger: LearningLedger | None = None,
+        learning_quote_configured: bool = False,
     ) -> None:
         if research_service is not None and not isinstance(
             research_service, ResearchService
         ):
             raise TypeError("research_service must be ResearchService or None")
+        if staging_inbox is not None and not isinstance(
+            staging_inbox, TradeStagingInbox
+        ):
+            raise TypeError("staging_inbox must be TradeStagingInbox or None")
+        if learning_ledger is not None and not isinstance(
+            learning_ledger, LearningLedger
+        ):
+            raise TypeError("learning_ledger must be LearningLedger or None")
+        if type(learning_quote_configured) is not bool:
+            raise TypeError("learning_quote_configured must be bool")
         self._market_brief_reader = market_brief_reader or _default_market_brief_reader
         self._market_transport = market_transport
         self._research_service = research_service
@@ -1337,13 +1530,106 @@ class ToolService:
             if research_store_path is None
             else Path(research_store_path)
         )
+        self._staging_inbox = staging_inbox
+        self._learning_ledger_path = (
+            self._research_store_path.with_name(
+                self._research_store_path.name + ".learning.sqlite3"
+            )
+            if learning_ledger_path is None
+            else Path(learning_ledger_path)
+        )
+        self._learning_ledger = learning_ledger
+        self._learning_quote_configured = learning_quote_configured
+
+    def _learning(self) -> LearningLedger:
+        if self._learning_ledger is None:
+            self._learning_ledger = LearningLedger(self._learning_ledger_path)
+        return self._learning_ledger
 
     def _research(self) -> ResearchService:
         if self._research_service is None:
             self._research_service = ResearchService(
-                ResearchStore(self._research_store_path)
+                ResearchStore(self._research_store_path),
+                learning_recorder=LearningRecorder(
+                    self._learning()
+                ),
             )
         return self._research_service
+
+    def _default_quote_decision(
+        self,
+        request: TrustedQuoteRequest,
+    ) -> TrustedQuoteDecision:
+        try:
+            record = self._research().store.get_asset_analysis(
+                request.expected_analysis_hash
+            )
+        except RecordNotFound:
+            return TrustedQuoteDecision.blocked(block_code="analysis_not_found")
+        if record.asset_id != request.asset_id:
+            return TrustedQuoteDecision.blocked(
+                block_code="analysis_asset_mismatch",
+                analysis_hash=record.analysis_hash,
+            )
+        assessment = record.payload.get("assessment")
+        if not isinstance(assessment, Mapping):
+            return TrustedQuoteDecision.blocked(
+                block_code="analysis_unavailable",
+                analysis_hash=record.analysis_hash,
+            )
+        verdict = assessment.get("verdict")
+        if verdict == "nothing":
+            code = "nothing_to_trade"
+        elif verdict == "unavailable":
+            code = "analysis_unavailable"
+        elif verdict in {"buy", "sell"}:
+            code = "infrastructure_quote_profile_not_configured"
+        else:
+            code = "analysis_invalid"
+        return TrustedQuoteDecision.blocked(
+            block_code=code,
+            analysis_hash=record.analysis_hash,
+        )
+
+    def _staging(self) -> TradeStagingInbox:
+        if self._staging_inbox is None:
+            staging_path = self._research_store_path.with_name(
+                self._research_store_path.name + ".staging.sqlite3"
+            )
+            self._staging_inbox = TradeStagingInbox(
+                staging_path,
+                quote_callback=self._default_quote_decision,
+            )
+        return self._staging_inbox
+
+    @staticmethod
+    def _stage_view(view: StagingView) -> JsonObject:
+        document = {
+            **view.document.as_dict(),
+            "document_hash": view.document.document_hash,
+        }
+        return {
+            "schema_version": "trade_stage_view.v1",
+            "document": document,
+            "state": view.state.value,
+            "expired_at": (
+                None
+                if view.expired_at is None
+                else view.expired_at.isoformat(timespec="milliseconds").replace(
+                    "+00:00", "Z"
+                )
+            ),
+            "latest_event_sequence": view.latest_event_sequence,
+            "chain_hash": view.chain_hash,
+            "authoritative": False,
+        }
+
+    @staticmethod
+    def _review_data(value: object) -> JsonObject:
+        converted = canonical_data(value)
+        if not isinstance(converted, dict):
+            raise TypeError("learning review did not canonicalize to an object")
+        return converted
 
     @property
     def catalog(self) -> tuple[JsonObject, ...]:
@@ -1358,7 +1644,11 @@ class ToolService:
         )
         return {
             "component": "trading-harness",
-            "mode": "research_only",
+            "mode": (
+                "research_and_testnet_learning_staging"
+                if self._learning_quote_configured
+                else "research_only"
+            ),
             "ok": safe,
             "execution": execution.as_dict(),
             "exposed_tools": sorted(_TOOL_NAMES),
@@ -1374,6 +1664,13 @@ class ToolService:
                 "local_state_writes_enabled": True,
                 "manual_browser_unattended_eligible": False,
                 "registered_strategy": "candidate-v0/1",
+            },
+            "learning": {
+                "staging_profile_configured": self._learning_quote_configured,
+                "stage_is_authoritative": False,
+                "approval_tool_exposed": False,
+                "execution_tool_exposed": False,
+                "mainnet_authorized": False,
             },
             "venue_writes_enabled": False,
             "credential_loading_enabled": False,
@@ -1494,6 +1791,58 @@ class ToolService:
     def validate_candidate_profitability(self, asset_id: object) -> JsonObject:
         return self._canonical_result(self._research().validate_candidate(asset_id))
 
+    def stage_trade_candidate(
+        self,
+        asset_id: object,
+        expected_analysis_hash: object,
+        idempotency_key: object,
+    ) -> JsonObject:
+        view = self._staging().stage(
+            {
+                "asset_id": asset_id,
+                "expected_analysis_hash": expected_analysis_hash,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if (
+            view.state is StagingState.STAGED
+            and isinstance(view.document.ticket_payload, Mapping)
+            and view.document.ticket_payload.get("schema_version")
+            == "infrastructure_learning_ticket.v1"
+        ):
+            LearningRecorder(self._learning()).record_staged_ticket(
+                view.document.ticket_payload
+            )
+        return self._stage_view(view)
+
+    def get_trade_stage(self, document_id: object) -> JsonObject:
+        if not isinstance(document_id, str):
+            raise ToolInputError("document_id must be a string")
+        return self._stage_view(self._staging().get(document_id))
+
+    def get_learning_review(self, cycle_id: object) -> JsonObject:
+        try:
+            checked = _bounded_text(cycle_id, "cycle_id", 128)
+        except _IntentDocumentError as error:
+            raise ToolInputError(error.safe_message) from error
+        return self._review_data(
+            PostTradeReviewer(self._learning()).review_cycle(checked)
+        )
+
+    def get_learning_summary(self) -> JsonObject:
+        reviewer = PostTradeReviewer(self._learning())
+        values = canonical_data(reviewer.aggregate_by_version())
+        if not isinstance(values, list):
+            raise TypeError("learning summary did not canonicalize to an array")
+        return {
+            "schema_version": "learning_summary.v1",
+            "groups": values,
+            "group_count": len(values),
+            "interpretation_boundary": (
+                "descriptive_association_only_no_causality_or_future_profitability_claim"
+            ),
+        }
+
     def get_node_status(self, node_id: object = "trading-desk-research") -> JsonObject:
         return self._canonical_result(self._research().get_node_status(node_id))
 
@@ -1574,6 +1923,31 @@ class ToolService:
             if set(supplied) != {"asset_id"}:
                 raise ToolInputError(f"{tool_name} requires exactly asset_id")
             return getattr(self, tool_name)(supplied["asset_id"])
+        if tool_name == "stage_trade_candidate":
+            required = {
+                "asset_id",
+                "expected_analysis_hash",
+                "idempotency_key",
+            }
+            if set(supplied) != required:
+                raise ToolInputError("stage_trade_candidate arguments are invalid")
+            return self.stage_trade_candidate(
+                supplied["asset_id"],
+                supplied["expected_analysis_hash"],
+                supplied["idempotency_key"],
+            )
+        if tool_name == "get_trade_stage":
+            if set(supplied) != {"document_id"}:
+                raise ToolInputError("get_trade_stage requires document_id")
+            return self.get_trade_stage(supplied["document_id"])
+        if tool_name == "get_learning_review":
+            if set(supplied) != {"cycle_id"}:
+                raise ToolInputError("get_learning_review requires cycle_id")
+            return self.get_learning_review(supplied["cycle_id"])
+        if tool_name == "get_learning_summary":
+            if supplied:
+                raise ToolInputError("get_learning_summary accepts no arguments")
+            return self.get_learning_summary()
         if tool_name == "get_node_status":
             if set(supplied) - {"node_id"}:
                 raise ToolInputError("get_node_status accepts only node_id")

@@ -19,7 +19,24 @@
   expired-unsent recovery terminalization, credential-free production
   preflight, attended manual-sentiment quoting, and an isolated macOS Keychain
   API-wallet provider.
-- Expanded the Codex/ChatGPT plugin to six skills and eleven bounded research tools; three tools write only local research state. OpenCode mirrors the same interface with those writes set to `ask`.
+- Added authenticated, expiring TESTNET infrastructure-learning grants,
+  immutable analysis/staging/learning ledgers, deterministic post-trade
+  reviews, and an attended direct-terminal control plane. Profitability and
+  mainnet authority remain explicitly false.
+- Added strict fills/funding daily-loss synchronization, a fenced serialized
+  executor runtime, exact venue recovery readers, dynamic durable-plan CLOID
+  verification, complete parent-fill economics, launchd/systemd worker
+  templates, and the separate `trading-harness-executor` CLI.
+- Added same-tick daily-loss dispatch capability, venue-server reconciliation
+  watermarks, deterministic recovery-close CLOIDs, late-write expiry fencing,
+  canonical cross-lane parent/recovery fill attribution and durable recovery
+  economics projection. Agent-facing quoting no longer opens capital-state
+  daily-loss storage.
+- Added proven-unsent submission-boundary crash classification, bounded
+  preflight denial results, post-read mutation leases, exact replay claim
+  release, an attended stale-halt acknowledgement, explicit Keychain paths and
+  split executor-private versus learning-shared deployment directories.
+- Expanded the Codex/ChatGPT plugin to six skills and fifteen bounded research/learning tools; five tools write only local non-capital state. OpenCode mirrors the same interface with those writes set to `ask`.
 - Added an independent disposition of `SMA-outfits` as a draft hypothesis catalog rather than evidence or executable strategy.
 
 ## Harness foundation
@@ -30,7 +47,7 @@
 - Added explicit closed MCP input/output schemas, server-side duplicate validation, and a self-contained generated plugin runtime for cached installs.
 - Added an allowlisted public Hyperliquid market brief with exact decimals, source/receipt timestamps, freshness gates, and 5/10/25 bps depth.
 - Added fail-closed harness-status and semantic-intent validation/hash tools; no tool can authorize, sign, or write to a venue.
-- Added OpenCode configuration for the same three exact MCP tools without selecting a model provider.
+- Added OpenCode configuration for the same bounded MCP tools without selecting a model provider.
 - Added canonical semantic intents, evidence/deployment separation, policy/admission scaffolding, durable outbox/reservation design, and a fail-closed executor boundary.
 - Added the fork provenance record, source audit matrix, and normative harness specification.
 - Removed legacy agent prompts, write skills, mutable setup path, and upstream branding from runtime locations. Selected research/desk knowledge was rewritten into the new plugin without key loaders or direct exchange-write snippets. The exact upstream snapshot remains available through Git history and recorded object IDs.

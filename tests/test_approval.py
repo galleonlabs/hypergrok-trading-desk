@@ -53,7 +53,7 @@ class TestnetApprovalTests(unittest.TestCase):
             risk,
             approval_id="approval-1",
             approver_id="local-user",
-            confirmation=f"approve {risk.ticket_id} {risk.ticket_hash[:12]}",
+            confirmation=f"approve {risk.ticket_id} {risk.ticket_hash[:16]}",
             at=NOW + timedelta(seconds=1),
         )
         token_hash = self.authority().verify(
@@ -99,7 +99,7 @@ class TestnetApprovalTests(unittest.TestCase):
             risk,
             approval_id="approval-2",
             approver_id="local-user",
-            confirmation=f"approve {risk.ticket_id} {risk.ticket_hash[:12]}",
+            confirmation=f"approve {risk.ticket_id} {risk.ticket_hash[:16]}",
             at=NOW + timedelta(seconds=1),
         )
         with self.assertRaisesRegex(StateConflict, "MAC"):
@@ -129,7 +129,7 @@ class TestnetApprovalTests(unittest.TestCase):
             risk,
             approval_id="approval-3",
             approver_id="local-user",
-            confirmation=f"approve {risk.ticket_id} {risk.ticket_hash[:12]}",
+            confirmation=f"approve {risk.ticket_id} {risk.ticket_hash[:16]}",
             at=NOW + timedelta(seconds=1),
         )
         with self.assertRaisesRegex(ValidationError, "testnet-only"):

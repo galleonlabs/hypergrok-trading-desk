@@ -184,7 +184,7 @@ class MigrationTests(ResearchStoreTestCase):
         connection = sqlite3.connect(self.path)
         try:
             self.assertEqual(
-                1,
+                RESEARCH_SCHEMA_VERSION,
                 connection.execute(
                     "SELECT count(*) FROM research_schema_migrations"
                 ).fetchone()[0],

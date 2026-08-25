@@ -74,12 +74,16 @@ class MCPAdapterTests(unittest.TestCase):
             {
                 "analyze_asset",
                 "get_latest_sentiment",
+                "get_learning_review",
+                "get_learning_summary",
                 "get_node_status",
                 "get_harness_status",
                 "get_market_brief",
+                "get_trade_stage",
                 "list_tracked_assets",
                 "pause_tracked_asset",
                 "record_manual_sentiment",
+                "stage_trade_candidate",
                 "track_asset",
                 "validate_candidate_profitability",
                 "validate_trade_intent",
@@ -311,6 +315,34 @@ class MCPAdapterTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, 2)
 
+    def test_configured_learning_profile_requires_all_three_absolute_paths(self) -> None:
+        stderr = StringIO()
+        with (
+            patch.object(mcp_server, "build_mcp_server") as build,
+            redirect_stderr(stderr),
+        ):
+            result = mcp_server.main(
+                [
+                    "--learning-executor-config",
+                    "/private/executor.toml",
+                ]
+            )
+        self.assertEqual(2, result)
+        self.assertFalse(build.called)
+        self.assertIn("ValueError", stderr.getvalue())
+
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            mcp_server.main(
+                [
+                    "--learning-executor-config",
+                    "relative.toml",
+                    "--learning-research-db",
+                    "/private/research.sqlite3",
+                    "--learning-grant",
+                    "/private/grant.json",
+                ]
+            )
+
 
 class PluginWiringTests(unittest.TestCase):
     def test_manifest_points_to_local_bounded_research_mcp_config(self) -> None:
@@ -323,14 +355,14 @@ class PluginWiringTests(unittest.TestCase):
         self.assertIn("Read", manifest["interface"]["capabilities"])
         self.assertIn("Write", manifest["interface"]["capabilities"])
 
-    def test_mcp_config_launches_only_the_checked_in_stdio_server(self) -> None:
+    def test_mcp_config_targets_only_the_configured_loopback_service(self) -> None:
         config = json.loads((PLUGIN / ".mcp.json").read_text(encoding="utf-8"))
 
         self.assertEqual(set(config["mcpServers"]), {"trading_desk"})
         server = config["mcpServers"]["trading_desk"]
-        self.assertEqual(server["command"], "python3")
-        self.assertEqual(server["args"], ["./server.py"])
-        self.assertEqual(server["cwd"], ".")
+        self.assertEqual(server["url"], "http://127.0.0.1:8000/mcp")
+        self.assertNotIn("command", server)
+        self.assertNotIn("args", server)
         self.assertNotIn("env", server)
         self.assertNotIn("env_vars", server)
 

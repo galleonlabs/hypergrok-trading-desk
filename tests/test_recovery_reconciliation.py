@@ -7,10 +7,11 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from trading_harness.canonical import canonical_json, domain_hash
 from trading_harness.domain import Environment
-from trading_harness.errors import StateConflict, ValidationError
+from trading_harness.errors import RecordNotFound, StateConflict, ValidationError
 from trading_harness.execution_store import (
     DispatchPreflight,
     ExecutionStore,
@@ -20,15 +21,22 @@ from trading_harness.execution_store import (
     SignedEnvelopeEvidence,
     SignedRecoveryEvidence,
     TransportOutcomeEvidence,
+    VenueFill,
 )
 from trading_harness.hyperliquid_account import OrderSide, fetch_account_snapshot
 from trading_harness.hyperliquid_reconcile import (
+    AuxiliaryFillEvidence,
+    AuxiliaryOrderEvidence,
+    AuxiliaryOwnedOrder,
     FillCoverage,
+    FILL_LOOKBACK_MS,
+    OwnedLeg,
     ParsedOrderStatus,
     SignedFillEvidence,
     VenueReconciliationBundle,
     VenueOrderState,
     VENUE_RECONCILIATION_HASH_DOMAIN,
+    reconcile_hyperliquid_venue,
 )
 from trading_harness.hyperliquid_wire import HyperliquidNetwork
 from trading_harness.recovery_reconciliation import (
@@ -40,7 +48,13 @@ from trading_harness.reconciliation_coordinator import (
     _bundle_material,
 )
 from tests.test_account_risk import flat_clearing
-from tests.test_execution_store import NOW, digest, make_approval, make_ticket
+from tests.test_execution_store import (
+    NOW,
+    digest,
+    make_approval,
+    make_infrastructure_grant,
+    make_ticket,
+)
 from tests.test_hyperliquid_account import (
     ACCOUNT,
     FixtureTransport,
@@ -52,6 +66,12 @@ from tests.test_hyperliquid_account import (
 CLOSE_CLOID = "0x" + "c" * 32
 CANCEL_CLOID = "0x" + "d" * 32
 ACCOUNT_ID = "testnet-recovery-desk"
+RECOVERY_SERVER_MS = int(
+    (NOW + timedelta(seconds=11, milliseconds=500)).timestamp() * 1_000
+)
+RECOVERY_FILL_START_MS = int(
+    (NOW + timedelta(seconds=4)).timestamp() * 1_000
+)
 
 
 def fresh_flat_snapshot(at):
@@ -80,8 +100,8 @@ def fresh_unprotected_long_snapshot(at):
 
 def complete_coverage() -> FillCoverage:
     return FillCoverage(
-        requested_start_time_ms=1,
-        requested_end_time_ms=2,
+        requested_start_time_ms=RECOVERY_FILL_START_MS,
+        requested_end_time_ms=RECOVERY_SERVER_MS,
         page_count=1,
         page_limit=2_000,
         retention_limit=10_000,
@@ -98,8 +118,8 @@ def complete_coverage() -> FillCoverage:
 
 def empty_complete_coverage() -> FillCoverage:
     return FillCoverage(
-        requested_start_time_ms=1,
-        requested_end_time_ms=2,
+        requested_start_time_ms=RECOVERY_FILL_START_MS,
+        requested_end_time_ms=RECOVERY_SERVER_MS,
         page_count=1,
         page_limit=2_000,
         retention_limit=10_000,
@@ -126,8 +146,12 @@ class RecoveryCoordinatorTests(unittest.TestCase):
         )
         ticket = make_ticket(account_id=ACCOUNT_ID)
         self.ticket = ticket
+        grant = make_infrastructure_grant(ticket, account_id=ACCOUNT_ID)
+        self.store.register_infrastructure_grant(grant, at=NOW)
         self.store.register_ticket(
-            ticket, stored_at=NOW + timedelta(milliseconds=1)
+            ticket,
+            infrastructure_grant_hash=grant.grant_hash,
+            stored_at=NOW + timedelta(milliseconds=1),
         )
         approval = make_approval(ticket, account_id=ACCOUNT_ID)
         self.store.register_approval(approval)
@@ -139,6 +163,49 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             at=NOW + timedelta(milliseconds=3),
         )
 
+    def parent_auxiliary_statuses(self) -> tuple[AuxiliaryOrderEvidence, ...]:
+        parent = self.store.get_command("command-1")
+        return tuple(
+            AuxiliaryOrderEvidence(
+                AuxiliaryOwnedOrder(
+                    owner_kind="parent_leg",
+                    owner_id=parent.command_id,
+                    source_hash=parent.plan_hash,
+                    role=leg.role,
+                    cloid=leg.cloid,
+                    symbol="ETH",
+                    side=OrderSide(leg.side),
+                    requested_quantity=leg.requested_quantity,
+                    is_trigger=leg.role != "entry",
+                    reduce_only=leg.role != "entry",
+                ),
+                ParsedOrderStatus(
+                    role=f"auxiliary:{parent.command_id}:{leg.role}",
+                    requested_cloid=leg.cloid,
+                    state=VenueOrderState.MISSING,
+                    venue_status=None,
+                    status_timestamp_ms=None,
+                    oid=None,
+                    symbol=None,
+                    remaining_size=None,
+                    original_size=None,
+                    is_trigger=None,
+                    reduce_only=None,
+                ),
+            )
+            for leg in self.store.get_legs(parent.command_id)
+        )
+
+    def noop_complete_coverage(self) -> FillCoverage:
+        watermark = self.store.get_preflight(
+            "command-1"
+        ).account_server_time_ms
+        assert watermark is not None
+        return replace(
+            empty_complete_coverage(),
+            requested_start_time_ms=watermark,
+        )
+
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
@@ -148,6 +215,9 @@ class RecoveryCoordinatorTests(unittest.TestCase):
         material: dict[str, object],
         *,
         original_attempt=None,
+        outcome: str = "response_received",
+        detail_code: str | None = None,
+        unknown_response_hash: str | None = None,
     ):
         incident = self.store.record_incident(
             incident_id=f"incident-{kind}",
@@ -246,8 +316,10 @@ class RecoveryCoordinatorTests(unittest.TestCase):
                 "trading-harness/hyperliquid-submission-response/v1",
                 noop_body,
             )
-            if kind == "noop_fence"
+            if kind == "noop_fence" and outcome == "response_received"
             else digest("response")
+            if outcome == "response_received"
+            else unknown_response_hash
         )
         transport = TransportOutcomeEvidence(
             command_id=command.recovery_command_id,
@@ -255,9 +327,19 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             signed_evidence_hash=signed.evidence_hash,
             endpoint="https://api.hyperliquid-testnet.xyz/exchange",
             attempted_at_ms=int((NOW + timedelta(seconds=10)).timestamp() * 1_000),
-            outcome="response_received",
-            http_status=200,
-            detail_code="response_received",
+            outcome=outcome,
+            http_status=(
+                200
+                if outcome == "response_received" or unknown_response_hash is not None
+                else None
+            ),
+            detail_code=(
+                detail_code
+                if detail_code is not None
+                else "response_received"
+                if outcome == "response_received"
+                else "socket_closed_after_write"
+            ),
             response_hash=response_hash,
             transport_attempt_hash=digest("transport"),
             send_count=1,
@@ -275,7 +357,7 @@ class RecoveryCoordinatorTests(unittest.TestCase):
                 response_hash=response_hash,
                 parsed_at=NOW + timedelta(seconds=10),
             )
-            if kind == "noop_fence"
+            if kind == "noop_fence" and outcome == "response_received"
             else None
         )
         self.store.record_recovery_outcome(
@@ -303,6 +385,9 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             environment=Environment.TESTNET,
             account_id=ACCOUNT_ID,
             account_snapshot_hash=digest("entry-account"),
+            account_server_time_ms=int(
+                (NOW + timedelta(milliseconds=500)).timestamp() * 1_000
+            ),
             metadata_hash=digest("entry-metadata"),
             market_snapshot_hash=digest("entry-market"),
             risk_policy_hash=self.ticket.policy_hash,
@@ -374,18 +459,41 @@ class RecoveryCoordinatorTests(unittest.TestCase):
         )
         return self.store.get_attempt("command-1")
 
-    def test_close_derives_flat_terminal_proof_from_exact_fill_chain(self) -> None:
+    def test_unknown_close_resolves_flat_from_exact_fill_chain(self) -> None:
         material = {
             "kind": "reduce_only_close",
+            "network": "testnet",
+            "account_id": ACCOUNT_ID,
             "main_account_address": ACCOUNT,
+            "incident_id": "incident-reduce_only_close",
+            "position_snapshot_hash": digest("recovery-position-source"),
             "symbol": "ETH",
+            "asset_id": 0,
             "cloid": CLOSE_CLOID,
             "original_signed_position": "1",
             "close_size": "1",
-            "action": {"type": "order"},
+            "price_bound": "2400",
+            "expires_at_ms": int(
+                (NOW + timedelta(seconds=16)).timestamp() * 1_000
+            ),
+            "action": {
+                "type": "order",
+                "orders": [
+                    {
+                        "a": 0,
+                        "b": False,
+                        "p": "2400",
+                        "s": "1",
+                        "r": True,
+                        "t": {"limit": {"tif": "Ioc"}},
+                        "c": CLOSE_CLOID,
+                    }
+                ],
+                "grouping": "na",
+            },
         }
         command, transport = self.queue_response_recovery(
-            "reduce_only_close", material
+            "reduce_only_close", material, outcome="unknown"
         )
         at = NOW + timedelta(seconds=12)
         snapshot = fresh_flat_snapshot(at)
@@ -405,7 +513,10 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             reduce_only=True,
         )
         fill = SignedFillEvidence(
-            fill_id="close-fill",
+            fill_id=(
+                f"hyperliquid:ETH:"
+                f"{int((at - timedelta(seconds=1)).timestamp() * 1_000)}:1:501"
+            ),
             role="entry",
             cloid=CLOSE_CLOID,
             oid=501,
@@ -433,6 +544,7 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             order_statuses=(status,),
             signed_fills=(fill,),
             fill_coverage=complete_coverage(),
+            auxiliary_order_statuses=self.parent_auxiliary_statuses(),
         )
         result = RecoveryReconciliationCoordinator(self.store).reconcile(
             command.recovery_command_id,
@@ -446,8 +558,15 @@ class RecoveryCoordinatorTests(unittest.TestCase):
         self.assertEqual("terminal", result.recovery_state)
         self.assertEqual("contained", result.incident_resolution)
         self.assertGreater(self.store.get_reserved_exposure()[0], Decimal("0"))
+        recovery_fills = self.store.list_recovery_fills(
+            recovery_command_id=command.recovery_command_id
+        )
+        self.assertEqual(1, len(recovery_fills))
+        self.assertEqual(fill.fill_id, recovery_fills[0].fill_id)
+        self.assertEqual(fill.fee, recovery_fills[0].fee)
+        self.assertEqual(fill.closed_pnl, recovery_fills[0].closed_pnl)
 
-    def test_close_discontinuous_or_overclose_evidence_stays_incomplete(self) -> None:
+    def test_definitive_overclose_failure_terminalizes_for_fresh_replacement(self) -> None:
         material = {
             "kind": "reduce_only_close",
             "main_account_address": ACCOUNT,
@@ -469,7 +588,10 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             Decimal("0.5"), False, True,
         )
         fill = SignedFillEvidence(
-            "bad-fill", "entry", CLOSE_CLOID, 501, 1,
+            (
+                f"hyperliquid:ETH:"
+                f"{int((at - timedelta(seconds=1)).timestamp() * 1_000)}:1:501"
+            ), "entry", CLOSE_CLOID, 501, 1,
             "0x" + "2" * 64, "ETH", OrderSide.SELL,
             Decimal("1"), Decimal("-1"), Decimal("1"), Decimal("0"),
             Decimal("2500"), Decimal("0.25"), Decimal("0"), "USDC",
@@ -478,6 +600,7 @@ class RecoveryCoordinatorTests(unittest.TestCase):
         evidence = RecoveryVenueRead(
             "testnet", ACCOUNT_ID, snapshot.snapshot_hash, at,
             (status,), (fill,), complete_coverage(),
+            auxiliary_order_statuses=self.parent_auxiliary_statuses(),
         )
         result = RecoveryReconciliationCoordinator(self.store).reconcile(
             command.recovery_command_id,
@@ -487,12 +610,642 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             transport=transport,
             at=at,
         )
-        self.assertFalse(result.proof.complete)
+        self.assertTrue(result.proof.complete)
+        self.assertFalse(result.proof.success)
         self.assertIn(
             "recovery_close_fill_quantity_mismatch",
             result.incomplete_reasons,
         )
-        self.assertEqual("reconciling", result.recovery_state)
+        self.assertEqual("terminal", result.recovery_state)
+
+    def test_missing_close_stays_active_until_signed_expiry_is_settled(self) -> None:
+        material = {
+            "kind": "reduce_only_close",
+            "main_account_address": ACCOUNT,
+            "symbol": "ETH",
+            "cloid": CLOSE_CLOID,
+            "original_signed_position": "1",
+            "close_size": "1",
+            "action": {"type": "order"},
+        }
+        command, transport = self.queue_response_recovery(
+            "reduce_only_close", material, outcome="unknown"
+        )
+
+        def positioned_snapshot(at: datetime):
+            clearing = valid_clearing(positions=[raw_position(signed_size="1")])
+            clearing["time"] = int(
+                (at - timedelta(milliseconds=500)).timestamp() * 1_000
+            )
+            return fetch_account_snapshot(
+                ACCOUNT,
+                "testnet",
+                transport=FixtureTransport(clearing=clearing, orders=[]),
+                clock=lambda: at,
+            )
+
+        def missing_evidence(snapshot, at: datetime) -> RecoveryVenueRead:
+            return RecoveryVenueRead(
+                network="testnet",
+                account_id=ACCOUNT_ID,
+                account_snapshot_hash=snapshot.snapshot_hash,
+                observed_at=at,
+                order_statuses=(
+                    ParsedOrderStatus(
+                        "recovery_close",
+                        CLOSE_CLOID,
+                        VenueOrderState.MISSING,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                ),
+                signed_fills=(),
+                fill_coverage=FillCoverage(
+                    requested_start_time_ms=RECOVERY_FILL_START_MS,
+                    requested_end_time_ms=snapshot.server_time_ms,
+                    page_count=1,
+                    page_limit=2_000,
+                    retention_limit=10_000,
+                    returned_rows=0,
+                    unique_fills=0,
+                    duplicate_fills=0,
+                    unmatched_fills=0,
+                    page_saturated=False,
+                    retention_limited=False,
+                    complete=True,
+                    reason="range_exhausted",
+                ),
+                auxiliary_order_statuses=self.parent_auxiliary_statuses(),
+            )
+
+        early_at = NOW + timedelta(seconds=12)
+        early_snapshot = positioned_snapshot(early_at)
+        early = RecoveryReconciliationCoordinator(self.store).reconcile(
+            command.recovery_command_id,
+            "reconciler",
+            snapshot=early_snapshot,
+            evidence=missing_evidence(early_snapshot, early_at),
+            transport=transport,
+            at=early_at,
+        )
+        self.assertFalse(early.proof.complete)
+        self.assertEqual("reconciling", early.recovery_state)
+        self.assertIn(
+            "recovery_close_missing_before_signed_expiry_settled",
+            early.incomplete_reasons,
+        )
+
+        settled_at = NOW + timedelta(seconds=21)
+        settled_snapshot = positioned_snapshot(settled_at)
+        settled = RecoveryReconciliationCoordinator(self.store).reconcile(
+            command.recovery_command_id,
+            "reconciler",
+            snapshot=settled_snapshot,
+            evidence=missing_evidence(settled_snapshot, settled_at),
+            transport=transport,
+            at=settled_at,
+        )
+        self.assertTrue(settled.proof.complete)
+        self.assertFalse(settled.proof.success)
+        self.assertEqual("terminal", settled.recovery_state)
+
+    def test_incomplete_close_fill_replays_with_newer_observation_without_conflict(self) -> None:
+        material = {
+            "kind": "reduce_only_close",
+            "main_account_address": ACCOUNT,
+            "symbol": "ETH",
+            "cloid": CLOSE_CLOID,
+            "original_signed_position": "1",
+            "close_size": "1",
+            "action": {"type": "order"},
+        }
+        command, transport = self.queue_response_recovery(
+            "reduce_only_close", material
+        )
+        fill_time = NOW + timedelta(seconds=11)
+        fill = SignedFillEvidence(
+            f"hyperliquid:ETH:{int(fill_time.timestamp() * 1_000)}:1:501",
+            "recovery_close",
+            CLOSE_CLOID,
+            501,
+            1,
+            "0x" + "3" * 64,
+            "ETH",
+            OrderSide.SELL,
+            Decimal("0.5"),
+            Decimal("-0.5"),
+            Decimal("1"),
+            Decimal("0.5"),
+            Decimal("2495"),
+            Decimal("0.10"),
+            Decimal("-0.25"),
+            "USDC",
+            True,
+            None,
+            int(fill_time.timestamp() * 1_000),
+        )
+
+        def evidence_for(at: datetime, status_name: str):
+            snapshot = fresh_unprotected_long_snapshot(at)
+            status = ParsedOrderStatus(
+                "recovery_close",
+                CLOSE_CLOID,
+                VenueOrderState.ORDER,
+                status_name,
+                int((at - timedelta(seconds=1)).timestamp() * 1_000),
+                501,
+                "ETH",
+                Decimal("0.5"),
+                Decimal("1"),
+                False,
+                True,
+            )
+            evidence = RecoveryVenueRead(
+                network="testnet",
+                account_id=ACCOUNT_ID,
+                account_snapshot_hash=snapshot.snapshot_hash,
+                observed_at=at,
+                order_statuses=(status,),
+                signed_fills=(fill,),
+                fill_coverage=FillCoverage(
+                    requested_start_time_ms=RECOVERY_FILL_START_MS,
+                    requested_end_time_ms=snapshot.server_time_ms,
+                    page_count=1,
+                    page_limit=2_000,
+                    retention_limit=10_000,
+                    returned_rows=1,
+                    unique_fills=1,
+                    duplicate_fills=0,
+                    unmatched_fills=0,
+                    page_saturated=False,
+                    retention_limited=False,
+                    complete=True,
+                    reason="range_exhausted",
+                ),
+                auxiliary_order_statuses=self.parent_auxiliary_statuses(),
+            )
+            return snapshot, evidence
+
+        first_at = NOW + timedelta(seconds=12)
+        first_snapshot, first_evidence = evidence_for(first_at, "open")
+        first = RecoveryReconciliationCoordinator(self.store).reconcile(
+            command.recovery_command_id,
+            "reconciler",
+            snapshot=first_snapshot,
+            evidence=first_evidence,
+            transport=transport,
+            at=first_at,
+        )
+        self.assertFalse(first.proof.complete)
+        initially_stored = self.store.list_recovery_fills(
+            recovery_command_id=command.recovery_command_id
+        )
+        self.assertEqual(1, len(initially_stored))
+
+        second_at = NOW + timedelta(seconds=13)
+        second_snapshot, second_evidence = evidence_for(second_at, "canceled")
+        second = RecoveryReconciliationCoordinator(self.store).reconcile(
+            command.recovery_command_id,
+            "reconciler",
+            snapshot=second_snapshot,
+            evidence=second_evidence,
+            transport=transport,
+            at=second_at,
+        )
+        self.assertTrue(second.proof.complete)
+        self.assertFalse(second.proof.success)
+        self.assertEqual("terminal", second.recovery_state)
+        replayed = self.store.list_recovery_fills(
+            recovery_command_id=command.recovery_command_id
+        )
+        self.assertEqual(initially_stored, replayed)
+
+    def test_parent_stop_and_recovery_close_interleave_without_losing_economics(self) -> None:
+        parent_size = self.store.get_legs("command-1")[0].requested_quantity
+        stop_fill_size = parent_size / Decimal("2")
+        close_size = parent_size - stop_fill_size
+        parent_claim = self.store.claim_next(
+            "parent-dispatcher",
+            at=NOW + timedelta(seconds=1),
+            lease_seconds=30,
+        )
+        assert parent_claim is not None
+        self.store.register_preflight(
+            DispatchPreflight(
+                command_id="command-1",
+                ticket_hash=self.ticket.ticket_hash,
+                plan_hash=self.ticket.plan.plan_hash,  # type: ignore[union-attr]
+                environment=Environment.TESTNET,
+                account_id=ACCOUNT_ID,
+                account_snapshot_hash=digest("cross-lane-flat-account"),
+                account_server_time_ms=int(
+                    (NOW + timedelta(milliseconds=500)).timestamp() * 1_000
+                ),
+                metadata_hash=digest("cross-lane-metadata"),
+                market_snapshot_hash=digest("cross-lane-market"),
+                risk_policy_hash=self.ticket.policy_hash,
+                observed_at=NOW + timedelta(seconds=1),
+                expires_at=NOW + timedelta(seconds=20),
+                passed=True,
+            ),
+            at=NOW + timedelta(seconds=1, milliseconds=1),
+        )
+        material = {
+            "kind": "reduce_only_close",
+            "network": "testnet",
+            "account_id": ACCOUNT_ID,
+            "main_account_address": ACCOUNT,
+            "incident_id": "incident-reduce_only_close",
+            "position_snapshot_hash": digest("cross-lane-position-source"),
+            "symbol": "ETH",
+            "asset_id": 0,
+            "cloid": CLOSE_CLOID,
+            "original_signed_position": str(parent_size),
+            "close_size": str(parent_size),
+            "price_bound": "2400",
+            "expires_at_ms": int(
+                (NOW + timedelta(seconds=16)).timestamp() * 1_000
+            ),
+            "action": {
+                "type": "order",
+                "orders": [
+                    {
+                        "a": 0,
+                        "b": False,
+                        "p": "2400",
+                        "s": str(parent_size),
+                        "r": True,
+                        "t": {"limit": {"tif": "Ioc"}},
+                        "c": CLOSE_CLOID,
+                    }
+                ],
+                "grouping": "na",
+            },
+        }
+        command, transport = self.queue_response_recovery(
+            "reduce_only_close", material
+        )
+        at = NOW + timedelta(seconds=12)
+        snapshot = fresh_flat_snapshot(at)
+        close_status = ParsedOrderStatus(
+            "recovery_close",
+            CLOSE_CLOID,
+            VenueOrderState.ORDER,
+            "canceled",
+            int((at - timedelta(seconds=1)).timestamp() * 1_000),
+            501,
+            "ETH",
+            stop_fill_size,
+            parent_size,
+            False,
+            True,
+        )
+        close_fill = SignedFillEvidence(
+            (
+                f"hyperliquid:ETH:"
+                f"{int((at - timedelta(milliseconds=600)).timestamp() * 1_000)}:2:501"
+            ),
+            "recovery_close",
+            CLOSE_CLOID,
+            501,
+            2,
+            "0x" + "2" * 64,
+            "ETH",
+            OrderSide.SELL,
+            close_size,
+            -close_size,
+            close_size,
+            Decimal("0"),
+            Decimal("2490"),
+            Decimal("0.20"),
+            Decimal("-1"),
+            "USDC",
+            True,
+            None,
+            int((at - timedelta(milliseconds=600)).timestamp() * 1_000),
+        )
+        auxiliary_statuses = list(self.parent_auxiliary_statuses())
+        stop_index = next(
+            index
+            for index, item in enumerate(auxiliary_statuses)
+            if item.order.role == "protective_stop"
+        )
+        stop_order = auxiliary_statuses[stop_index].order
+        auxiliary_statuses[stop_index] = AuxiliaryOrderEvidence(
+            stop_order,
+            ParsedOrderStatus(
+                "auxiliary:command-1:protective_stop",
+                stop_order.cloid,
+                VenueOrderState.ORDER,
+                "canceled",
+                int((at - timedelta(seconds=1)).timestamp() * 1_000),
+                601,
+                "ETH",
+                stop_fill_size,
+                parent_size,
+                True,
+                True,
+            ),
+        )
+        stop_fill = SignedFillEvidence(
+            (
+                f"hyperliquid:ETH:"
+                f"{int((at - timedelta(milliseconds=800)).timestamp() * 1_000)}:1:601"
+            ),
+            "protective_stop",
+            stop_order.cloid,
+            601,
+            1,
+            "0x" + "1" * 64,
+            "ETH",
+            OrderSide.SELL,
+            stop_fill_size,
+            -stop_fill_size,
+            parent_size,
+            close_size,
+            Decimal("2500"),
+            Decimal("0.10"),
+            Decimal("-0.5"),
+            "USDC",
+            True,
+            None,
+            int((at - timedelta(milliseconds=800)).timestamp() * 1_000),
+        )
+        entry_index = next(
+            index
+            for index, item in enumerate(auxiliary_statuses)
+            if item.order.role == "entry"
+        )
+        entry_order = auxiliary_statuses[entry_index].order
+        auxiliary_statuses[entry_index] = AuxiliaryOrderEvidence(
+            entry_order,
+            ParsedOrderStatus(
+                "auxiliary:command-1:entry",
+                entry_order.cloid,
+                VenueOrderState.ORDER,
+                "filled",
+                int((at - timedelta(seconds=1)).timestamp() * 1_000),
+                600,
+                "ETH",
+                Decimal("0"),
+                parent_size,
+                False,
+                False,
+            ),
+        )
+        entry_fill = SignedFillEvidence(
+            (
+                f"hyperliquid:ETH:"
+                f"{int((at - timedelta(milliseconds=1_000)).timestamp() * 1_000)}:0:600"
+            ),
+            "entry",
+            entry_order.cloid,
+            600,
+            0,
+            "0x" + "0" * 64,
+            "ETH",
+            OrderSide.BUY,
+            parent_size,
+            parent_size,
+            Decimal("0"),
+            parent_size,
+            Decimal("2500"),
+            Decimal("0.10"),
+            Decimal("0"),
+            "USDC",
+            True,
+            None,
+            int((at - timedelta(milliseconds=1_000)).timestamp() * 1_000),
+        )
+        coverage = FillCoverage(
+            requested_start_time_ms=RECOVERY_FILL_START_MS,
+            requested_end_time_ms=snapshot.server_time_ms,
+            page_count=1,
+            page_limit=2_000,
+            retention_limit=10_000,
+            returned_rows=2,
+            unique_fills=2,
+            duplicate_fills=0,
+            unmatched_fills=0,
+            page_saturated=False,
+            retention_limited=False,
+            complete=True,
+            reason="range_exhausted",
+        )
+        evidence = RecoveryVenueRead(
+            network="testnet",
+            account_id=ACCOUNT_ID,
+            account_snapshot_hash=snapshot.snapshot_hash,
+            observed_at=at,
+            order_statuses=(close_status,),
+            signed_fills=(close_fill,),
+            fill_coverage=coverage,
+            auxiliary_order_statuses=tuple(auxiliary_statuses),
+            auxiliary_fills=(
+                AuxiliaryFillEvidence(
+                    owner_kind="parent_leg",
+                    owner_id="command-1",
+                    source_hash=stop_order.source_hash,
+                    fill=stop_fill,
+                ),
+            ),
+        )
+
+        result = RecoveryReconciliationCoordinator(self.store).reconcile(
+            command.recovery_command_id,
+            "reconciler",
+            snapshot=snapshot,
+            evidence=evidence,
+            transport=transport,
+            at=at,
+        )
+
+        self.assertTrue(result.proof.complete)
+        self.assertFalse(result.proof.success)
+        self.assertEqual("terminal", result.recovery_state)
+        self.assertIn(
+            "recovery_close_fill_quantity_mismatch",
+            result.incomplete_reasons,
+        )
+        persisted = self.store.list_recovery_fills(
+            recovery_command_id=command.recovery_command_id
+        )
+        self.assertEqual((close_fill.fill_id,), tuple(item.fill_id for item in persisted))
+        self.assertEqual(close_fill.closed_pnl, persisted[0].closed_pnl)
+        duplicate_parent_projection = VenueFill(
+            fill_id=persisted[0].fill_id,
+            role="protective_stop",
+            cloid=stop_order.cloid,
+            quantity=persisted[0].quantity,
+            price=persisted[0].price,
+            fee=persisted[0].fee,
+            occurred_at=persisted[0].occurred_at,
+            venue_oid=persisted[0].venue_oid,
+            venue_trade_id=persisted[0].venue_trade_id,
+            transaction_hash=persisted[0].transaction_hash,
+            closed_pnl=persisted[0].closed_pnl,
+            fee_token=persisted[0].fee_token,
+            observed_at=persisted[0].observed_at,
+        )
+        with self.store._transaction() as connection:
+            with self.assertRaisesRegex(StateConflict, "recovery and parent"):
+                self.store._put_fill_locked(
+                    connection,
+                    command_id="command-1",
+                    fill=duplicate_parent_projection,
+                    observed_at=persisted[0].observed_at,
+                    legs={
+                        item.role: item
+                        for item in self.store.get_legs("command-1")
+                    },
+                )
+
+        parent_legs = tuple(
+            OwnedLeg(
+                leg.role,
+                leg.cloid,
+                "ETH",
+                OrderSide(leg.side),
+                leg.requested_quantity,
+            )
+            for leg in self.store.get_legs("command-1")
+        )
+
+        def status_body(
+            *,
+            cloid: str,
+            side: OrderSide,
+            quantity: Decimal,
+            oid: int,
+            status: str,
+            remaining: Decimal,
+            trigger: bool,
+            reduce_only: bool,
+        ) -> dict[str, object]:
+            return {
+                "status": "order",
+                "order": {
+                    "order": {
+                        "coin": "ETH",
+                        "side": side.wire_value,
+                        "limitPx": "2500",
+                        "sz": str(remaining),
+                        "oid": oid,
+                        "timestamp": snapshot.server_time_ms - 1_000,
+                        "triggerCondition": "venue trigger" if trigger else "N/A",
+                        "isTrigger": trigger,
+                        "triggerPx": "2400" if trigger else "0",
+                        "children": [],
+                        "isPositionTpsl": False,
+                        "reduceOnly": reduce_only,
+                        "orderType": "Stop Market" if trigger else "Market",
+                        "origSz": str(quantity),
+                        "tif": "FrontendMarket" if trigger else "Ioc",
+                        "cloid": cloid,
+                    },
+                    "status": status,
+                    "statusTimestamp": snapshot.server_time_ms - 500,
+                },
+            }
+
+        statuses: dict[str, object] = {}
+        for index, leg in enumerate(parent_legs, start=700):
+            if leg.role == "entry":
+                venue_status = "filled"
+                venue_oid = 600
+                remaining = Decimal("0")
+            elif leg.role == "protective_stop":
+                venue_status = "canceled"
+                venue_oid = 601
+                remaining = stop_fill_size
+            else:
+                venue_status = "canceled"
+                venue_oid = index
+                remaining = Decimal("0")
+            statuses[leg.cloid] = status_body(
+                cloid=leg.cloid,
+                side=leg.side,
+                quantity=leg.requested_quantity,
+                oid=venue_oid,
+                status=venue_status,
+                remaining=remaining,
+                trigger=leg.role != "entry",
+                reduce_only=leg.role != "entry",
+            )
+        statuses[CLOSE_CLOID] = status_body(
+            cloid=CLOSE_CLOID,
+            side=OrderSide.SELL,
+            quantity=parent_size,
+            oid=501,
+            status="canceled",
+            remaining=stop_fill_size,
+            trigger=False,
+            reduce_only=True,
+        )
+
+        def raw(fill: SignedFillEvidence) -> dict[str, object]:
+            return {
+                "closedPnl": str(fill.closed_pnl),
+                "coin": fill.symbol,
+                "crossed": fill.crossed,
+                "dir": "ignored",
+                "hash": fill.transaction_hash,
+                "oid": fill.oid,
+                "px": str(fill.price),
+                "side": fill.side.wire_value,
+                "startPosition": str(fill.start_position),
+                "sz": str(fill.quantity),
+                "time": fill.time_ms,
+                "fee": str(fill.fee),
+                "feeToken": fill.fee_token,
+                "tid": fill.tid,
+            }
+
+        def transport_read(_endpoint: str, payload: dict[str, object]) -> object:
+            if payload["type"] == "orderStatus":
+                return statuses[str(payload["oid"])]
+            if payload["type"] == "userFillsByTime":
+                return [raw(entry_fill), raw(stop_fill), raw(close_fill)]
+            raise AssertionError(payload)
+
+        bundle = reconcile_hyperliquid_venue(
+            snapshot,
+            parent_legs,
+            account_id=ACCOUNT_ID,
+            command_id="command-1",
+            plan_hash=self.store.get_command("command-1").plan_hash,
+            network=HyperliquidNetwork.TESTNET,
+            fills_start_time_ms=self.store.get_preflight(
+                "command-1"
+            ).account_server_time_ms,
+            transport=transport_read,
+            clock=lambda: at,
+            store=self.store,
+        )
+        self.assertTrue(bundle.complete, bundle.incomplete_reasons)
+        self.assertEqual(
+            (entry_order.cloid, stop_order.cloid),
+            tuple(item.cloid for item in bundle.signed_fills),
+        )
+        self.assertEqual((CLOSE_CLOID,), tuple(item.fill.cloid for item in bundle.auxiliary_fills))
+        self.assertEqual(0, bundle.fill_coverage.unmatched_fills)
+        effective, fence = MainEntryReconciliationCoordinator(
+            self.store,
+            network=HyperliquidNetwork.TESTNET,
+            clock=lambda: at,
+        )._verify_bundle(
+            bundle,
+            snapshot,
+            now_ms=int(at.timestamp() * 1_000),
+        )
+        self.assertTrue(effective)
+        self.assertIsNone(fence)
 
     def test_cancel_requires_exact_requested_cloid_absent(self) -> None:
         material = {
@@ -574,7 +1327,8 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             transport=transport,
             at=at,
         )
-        self.assertFalse(result.proof.complete)
+        self.assertTrue(result.proof.complete)
+        self.assertFalse(result.proof.success)
         self.assertIn(
             "cancel_would_remove_live_protective_stop",
             result.incomplete_reasons,
@@ -583,6 +1337,63 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             "post_cancel_position_not_fully_protected",
             result.incomplete_reasons,
         )
+        self.assertEqual("terminal", result.recovery_state)
+
+    def test_claim_delay_rechecks_freshness_and_releases_recovery_lease(self) -> None:
+        material = {
+            "kind": "cancel_by_cloid",
+            "main_account_address": ACCOUNT,
+            "requests": [{"cloid": CANCEL_CLOID}],
+            "action": {"type": "cancelByCloid"},
+        }
+        command, transport = self.queue_response_recovery(
+            "cancel_by_cloid", material
+        )
+        at = NOW + timedelta(seconds=12)
+        snapshot = fresh_flat_snapshot(at)
+        status = ParsedOrderStatus(
+            "cancel_request_0",
+            CANCEL_CLOID,
+            VenueOrderState.ORDER,
+            "canceled",
+            int((at - timedelta(seconds=1)).timestamp() * 1_000),
+            601,
+            "ETH",
+            Decimal("0"),
+            Decimal("1"),
+            False,
+            False,
+        )
+        evidence = RecoveryVenueRead(
+            "testnet",
+            ACCOUNT_ID,
+            snapshot.snapshot_hash,
+            at,
+            (status,),
+            (),
+            empty_complete_coverage(),
+        )
+        coordinator = RecoveryReconciliationCoordinator(self.store)
+        with mock.patch.object(
+            coordinator,
+            "_mutation_time",
+            side_effect=(at, at + timedelta(seconds=16)),
+        ):
+            result = coordinator.reconcile(
+                command.recovery_command_id,
+                "reconciler",
+                snapshot=snapshot,
+                evidence=evidence,
+                transport=transport,
+                at=at,
+            )
+        self.assertEqual("reconciling", result.recovery_state)
+        self.assertIn("evidence_stale_after_claim", result.incomplete_reasons)
+        released = self.store.get_recovery_outbox(
+            command.recovery_command_id
+        )
+        self.assertIsNone(released.worker_id)
+        self.assertIsNone(released.lease_expires_at)
 
     def test_transport_must_match_persisted_attempt_hash(self) -> None:
         material = {
@@ -694,7 +1505,7 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             at,
             statuses,
             (),
-            empty_complete_coverage(),
+            self.noop_complete_coverage(),
         )
         accepted = self.store.get_noop_fence_response(
             command.recovery_command_id
@@ -755,7 +1566,9 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             for leg in self.store.get_legs("command-1")
         )
         later_coverage = FillCoverage(
-            requested_start_time_ms=later_snapshot.server_time_ms - 60_000,
+            requested_start_time_ms=self.store.get_preflight(
+                "command-1"
+            ).account_server_time_ms,
             requested_end_time_ms=later_snapshot.server_time_ms,
             page_count=1,
             page_limit=2_000,
@@ -832,6 +1645,74 @@ class RecoveryCoordinatorTests(unittest.TestCase):
             "closed",
             self.store.list_incidents("command-1")[0].state,
         )
+
+    def test_noncanonical_noop_response_terminalizes_failure_without_retry(self) -> None:
+        original_attempt = self.prepare_parent_unknown()
+        material = {
+            "kind": "noop_fence",
+            "main_account_address": ACCOUNT,
+            "attempt_id": original_attempt.attempt_id,
+            "preflight_hash": original_attempt.preflight_hash,
+            "original_nonce": original_attempt.nonce,
+            "original_action_hash": original_attempt.action_hash,
+            "original_wire_hash": original_attempt.wire_hash,
+            "action": {"type": "noop"},
+        }
+        command, transport = self.queue_response_recovery(
+            "noop_fence",
+            material,
+            original_attempt=original_attempt,
+            outcome="unknown",
+            detail_code="noop_response_not_canonical_default",
+            unknown_response_hash=digest("late-nonce-response"),
+        )
+        at = NOW + timedelta(seconds=12)
+        snapshot = fresh_flat_snapshot(at)
+        statuses = tuple(
+            ParsedOrderStatus(
+                leg.role,
+                leg.cloid,
+                VenueOrderState.MISSING,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            for leg in self.store.get_legs("command-1")
+        )
+        evidence = RecoveryVenueRead(
+            "testnet",
+            ACCOUNT_ID,
+            snapshot.snapshot_hash,
+            at,
+            statuses,
+            (),
+            self.noop_complete_coverage(),
+        )
+
+        result = RecoveryReconciliationCoordinator(self.store).reconcile(
+            command.recovery_command_id,
+            "reconciler",
+            snapshot=snapshot,
+            evidence=evidence,
+            transport=transport,
+            at=at,
+        )
+
+        self.assertTrue(result.proof.complete)
+        self.assertFalse(result.proof.success)
+        self.assertEqual("rejected", result.proof.resolved_original_outcome)
+        self.assertEqual("terminal", result.recovery_state)
+        self.assertIsNone(result.incident_resolution)
+        self.assertIn(
+            "noop_response_not_canonical_default", result.incomplete_reasons
+        )
+        with self.assertRaises(RecordNotFound):
+            self.store.require_terminal_noop_fence("command-1")
 
 
 if __name__ == "__main__":

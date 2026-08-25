@@ -36,6 +36,9 @@ from .hyperliquid_wire import (
 
 RECOVERY_ACTION_HASH_DOMAIN = "trading-harness/hyperliquid-recovery-action/v1"
 AMBIGUOUS_ATTEMPT_HASH_DOMAIN = "trading-harness/hyperliquid-ambiguous-attempt/v1"
+RECOVERY_CLOSE_CLOID_DOMAIN = (
+    "trading-harness/hyperliquid-recovery-close-cloid/v1"
+)
 
 _ADDRESS_RE = re.compile(r"^0x[0-9a-f]{40}$")
 _CLOID_RE = re.compile(r"^0x[0-9a-f]{32}$")
@@ -84,6 +87,7 @@ class ReduceOnlyCloseAction:
     expires_at_ms: int
     action: dict[str, object]
     recovery_hash: str
+    position_snapshot_time_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +103,7 @@ class CancelByCloidAction:
     expires_at_ms: int
     action: dict[str, object]
     recovery_hash: str
+    account_snapshot_time_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +188,12 @@ def recovery_action_from_material(value: Mapping[str, object]) -> RecoveryAction
             "ambiguous_attempt_hash",
         },
     }[kind]
-    if set(material) != common_keys | expected_extra:
+    allowed_fields = common_keys | expected_extra
+    if kind is RecoveryKind.REDUCE_ONLY_CLOSE and "position_snapshot_time_ms" in material:
+        allowed_fields = allowed_fields | {"position_snapshot_time_ms"}
+    if kind is RecoveryKind.CANCEL_BY_CLOID and "account_snapshot_time_ms" in material:
+        allowed_fields = allowed_fields | {"account_snapshot_time_ms"}
+    if set(material) != allowed_fields:
         raise ValidationError("recovery material fields are unsupported")
     network = _network(material["network"])
     account_id = _text(material["account_id"], "account_id")
@@ -200,6 +210,11 @@ def recovery_action_from_material(value: Mapping[str, object]) -> RecoveryAction
     action = deepcopy(action_value)
     recovery_hash = _recovery_hash(material)
     if kind is RecoveryKind.REDUCE_ONLY_CLOSE:
+        snapshot_time = material.get("position_snapshot_time_ms")
+        if snapshot_time is not None and (
+            type(snapshot_time) is not int or snapshot_time < 0
+        ):
+            raise ValidationError("recovery position snapshot time is invalid")
         asset_id = material["asset_id"]
         if type(asset_id) is not int or not 0 <= asset_id <= 1_000_000:
             raise ValidationError("recovery asset_id is invalid")
@@ -231,8 +246,14 @@ def recovery_action_from_material(value: Mapping[str, object]) -> RecoveryAction
             expires_at_ms=expires_at_ms,
             action=action,
             recovery_hash=recovery_hash,
+            position_snapshot_time_ms=snapshot_time,
         )
     elif kind is RecoveryKind.CANCEL_BY_CLOID:
+        snapshot_time = material.get("account_snapshot_time_ms")
+        if snapshot_time is not None and (
+            type(snapshot_time) is not int or snapshot_time < 0
+        ):
+            raise ValidationError("recovery account snapshot time is invalid")
         raw_requests = material["requests"]
         if not isinstance(raw_requests, list) or not 1 <= len(raw_requests) <= _MAX_CANCELS:
             raise ValidationError("recovery cancel requests are invalid")
@@ -264,6 +285,7 @@ def recovery_action_from_material(value: Mapping[str, object]) -> RecoveryAction
             expires_at_ms=expires_at_ms,
             action=action,
             recovery_hash=recovery_hash,
+            account_snapshot_time_ms=snapshot_time,
         )
     else:
         original_nonce = material["original_nonce"]
@@ -334,6 +356,10 @@ def recovery_action_material(recovery: RecoveryAction) -> dict[str, object]:
             "expires_at_ms": recovery.expires_at_ms,
             "action": deepcopy(recovery.action),
         }
+        if recovery.position_snapshot_time_ms is not None:
+            material["position_snapshot_time_ms"] = (
+                recovery.position_snapshot_time_ms
+            )
     elif isinstance(recovery, CancelByCloidAction):
         material = {
             **common,
@@ -349,6 +375,10 @@ def recovery_action_material(recovery: RecoveryAction) -> dict[str, object]:
             "expires_at_ms": recovery.expires_at_ms,
             "action": deepcopy(recovery.action),
         }
+        if recovery.account_snapshot_time_ms is not None:
+            material["account_snapshot_time_ms"] = (
+                recovery.account_snapshot_time_ms
+            )
     elif isinstance(recovery, NoopFenceAction):
         material = {
             **common,
@@ -469,6 +499,32 @@ def _recovery_hash(material: dict[str, object]) -> str:
     return domain_hash(RECOVERY_ACTION_HASH_DOMAIN, material)
 
 
+def derive_recovery_close_cloid(
+    *,
+    account_id: str,
+    incident_id: str,
+    position_snapshot_hash: str,
+) -> str:
+    """Derive one 128-bit close CLOID from immutable recovery source truth.
+
+    A new fresh account snapshot necessarily produces a new identifier, so a
+    definitive failed or partial close cannot exhaust a finite configured
+    CLOID pool.  The controller still rejects a cryptographic truncation
+    collision against durable and currently open identifiers before issuing
+    authority, and the live signer independently recomputes this value.
+    """
+
+    material = {
+        "account_id": _text(account_id, "account_id"),
+        "incident_id": _text(incident_id, "incident_id"),
+        "position_snapshot_hash": _hash(
+            position_snapshot_hash,
+            "position_snapshot_hash",
+        ),
+    }
+    return "0x" + domain_hash(RECOVERY_CLOSE_CLOID_DOMAIN, material)[:32]
+
+
 def build_reduce_only_close(
     snapshot: HyperliquidAccountSnapshot,
     *,
@@ -531,6 +587,7 @@ def build_reduce_only_close(
         "main_account_address": main_address,
         "incident_id": selected_incident.incident_id,
         "position_snapshot_hash": snapshot.snapshot_hash,
+        "position_snapshot_time_ms": snapshot.server_time_ms,
         "symbol": symbol,
         "asset_id": instrument.asset_id,
         "original_signed_position": canonical_decimal(position.signed_size),
@@ -556,6 +613,7 @@ def build_reduce_only_close(
         expires_at_ms=expires,
         action=action,
         recovery_hash=_recovery_hash(material),
+        position_snapshot_time_ms=snapshot.server_time_ms,
     )
 
 
@@ -633,6 +691,7 @@ def build_cancel_by_cloid(
         "main_account_address": main_address,
         "incident_id": selected_incident.incident_id,
         "account_snapshot_hash": snapshot.snapshot_hash,
+        "account_snapshot_time_ms": snapshot.server_time_ms,
         "requests": [
             {"symbol": item.symbol, "asset_id": asset_id, "cloid": item.cloid}
             for item, asset_id in zip(checked_requests, asset_ids)
@@ -652,6 +711,7 @@ def build_cancel_by_cloid(
         expires_at_ms=expires,
         action=action,
         recovery_hash=_recovery_hash(material),
+        account_snapshot_time_ms=snapshot.server_time_ms,
     )
 
 
@@ -773,6 +833,7 @@ def build_noop_fence(
 __all__ = (
     "AMBIGUOUS_ATTEMPT_HASH_DOMAIN",
     "RECOVERY_ACTION_HASH_DOMAIN",
+    "RECOVERY_CLOSE_CLOID_DOMAIN",
     "CancelByCloidAction",
     "CancelRequest",
     "NoopFenceAction",
@@ -783,6 +844,7 @@ __all__ = (
     "build_cancel_by_cloid",
     "build_noop_fence",
     "build_reduce_only_close",
+    "derive_recovery_close_cloid",
     "recovery_action_from_material",
     "recovery_action_material",
 )

@@ -26,6 +26,7 @@ from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -39,6 +40,7 @@ from .errors import (
     StorageError,
     ValidationError,
 )
+from .execution_grant import TrustedInfrastructureGrant
 from .hyperliquid_response import BatchSubmissionResult, LegSubmissionState
 from .planning import ProtectedTradePlan, RiskTicket, RiskTicketStatus
 from .policy import (
@@ -50,6 +52,7 @@ from .policy import (
 
 
 ZERO = Decimal("0")
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _HASH_CHARS = frozenset("0123456789abcdef")
 _MAX_JSON_BYTES = 4 * 1024 * 1024
 _MAX_DETAILS_BYTES = 64 * 1024
@@ -834,14 +837,175 @@ _SCHEMA_V5 = _Migration(
     ),
 )
 
+_SCHEMA_V6 = _Migration(
+    6,
+    "infrastructure_learning_grants",
+    (
+        """
+        CREATE TABLE execution_infrastructure_grants (
+            grant_hash TEXT PRIMARY KEY,
+            grant_id TEXT NOT NULL,
+            generation INTEGER NOT NULL CHECK (generation > 0),
+            account_id TEXT NOT NULL,
+            environment TEXT NOT NULL CHECK (environment = 'testnet'),
+            allowed_instruments_json TEXT NOT NULL,
+            risk_policy_hash TEXT NOT NULL,
+            max_loss TEXT NOT NULL,
+            max_notional TEXT NOT NULL,
+            max_leverage TEXT NOT NULL,
+            issuer_id TEXT NOT NULL,
+            audience TEXT NOT NULL,
+            issued_at TEXT NOT NULL,
+            not_before TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            registered_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL,
+            UNIQUE(grant_id, generation)
+        )
+        """,
+        """
+        ALTER TABLE execution_tickets
+        ADD COLUMN infrastructure_grant_hash TEXT
+            REFERENCES execution_infrastructure_grants(grant_hash)
+        """,
+    ),
+)
+
+_SCHEMA_V7 = _Migration(
+    7,
+    "complete_fill_economics_for_learning",
+    (
+        """
+        ALTER TABLE execution_fills ADD COLUMN venue_oid INTEGER
+        """,
+        """
+        ALTER TABLE execution_fills ADD COLUMN venue_trade_id INTEGER
+        """,
+        """
+        ALTER TABLE execution_fills ADD COLUMN transaction_hash TEXT
+        """,
+        """
+        ALTER TABLE execution_fills ADD COLUMN closed_pnl TEXT
+        """,
+        """
+        ALTER TABLE execution_fills ADD COLUMN fee_token TEXT
+        """,
+        """
+        ALTER TABLE execution_fills ADD COLUMN observed_at TEXT
+        """,
+    ),
+)
+
+_SCHEMA_V8 = _Migration(
+    8,
+    "single_use_entry_submission_authority",
+    (
+        """
+        CREATE TABLE execution_submission_authorities (
+            authority_hash TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_commands(command_id),
+            attempt_id TEXT NOT NULL UNIQUE
+                REFERENCES execution_attempts(attempt_id),
+            signed_evidence_hash TEXT NOT NULL UNIQUE,
+            worker_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL CHECK (fencing_token > 0),
+            issued_at TEXT NOT NULL,
+            lease_expires_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+    ),
+)
+
+_SCHEMA_V9 = _Migration(
+    9,
+    "durable_recovery_fill_economics",
+    (
+        """
+        CREATE TABLE execution_recovery_fills (
+            fill_id TEXT PRIMARY KEY,
+            recovery_command_id TEXT NOT NULL
+                REFERENCES execution_recovery_commands(recovery_command_id),
+            parent_command_id TEXT NOT NULL
+                REFERENCES execution_commands(command_id),
+            cloid TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+            quantity TEXT NOT NULL,
+            signed_quantity TEXT NOT NULL,
+            start_position TEXT NOT NULL,
+            end_position TEXT NOT NULL,
+            price TEXT NOT NULL,
+            fee TEXT NOT NULL,
+            closed_pnl TEXT NOT NULL,
+            fee_token TEXT NOT NULL,
+            crossed INTEGER NOT NULL CHECK (crossed IN (0, 1)),
+            builder_fee TEXT,
+            venue_oid INTEGER NOT NULL,
+            venue_trade_id INTEGER NOT NULL,
+            transaction_hash TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            account_snapshot_hash TEXT NOT NULL,
+            venue_evidence_hash TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            record_hash TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_execution_recovery_fills_parent
+        ON execution_recovery_fills (
+            parent_command_id, occurred_at, fill_id
+        )
+        """,
+    ),
+)
+
+_SCHEMA_V10 = _Migration(
+    10,
+    "venue_server_preflight_watermark",
+    (
+        """
+        ALTER TABLE execution_dispatch_preflights
+        ADD COLUMN account_server_time_ms INTEGER
+        """,
+        """
+        CREATE UNIQUE INDEX idx_execution_parent_fill_venue_identity
+        ON execution_fills (
+            venue_oid, venue_trade_id, transaction_hash, occurred_at
+        )
+        WHERE venue_oid IS NOT NULL
+          AND venue_trade_id IS NOT NULL
+          AND transaction_hash IS NOT NULL
+        """,
+        """
+        CREATE UNIQUE INDEX idx_execution_recovery_fill_venue_identity
+        ON execution_recovery_fills (
+            venue_oid, venue_trade_id, transaction_hash, occurred_at
+        )
+        """,
+    ),
+)
+
 _MIGRATIONS = (
     _SCHEMA_V1,
     _SCHEMA_V2,
     _SCHEMA_V3,
     _SCHEMA_V4,
     _SCHEMA_V5,
+    _SCHEMA_V6,
+    _SCHEMA_V7,
+    _SCHEMA_V8,
+    _SCHEMA_V9,
+    _SCHEMA_V10,
 )
-EXECUTION_SCHEMA_VERSION = 5
+EXECUTION_SCHEMA_VERSION = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -860,6 +1024,7 @@ class DispatchPreflight:
     observed_at: datetime
     expires_at: datetime
     passed: bool
+    account_server_time_ms: int | None = None
     preflight_hash: str = ""
 
     def __post_init__(self) -> None:
@@ -901,6 +1066,14 @@ class DispatchPreflight:
             raise ValidationError("preflight lifetime exceeds compiled freshness bound")
         if type(self.passed) is not bool:
             raise TypeError("preflight passed must be bool")
+        if self.account_server_time_ms is not None:
+            if (
+                type(self.account_server_time_ms) is not int
+                or self.account_server_time_ms < 0
+                or self.account_server_time_ms
+                > int(observed.timestamp() * 1_000) + 5_000
+            ):
+                raise ValidationError("preflight account server time is invalid")
         object.__setattr__(self, "observed_at", observed)
         object.__setattr__(self, "expires_at", expires)
         expected = _record_hash("dispatch-preflight-attestation", self.payload())
@@ -911,8 +1084,12 @@ class DispatchPreflight:
         object.__setattr__(self, "preflight_hash", expected)
 
     def payload(self) -> dict[str, object]:
-        return {
-            "schema_version": "dispatch_preflight.v1",
+        payload = {
+            "schema_version": (
+                "dispatch_preflight.v1"
+                if self.account_server_time_ms is None
+                else "dispatch_preflight.v2"
+            ),
             "command_id": self.command_id,
             "ticket_hash": self.ticket_hash,
             "plan_hash": self.plan_hash,
@@ -926,6 +1103,9 @@ class DispatchPreflight:
             "expires_at": _time_text(self.expires_at, field="expires_at"),
             "passed": self.passed,
         }
+        if self.account_server_time_ms is not None:
+            payload["account_server_time_ms"] = self.account_server_time_ms
+        return payload
 
     def as_dict(self) -> dict[str, object]:
         return {**self.payload(), "preflight_hash": self.preflight_hash}
@@ -1409,6 +1589,20 @@ class RecoverySubmissionAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class EntrySubmissionAuthority:
+    command_id: str
+    attempt_id: str
+    signed_evidence_hash: str
+    nonce: int
+    action_hash: str
+    wire_hash: str
+    worker_id: str
+    fencing_token: int
+    lease_expires_at: datetime
+    authority_hash: str
+
+
+@dataclass(frozen=True, slots=True)
 class RecoveryReconciliationProof:
     recovery_command_id: str
     kind: str
@@ -1796,6 +1990,12 @@ class VenueFill:
     price: Decimal
     fee: Decimal
     occurred_at: datetime
+    venue_oid: int | None = None
+    venue_trade_id: int | None = None
+    transaction_hash: str | None = None
+    closed_pnl: Decimal | None = None
+    fee_token: str | None = None
+    observed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fill_id", _text(self.fill_id, field="fill_id", maximum=256))
@@ -1813,6 +2013,40 @@ class VenueFill:
             _decimal(self.fee, field="fee", nonnegative=True),
         )
         object.__setattr__(self, "occurred_at", _utc(self.occurred_at, field="occurred_at"))
+        for field in ("venue_oid", "venue_trade_id"):
+            value = getattr(self, field)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValidationError(f"{field} must be a non-negative integer or None")
+        venue_identity = (
+            self.venue_oid,
+            self.venue_trade_id,
+            self.transaction_hash,
+        )
+        if any(value is not None for value in venue_identity) and not all(
+            value is not None for value in venue_identity
+        ):
+            raise ValidationError("venue fill identity must be complete or absent")
+        if self.transaction_hash is not None and (
+            not isinstance(self.transaction_hash, str)
+            or not re.fullmatch(r"0x[0-9a-f]{64}", self.transaction_hash)
+        ):
+            raise ValidationError("transaction_hash is invalid")
+        if self.closed_pnl is not None:
+            object.__setattr__(
+                self,
+                "closed_pnl",
+                _decimal(self.closed_pnl, field="closed_pnl"),
+            )
+        if self.fee_token is not None and (
+            not isinstance(self.fee_token, str)
+            or not re.fullmatch(r"[A-Z][A-Z0-9]{1,15}", self.fee_token)
+        ):
+            raise ValidationError("fee_token is invalid")
+        if self.observed_at is not None:
+            observed = _utc(self.observed_at, field="observed_at")
+            if observed < self.occurred_at:
+                raise ValidationError("fill observed_at precedes occurred_at")
+            object.__setattr__(self, "observed_at", observed)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -1823,6 +2057,178 @@ class VenueFill:
             "price": _decimal_text(self.price, field="price"),
             "fee": _decimal_text(self.fee, field="fee"),
             "occurred_at": _time_text(self.occurred_at, field="occurred_at"),
+            "venue_oid": self.venue_oid,
+            "venue_trade_id": self.venue_trade_id,
+            "transaction_hash": self.transaction_hash,
+            "closed_pnl": (
+                None
+                if self.closed_pnl is None
+                else _decimal_text(self.closed_pnl, field="closed_pnl")
+            ),
+            "fee_token": self.fee_token,
+            "observed_at": (
+                None
+                if self.observed_at is None
+                else _time_text(self.observed_at, field="observed_at")
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryVenueFill:
+    """Exact economics for one durably owned reduce-only recovery fill."""
+
+    fill_id: str
+    recovery_command_id: str
+    parent_command_id: str
+    cloid: str
+    symbol: str
+    side: str
+    quantity: Decimal
+    signed_quantity: Decimal
+    start_position: Decimal
+    end_position: Decimal
+    price: Decimal
+    fee: Decimal
+    closed_pnl: Decimal
+    fee_token: str
+    crossed: bool
+    builder_fee: Decimal | None
+    venue_oid: int
+    venue_trade_id: int
+    transaction_hash: str
+    occurred_at: datetime
+    observed_at: datetime
+    account_snapshot_hash: str
+    venue_evidence_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "fill_id", _text(self.fill_id, field="fill_id", maximum=256)
+        )
+        object.__setattr__(
+            self,
+            "recovery_command_id",
+            _text(
+                self.recovery_command_id,
+                field="recovery_command_id",
+                maximum=128,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "parent_command_id",
+            _text(self.parent_command_id, field="parent_command_id", maximum=128),
+        )
+        object.__setattr__(
+            self, "cloid", _text(self.cloid, field="cloid", maximum=128)
+        )
+        object.__setattr__(
+            self, "symbol", _text(self.symbol, field="symbol", maximum=64)
+        )
+        if self.side not in {"buy", "sell"}:
+            raise ValidationError("recovery fill side is invalid")
+        for field in (
+            "quantity",
+            "signed_quantity",
+            "start_position",
+            "end_position",
+            "price",
+            "fee",
+            "closed_pnl",
+        ):
+            object.__setattr__(self, field, _decimal(getattr(self, field), field=field))
+        if self.quantity <= ZERO or self.price <= ZERO or self.fee < ZERO:
+            raise ValidationError("recovery fill economics are invalid")
+        if abs(self.signed_quantity) != self.quantity or (
+            (self.side == "buy") != (self.signed_quantity > ZERO)
+        ):
+            raise ValidationError("recovery fill side and signed quantity differ")
+        if self.end_position != self.start_position + self.signed_quantity:
+            raise ValidationError("recovery fill position transition is invalid")
+        if (
+            not isinstance(self.fee_token, str)
+            or not re.fullmatch(r"[A-Z][A-Z0-9]{1,15}", self.fee_token)
+        ):
+            raise ValidationError("recovery fill fee token is invalid")
+        if type(self.crossed) is not bool:
+            raise TypeError("recovery fill crossed must be boolean")
+        if self.builder_fee is not None:
+            object.__setattr__(
+                self,
+                "builder_fee",
+                _decimal(self.builder_fee, field="builder_fee", nonnegative=True),
+            )
+        for field in ("venue_oid", "venue_trade_id"):
+            value = getattr(self, field)
+            if type(value) is not int or value < 0:
+                raise ValidationError(f"{field} must be a non-negative integer")
+        if not isinstance(self.transaction_hash, str) or not re.fullmatch(
+            r"0x[0-9a-f]{64}", self.transaction_hash
+        ):
+            raise ValidationError("recovery fill transaction hash is invalid")
+        occurred = _utc(self.occurred_at, field="occurred_at")
+        observed = _utc(self.observed_at, field="observed_at")
+        if observed < occurred:
+            raise ValidationError("recovery fill observation precedes occurrence")
+        object.__setattr__(self, "occurred_at", occurred)
+        object.__setattr__(self, "observed_at", observed)
+        object.__setattr__(
+            self,
+            "account_snapshot_hash",
+            _hash(self.account_snapshot_hash, field="account_snapshot_hash"),
+        )
+        object.__setattr__(
+            self,
+            "venue_evidence_hash",
+            _hash(self.venue_evidence_hash, field="venue_evidence_hash"),
+        )
+        delta = occurred - _EPOCH
+        occurred_ms = (
+            delta.days * 86_400_000
+            + delta.seconds * 1_000
+            + delta.microseconds // 1_000
+        )
+        expected_fill_id = (
+            f"hyperliquid:{self.symbol}:{occurred_ms}:"
+            f"{self.venue_trade_id}:{self.venue_oid}"
+        )
+        if self.fill_id != expected_fill_id:
+            raise ValidationError("recovery fill identity is not canonical")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "fill_id": self.fill_id,
+            "recovery_command_id": self.recovery_command_id,
+            "parent_command_id": self.parent_command_id,
+            "cloid": self.cloid,
+            "symbol": self.symbol,
+            "side": self.side,
+            "quantity": _decimal_text(self.quantity, field="quantity"),
+            "signed_quantity": _decimal_text(
+                self.signed_quantity, field="signed_quantity"
+            ),
+            "start_position": _decimal_text(
+                self.start_position, field="start_position"
+            ),
+            "end_position": _decimal_text(self.end_position, field="end_position"),
+            "price": _decimal_text(self.price, field="price"),
+            "fee": _decimal_text(self.fee, field="fee"),
+            "closed_pnl": _decimal_text(self.closed_pnl, field="closed_pnl"),
+            "fee_token": self.fee_token,
+            "crossed": self.crossed,
+            "builder_fee": (
+                None
+                if self.builder_fee is None
+                else _decimal_text(self.builder_fee, field="builder_fee")
+            ),
+            "venue_oid": self.venue_oid,
+            "venue_trade_id": self.venue_trade_id,
+            "transaction_hash": self.transaction_hash,
+            "occurred_at": _time_text(self.occurred_at, field="occurred_at"),
+            "observed_at": _time_text(self.observed_at, field="observed_at"),
+            "account_snapshot_hash": self.account_snapshot_hash,
+            "venue_evidence_hash": self.venue_evidence_hash,
         }
 
 
@@ -1842,6 +2248,8 @@ _REQUIRED_TABLES = frozenset(
         "execution_dispatch_preflights",
         "execution_signed_envelopes",
         "execution_transport_outcomes",
+        "execution_submission_authorities",
+        "execution_infrastructure_grants",
         "execution_recovery_permits",
         "execution_recovery_commands",
         "execution_recovery_outbox",
@@ -1851,6 +2259,7 @@ _REQUIRED_TABLES = frozenset(
         "execution_recovery_transport_evidence",
         "execution_noop_fence_responses",
         "execution_recovery_reconciliations",
+        "execution_recovery_fills",
         "execution_reconciliations",
         "execution_fills",
         "execution_positions",
@@ -1974,6 +2383,37 @@ class ExecutionStore:
             for migration in _MIGRATIONS:
                 if migration.version in seen:
                     continue
+                if migration.version == 8:
+                    legacy_prepared = connection.execute(
+                        """
+                        SELECT 1 FROM execution_attempts AS attempt
+                        JOIN execution_commands AS command
+                          ON command.command_id = attempt.command_id
+                        WHERE attempt.state = 'prepared'
+                          AND command.state != 'terminal'
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                    if legacy_prepared is not None:
+                        raise StorageError(
+                            "cannot migrate a legacy prepared attempt across "
+                            "the submission-authority boundary"
+                        )
+                if migration.version == 10:
+                    active_legacy_preflight = connection.execute(
+                        """
+                        SELECT 1 FROM execution_dispatch_preflights AS preflight
+                        JOIN execution_commands AS command
+                          ON command.command_id = preflight.command_id
+                        WHERE command.state != 'terminal'
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                    if active_legacy_preflight is not None:
+                        raise StorageError(
+                            "cannot migrate an active preflight without its exact "
+                            "venue-server watermark"
+                        )
                 for statement in migration.statements:
                     connection.execute(statement)
                 connection.execute(
@@ -2332,10 +2772,209 @@ class ExecutionStore:
 
     # -- exact plans, tickets, and approvals --------------------------
 
+    @staticmethod
+    def _infrastructure_grant_payload(
+        grant: TrustedInfrastructureGrant,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": "trusted_infrastructure_learning_grant.v1",
+            "grant_hash": grant.grant_hash,
+            "grant_id": grant.grant_id,
+            "generation": grant.generation,
+            "purpose": "infrastructure_learning",
+            "account_id": grant.account_id,
+            "environment": grant.environment.value,
+            "allowed_instruments": list(grant.allowed_instruments),
+            "risk_policy_hash": grant.risk_policy_hash,
+            "max_loss": _decimal_text(grant.max_loss, field="max_loss"),
+            "max_notional": _decimal_text(
+                grant.max_notional, field="max_notional"
+            ),
+            "max_leverage": _decimal_text(
+                grant.max_leverage, field="max_leverage"
+            ),
+            "profitability_qualified": False,
+            "mainnet_authorized": False,
+            "issuer_id": grant.issuer_id,
+            "audience": grant.audience,
+            "issued_at": _time_text(grant.issued_at, field="issued_at"),
+            "not_before": _time_text(grant.not_before, field="not_before"),
+            "expires_at": _time_text(grant.expires_at, field="expires_at"),
+        }
+
+    @classmethod
+    def _infrastructure_grant_from_row(
+        cls,
+        row: Mapping[str, Any],
+    ) -> TrustedInfrastructureGrant:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="infrastructure grant content_hash"
+        )
+        payload = _decode_payload(
+            payload_json,
+            content_hash,
+            field="infrastructure grant",
+        )
+        if not isinstance(payload, dict):
+            raise StorageError("persisted infrastructure grant is not an object")
+        try:
+            instruments = json.loads(str(row["allowed_instruments_json"]))
+            if not isinstance(instruments, list):
+                raise TypeError("allowed instruments are not a list")
+            grant = TrustedInfrastructureGrant(
+                grant_hash=str(row["grant_hash"]),
+                grant_id=str(row["grant_id"]),
+                generation=int(row["generation"]),
+                account_id=str(row["account_id"]),
+                environment=Environment(str(row["environment"])),
+                allowed_instruments=tuple(instruments),
+                risk_policy_hash=str(row["risk_policy_hash"]),
+                max_loss=_decimal(row["max_loss"], field="grant max_loss"),
+                max_notional=_decimal(
+                    row["max_notional"], field="grant max_notional"
+                ),
+                max_leverage=_decimal(
+                    row["max_leverage"], field="grant max_leverage"
+                ),
+                issuer_id=str(row["issuer_id"]),
+                audience=str(row["audience"]),
+                issued_at=_parse_time(row["issued_at"], field="grant issued_at"),
+                not_before=_parse_time(
+                    row["not_before"], field="grant not_before"
+                ),
+                expires_at=_parse_time(
+                    row["expires_at"], field="grant expires_at"
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise StorageError("persisted infrastructure grant is invalid") from error
+        if canonical_json(cls._infrastructure_grant_payload(grant)) != payload_json:
+            raise StorageError("persisted infrastructure grant differs from columns")
+        registered_at = _parse_time(
+            row["registered_at"], field="grant registered_at"
+        )
+        material = {
+            "grant_hash": grant.grant_hash,
+            "registered_at": _time_text(registered_at, field="registered_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+        if _stored_hash(
+            row["record_hash"], field="infrastructure grant record_hash"
+        ) != _record_hash("infrastructure-grant", material):
+            raise StorageError("persisted infrastructure grant hash differs")
+        return grant
+
+    def register_infrastructure_grant(
+        self,
+        grant: TrustedInfrastructureGrant,
+        *,
+        at: datetime,
+    ) -> TrustedInfrastructureGrant:
+        if not isinstance(grant, TrustedInfrastructureGrant):
+            raise TypeError("grant must be TrustedInfrastructureGrant")
+        checked_at = _utc(at, field="at")
+        if (
+            grant.environment is not self.environment
+            or grant.account_id != self.account_id
+            or not grant.is_active(checked_at)
+        ):
+            raise ValidationError("grant is inactive or outside execution-store scope")
+        payload_json, content_hash = _canonical_payload(
+            self._infrastructure_grant_payload(grant)
+        )
+        instruments_json = canonical_json(list(grant.allowed_instruments))
+        material = {
+            "grant_hash": grant.grant_hash,
+            "registered_at": _time_text(checked_at, field="registered_at"),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+        with self._transaction() as connection:
+            existing = connection.execute(
+                """
+                SELECT * FROM execution_infrastructure_grants
+                WHERE grant_hash = ?
+                """,
+                (grant.grant_hash,),
+            ).fetchone()
+            if existing is not None:
+                current = self._infrastructure_grant_from_row(existing)
+                if current == grant:
+                    return current
+                raise StateConflict("infrastructure grant hash is already bound")
+            connection.execute(
+                """
+                INSERT INTO execution_infrastructure_grants (
+                    grant_hash, grant_id, generation, account_id, environment,
+                    allowed_instruments_json, risk_policy_hash, max_loss,
+                    max_notional, max_leverage, issuer_id, audience, issued_at,
+                    not_before, expires_at, registered_at, payload_json,
+                    content_hash, record_hash
+                ) VALUES (?, ?, ?, ?, 'testnet', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    grant.grant_hash,
+                    grant.grant_id,
+                    grant.generation,
+                    grant.account_id,
+                    instruments_json,
+                    grant.risk_policy_hash,
+                    _decimal_text(grant.max_loss, field="max_loss"),
+                    _decimal_text(grant.max_notional, field="max_notional"),
+                    _decimal_text(grant.max_leverage, field="max_leverage"),
+                    grant.issuer_id,
+                    grant.audience,
+                    _time_text(grant.issued_at, field="issued_at"),
+                    _time_text(grant.not_before, field="not_before"),
+                    _time_text(grant.expires_at, field="expires_at"),
+                    _time_text(checked_at, field="registered_at"),
+                    payload_json,
+                    content_hash,
+                    _record_hash("infrastructure-grant", material),
+                ),
+            )
+            self._append_event_locked(
+                connection,
+                command_id=None,
+                event_type="infrastructure_learning_grant_registered",
+                occurred_at=checked_at,
+                payload={
+                    "grant_hash": grant.grant_hash,
+                    "grant_id": grant.grant_id,
+                    "generation": grant.generation,
+                    "profitability_qualified": False,
+                    "mainnet_authorized": False,
+                },
+            )
+            return grant
+
+    def get_infrastructure_grant(
+        self,
+        grant_hash: str,
+    ) -> TrustedInfrastructureGrant:
+        checked = _hash(grant_hash, field="grant_hash")
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_infrastructure_grants
+                WHERE grant_hash = ?
+                """,
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("infrastructure learning grant is not registered")
+        return self._infrastructure_grant_from_row(row)
+
     def register_ticket(
         self,
         ticket: RiskTicket,
         *,
+        infrastructure_grant_hash: str,
         stored_at: datetime,
     ) -> str:
         if not isinstance(ticket, RiskTicket):
@@ -2354,6 +2993,10 @@ class ExecutionStore:
         if entry.venue != "hyperliquid":
             raise ValidationError("v1 execution store supports Hyperliquid only")
         checked_at = _utc(stored_at, field="stored_at")
+        checked_grant_hash = _hash(
+            infrastructure_grant_hash,
+            field="infrastructure_grant_hash",
+        )
         if checked_at < ticket.created_at or checked_at >= ticket.expires_at:
             raise ValidationError("ticket must be stored during its active interval")
         if ticket.assessment_hash != plan.assessment_hash:
@@ -2369,6 +3012,21 @@ class ExecutionStore:
             entry.price_bound,
             field="ticket reserved notional",
         )
+        grant = self.get_infrastructure_grant(checked_grant_hash)
+        if (
+            not grant.is_active(checked_at)
+            or ticket.expires_at > grant.expires_at
+            or entry.instrument not in grant.allowed_instruments
+            or ticket.policy_hash != grant.risk_policy_hash
+            or ticket.stressed_loss > grant.max_loss
+            or reserved_notional > grant.max_notional
+            or entry.leverage is None
+            or entry.leverage > grant.max_leverage
+        ):
+            raise PolicyViolation(
+                "INFRASTRUCTURE_GRANT_SCOPE",
+                "ticket exceeds or differs from its testnet learning grant",
+            )
         if ticket.stressed_loss > self.max_reserved_loss:
             raise PolicyViolation(
                 "EXECUTION_TICKET_LOSS_CAP",
@@ -2396,6 +3054,7 @@ class ExecutionStore:
             "ticket_hash": ticket.ticket_hash,
             "ticket_id": ticket.ticket_id,
             "plan_hash": plan.plan_hash,
+            "infrastructure_grant_hash": checked_grant_hash,
             "state": "awaiting_approval",
             "stressed_loss": _decimal_text(
                 ticket.stressed_loss, field="stressed_loss"
@@ -2425,6 +3084,8 @@ class ExecutionStore:
                     if (
                         existing["ticket_id"] == ticket.ticket_id
                         and existing["plan_hash"] == plan.plan_hash
+                        and existing["infrastructure_grant_hash"]
+                        == checked_grant_hash
                         and existing["content_hash"] == ticket_content_hash
                     ):
                         return ticket.ticket_hash
@@ -2480,16 +3141,18 @@ class ExecutionStore:
                 connection.execute(
                     """
                     INSERT INTO execution_tickets (
-                        ticket_hash, ticket_id, plan_hash, state,
+                        ticket_hash, ticket_id, plan_hash,
+                        infrastructure_grant_hash, state,
                         stressed_loss, reserved_notional, created_at,
                         expires_at, registered_at, payload_json, content_hash,
                         record_hash
-                    ) VALUES (?, ?, ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, 'awaiting_approval', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ticket.ticket_hash,
                         ticket.ticket_id,
                         plan.plan_hash,
+                        checked_grant_hash,
                         _decimal_text(ticket.stressed_loss, field="stressed_loss"),
                         _decimal_text(
                             reserved_notional, field="reserved_notional"
@@ -2510,6 +3173,9 @@ class ExecutionStore:
                     payload={
                         "ticket_hash": ticket.ticket_hash,
                         "plan_hash": plan.plan_hash,
+                        "infrastructure_grant_hash": checked_grant_hash,
+                        "purpose": "infrastructure_learning",
+                        "profitability_qualified": False,
                         "environment": self.environment.value,
                         "account_id": self.account_id,
                     },
@@ -2529,6 +3195,10 @@ class ExecutionStore:
                 row["ticket_id"], field="ticket_id", maximum=128
             ),
             "plan_hash": _stored_hash(row["plan_hash"], field="plan_hash"),
+            "infrastructure_grant_hash": _stored_hash(
+                row["infrastructure_grant_hash"],
+                field="infrastructure_grant_hash",
+            ),
             "state": (
                 _stored_text(row["state"], field="ticket state", maximum=32)
                 if state is None
@@ -2785,6 +3455,48 @@ class ExecutionStore:
             raise RecordNotFound("approval is not registered")
         self._verify_approval_row(row)
         return str(row["state"])
+
+    def get_approval(self, approval_id: str) -> TrustedApproval:
+        """Return one verified opaque approval without exposing its MAC.
+
+        This read model exists so an attended local control plane can recover
+        safely from a crash between durable approval registration and atomic
+        command admission.  The returned token hash is already the verified,
+        non-secret capability committed by the approval authority; no raw key
+        or approval MAC is stored in this database.
+        """
+
+        checked = _text(approval_id, field="approval_id", maximum=128)
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM execution_approvals WHERE approval_id = ?",
+                (checked,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise RecordNotFound("approval is not registered")
+        self._verify_approval_row(row)
+        try:
+            environment = Environment(str(row["environment"]))
+            return TrustedApproval(
+                approval_id=str(row["approval_id"]),
+                ticket_hash=str(row["ticket_hash"]),
+                token_hash=str(row["token_hash"]),
+                approver_id=str(row["approver_id"]),
+                audience=str(row["audience"]),
+                environment=environment,
+                account_id=str(row["account_id"]),
+                issued_at=_parse_time(
+                    row["issued_at"], field="approval issued_at"
+                ),
+                expires_at=_parse_time(
+                    row["expires_at"], field="approval expires_at"
+                ),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            raise StorageError("persisted approval is invalid") from error
 
     def revoke_approval(self, approval_id: str, *, at: datetime) -> None:
         checked = _text(approval_id, field="approval_id", maximum=128)
@@ -3392,6 +4104,23 @@ class ExecutionStore:
             raise RecordNotFound(f"execution command not found: {checked}")
         return self._command_from_row(row)
 
+    def list_commands(self, *, active_only: bool = False) -> tuple[CommandRecord, ...]:
+        if type(active_only) is not bool:
+            raise TypeError("active_only must be bool")
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                (
+                    "SELECT * FROM execution_commands WHERE state != 'terminal' "
+                    "ORDER BY created_at, command_id"
+                    if active_only
+                    else "SELECT * FROM execution_commands ORDER BY created_at, command_id"
+                )
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._command_from_row(row) for row in rows)
+
     def get_outbox(self, command_id: str) -> OutboxRecord:
         checked = _text(command_id, field="command_id", maximum=128)
         connection = self._connect()
@@ -3404,6 +4133,23 @@ class ExecutionStore:
         if row is None:
             raise RecordNotFound(f"execution outbox not found: {checked}")
         return self._outbox_from_row(row)
+
+    def list_outboxes(self, *, active_only: bool = False) -> tuple[OutboxRecord, ...]:
+        if type(active_only) is not bool:
+            raise TypeError("active_only must be bool")
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                (
+                    "SELECT * FROM execution_outbox WHERE state != 'terminal' "
+                    "ORDER BY created_at, command_id"
+                    if active_only
+                    else "SELECT * FROM execution_outbox ORDER BY created_at, command_id"
+                )
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._outbox_from_row(row) for row in rows)
 
     def get_legs(self, command_id: str) -> tuple[LegRecord, ...]:
         checked = _text(command_id, field="command_id", maximum=128)
@@ -3436,17 +4182,30 @@ class ExecutionStore:
         *,
         reason: str,
         at: datetime,
+        worker_id: str | None = None,
+        fencing_token: int | None = None,
+        prepared_attempt_id: str | None = None,
     ) -> CommandRecord:
         """Permanently void a proven-unsent command and consume its authority.
 
-        This path is available only while no attempt row exists.  The ticket
-        and approval are never revived; another send requires a new ticket and
-        a new trusted approval.
+        This path is available while no attempt exists, or for one exact
+        ``prepared`` attempt before submission authority was consumed. The
+        ticket and approval are never revived; another send requires a new
+        ticket and a new trusted approval.
         """
 
         checked_command = _text(command_id, field="command_id", maximum=128)
         checked_reason = _text(reason, field="reason", maximum=256)
         checked_at = _utc(at, field="at")
+        checked_prepared_attempt = (
+            None
+            if prepared_attempt_id is None
+            else _text(
+                prepared_attempt_id,
+                field="prepared_attempt_id",
+                maximum=128,
+            )
+        )
         with self._transaction() as connection:
             command_row = connection.execute(
                 "SELECT * FROM execution_commands WHERE command_id = ?",
@@ -3457,11 +4216,30 @@ class ExecutionStore:
             command = self._command_from_row(command_row)
             if command.state not in {"queued", "claimed"}:
                 raise StateConflict("only an unsent queued/claimed command may be voided")
-            if connection.execute(
-                "SELECT 1 FROM execution_attempts WHERE command_id = ?",
+            attempt_row = connection.execute(
+                "SELECT * FROM execution_attempts WHERE command_id = ?",
                 (checked_command,),
-            ).fetchone() is not None:
-                raise StateConflict("command has an attempt and must be reconciled")
+            ).fetchone()
+            prepared_attempt = None
+            if attempt_row is not None:
+                prepared_attempt = self._attempt_from_row(attempt_row)
+                if (
+                    checked_prepared_attempt is None
+                    or prepared_attempt.attempt_id != checked_prepared_attempt
+                    or prepared_attempt.state != "prepared"
+                    or prepared_attempt.transport_evidence_hash is not None
+                    or connection.execute(
+                        """
+                        SELECT 1 FROM execution_submission_authorities
+                        WHERE command_id = ? OR attempt_id = ?
+                        """,
+                        (checked_command, prepared_attempt.attempt_id),
+                    ).fetchone()
+                    is not None
+                ):
+                    raise StateConflict("command has an attempt and must be reconciled")
+            elif checked_prepared_attempt is not None:
+                raise StateConflict("prepared attempt to void is missing")
             outbox_row = connection.execute(
                 "SELECT * FROM execution_outbox WHERE command_id = ?",
                 (checked_command,),
@@ -3469,8 +4247,31 @@ class ExecutionStore:
             if outbox_row is None:
                 raise StorageError("execution command has no outbox")
             outbox = self._outbox_from_row(outbox_row)
-            if outbox.current_attempt_id is not None or outbox.attempt_count != 0:
-                raise StateConflict("outbox records an attempt and cannot be voided")
+            if command.state == "claimed":
+                if worker_id is None or fencing_token is None:
+                    raise StateConflict(
+                        "claimed command void requires its exact active worker fence"
+                    )
+                self._require_claim_locked(
+                    connection,
+                    command_id=checked_command,
+                    worker_id=_text(worker_id, field="worker_id", maximum=128),
+                    fencing_token=_positive_int(
+                        fencing_token, field="fencing_token"
+                    ),
+                    at=checked_at,
+                    allowed_states=frozenset({"claimed"}),
+                )
+            elif worker_id is not None or fencing_token is not None:
+                raise StateConflict("queued command void cannot consume a worker fence")
+            if prepared_attempt is None:
+                if outbox.current_attempt_id is not None or outbox.attempt_count != 0:
+                    raise StateConflict("outbox records an attempt and cannot be voided")
+            elif (
+                outbox.current_attempt_id != prepared_attempt.attempt_id
+                or outbox.attempt_count != 1
+            ):
+                raise StateConflict("outbox prepared attempt binding differs")
             leg_rows = connection.execute(
                 "SELECT * FROM execution_command_legs WHERE command_id = ?",
                 (checked_command,),
@@ -3523,8 +4324,12 @@ class ExecutionStore:
                 fencing_token=outbox.fencing_token,
                 claimed_at=None,
                 lease_expires_at=None,
-                current_attempt_id=None,
-                attempt_count=0,
+                current_attempt_id=(
+                    None
+                    if prepared_attempt is None
+                    else prepared_attempt.attempt_id
+                ),
+                attempt_count=0 if prepared_attempt is None else 1,
             )
             ticket = connection.execute(
                 "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
@@ -3548,7 +4353,9 @@ class ExecutionStore:
                 payload={
                     "reason": checked_reason,
                     "authority_reusable": False,
-                    "attempt_existed": False,
+                    "attempt_existed": prepared_attempt is not None,
+                    "submission_authority_consumed": False,
+                    "venue_write_attempted": False,
                 },
             )
             return terminal_command
@@ -3563,7 +4370,7 @@ class ExecutionStore:
         payload_json: str,
         content_hash: str,
     ) -> dict[str, object]:
-        return {
+        material = {
             "preflight_hash": preflight.preflight_hash,
             "command_id": preflight.command_id,
             "ticket_hash": preflight.ticket_hash,
@@ -3583,6 +4390,9 @@ class ExecutionStore:
             "payload_json": payload_json,
             "content_hash": content_hash,
         }
+        if preflight.account_server_time_ms is not None:
+            material["account_server_time_ms"] = preflight.account_server_time_ms
+        return material
 
     @classmethod
     def _preflight_from_row(cls, row: Mapping[str, Any]) -> DispatchPreflight:
@@ -3611,6 +4421,11 @@ class ExecutionStore:
                     row["expires_at"], field="preflight expires_at"
                 ),
                 passed=bool(row["passed"]),
+                account_server_time_ms=(
+                    None
+                    if row["account_server_time_ms"] is None
+                    else int(row["account_server_time_ms"])
+                ),
                 preflight_hash=str(row["preflight_hash"]),
             )
         except (TypeError, ValueError) as error:
@@ -3648,6 +4463,11 @@ class ExecutionStore:
             raise AdmissionDenied(
                 "DISPATCH_PREFLIGHT_FAILED",
                 "failed preflight cannot authorize attempt preparation",
+            )
+        if preflight.account_server_time_ms is None:
+            raise AdmissionDenied(
+                "DISPATCH_PREFLIGHT_SERVER_WATERMARK_MISSING",
+                "preflight lacks the exact venue-server account watermark",
             )
         if (
             preflight.environment is not self.environment
@@ -3753,10 +4573,11 @@ class ExecutionStore:
                     INSERT INTO execution_dispatch_preflights (
                         preflight_hash, command_id, ticket_hash, plan_hash,
                         environment, account_id, account_snapshot_hash,
+                        account_server_time_ms,
                         metadata_hash, market_snapshot_hash, risk_policy_hash,
                         observed_at, expires_at, passed, registered_at,
                         payload_json, content_hash, record_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                     """,
                     (
                         preflight.preflight_hash,
@@ -3766,6 +4587,7 @@ class ExecutionStore:
                         preflight.environment.value,
                         preflight.account_id,
                         preflight.account_snapshot_hash,
+                        preflight.account_server_time_ms,
                         preflight.metadata_hash,
                         preflight.market_snapshot_hash,
                         preflight.risk_policy_hash,
@@ -3785,6 +4607,7 @@ class ExecutionStore:
                     payload={
                         "preflight_hash": preflight.preflight_hash,
                         "account_snapshot_hash": preflight.account_snapshot_hash,
+                        "account_server_time_ms": preflight.account_server_time_ms,
                         "metadata_hash": preflight.metadata_hash,
                         "market_snapshot_hash": preflight.market_snapshot_hash,
                         "risk_policy_hash": preflight.risk_policy_hash,
@@ -4287,6 +5110,122 @@ class ExecutionStore:
                 if attempt is None:
                     raise StorageError("claimed outbox references missing attempt")
                 attempt_record = self._attempt_from_row(attempt)
+                submission_authority = connection.execute(
+                    """
+                    SELECT 1 FROM execution_submission_authorities
+                    WHERE command_id = ? AND attempt_id = ?
+                      AND signed_evidence_hash = ?
+                    """,
+                    (
+                        current.command_id,
+                        attempt_record.attempt_id,
+                        attempt_record.signed_evidence_hash,
+                    ),
+                ).fetchone()
+                if submission_authority is None:
+                    if attempt_record.state != "prepared":
+                        raise StorageError(
+                            "entry attempt without submission authority is not prepared"
+                        )
+                    leg_rows = connection.execute(
+                        """
+                        SELECT * FROM execution_command_legs
+                        WHERE command_id = ?
+                        """,
+                        (current.command_id,),
+                    ).fetchall()
+                    if len(leg_rows) != 3:
+                        raise StorageError(
+                            "proven-unsent entry is missing protected legs"
+                        )
+                    for leg_row in leg_rows:
+                        leg = self._leg_from_row(leg_row)
+                        if leg.cumulative_filled != ZERO or leg.venue_oid is not None:
+                            raise StateConflict(
+                                "proven-unsent entry unexpectedly has venue evidence"
+                            )
+                        self._update_leg_locked(
+                            connection,
+                            leg,
+                            status="expired",
+                            cumulative_filled=ZERO,
+                            venue_oid=None,
+                            at=at,
+                        )
+                    command = self._command_from_row(command_row)
+                    current_loss, current_notional, exposure_revision, _ = (
+                        self._read_exposure_locked(connection)
+                    )
+                    self._write_exposure_locked(
+                        connection,
+                        loss=decimal_subtract(
+                            current_loss,
+                            command.reserved_loss,
+                            field="proven-unsent reserved loss",
+                        ),
+                        notional=decimal_subtract(
+                            current_notional,
+                            command.reserved_notional,
+                            field="proven-unsent reserved notional",
+                        ),
+                        previous_revision=exposure_revision,
+                        at=at,
+                    )
+                    self._set_command_state_locked(
+                        connection,
+                        command_row,
+                        state="terminal",
+                        at=at,
+                        terminal=True,
+                    )
+                    self._set_outbox_locked(
+                        connection,
+                        row,
+                        state="terminal",
+                        at=at,
+                        worker_id=None,
+                        fencing_token=current.fencing_token,
+                        claimed_at=None,
+                        lease_expires_at=None,
+                        current_attempt_id=attempt_record.attempt_id,
+                        attempt_count=current.attempt_count,
+                    )
+                    ticket = connection.execute(
+                        "SELECT * FROM execution_tickets WHERE ticket_hash = ?",
+                        (command.ticket_hash,),
+                    ).fetchone()
+                    if ticket is None:
+                        raise StorageError(
+                            "proven-unsent entry ticket is missing"
+                        )
+                    terminal_ticket = self._ticket_material(
+                        ticket, state="terminal"
+                    )
+                    connection.execute(
+                        """
+                        UPDATE execution_tickets SET state = 'terminal',
+                            record_hash = ?
+                        WHERE ticket_hash = ? AND state = 'consumed'
+                        """,
+                        (
+                            _record_hash("ticket", terminal_ticket),
+                            command.ticket_hash,
+                        ),
+                    )
+                    self._append_event_locked(
+                        connection,
+                        command_id=current.command_id,
+                        event_type="prepared_entry_expired_proven_unsent",
+                        occurred_at=at,
+                        payload={
+                            "fencing_token": current.fencing_token,
+                            "attempt_id": attempt_record.attempt_id,
+                            "submission_authority_consumed": False,
+                            "venue_write_attempted": False,
+                            "authority_reusable": False,
+                        },
+                    )
+                    continue
                 transport_evidence: TransportOutcomeEvidence | None = None
                 if attempt_record.signed_evidence_hash is not None:
                     transport_evidence = TransportOutcomeEvidence(
@@ -4817,6 +5756,149 @@ class ExecutionStore:
                     "SELECT * FROM execution_attempts WHERE attempt_id = ?",
                     (checked_attempt,),
                 ).fetchone()
+            )
+
+    def require_submission_authority(
+        self,
+        command_id: str,
+        attempt_id: str,
+        signed_evidence_hash: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        at: datetime,
+    ) -> EntrySubmissionAuthority:
+        """Consume the sole durable pre-send authority for a protected entry."""
+
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_attempt = _text(attempt_id, field="attempt_id", maximum=128)
+        checked_signed = _hash(
+            signed_evidence_hash, field="signed_evidence_hash"
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            outbox, _ = self._require_claim_locked(
+                connection,
+                command_id=checked_command,
+                worker_id=checked_worker,
+                fencing_token=token,
+                at=checked_at,
+                allowed_states=frozenset({"claimed"}),
+            )
+            attempt_row = connection.execute(
+                "SELECT * FROM execution_attempts WHERE attempt_id = ?",
+                (checked_attempt,),
+            ).fetchone()
+            if attempt_row is None:
+                raise RecordNotFound("entry submission attempt is missing")
+            attempt = self._attempt_from_row(attempt_row)
+            if (
+                attempt.command_id != checked_command
+                or attempt.worker_id != checked_worker
+                or attempt.fencing_token != token
+                or attempt.state != "prepared"
+                or attempt.signed_evidence_hash != checked_signed
+                or outbox.current_attempt_id != checked_attempt
+                or outbox.lease_expires_at is None
+            ):
+                raise StateConflict(
+                    "entry submission authority differs from durable attempt"
+                )
+            signed_row = connection.execute(
+                """
+                SELECT * FROM execution_signed_envelopes
+                WHERE evidence_hash = ? AND command_id = ?
+                """,
+                (checked_signed, checked_command),
+            ).fetchone()
+            if signed_row is None:
+                raise StorageError("entry submission signed evidence is missing")
+            signed = self._signed_evidence_from_row(signed_row)
+            if (
+                signed.nonce != attempt.nonce
+                or signed.action_hash != attempt.action_hash
+                or signed.wire_hash != attempt.wire_hash
+                or int(checked_at.timestamp() * 1_000) >= signed.expires_after_ms
+            ):
+                raise StateConflict("entry signed evidence is stale or mismatched")
+            if connection.execute(
+                """
+                SELECT 1 FROM execution_submission_authorities
+                WHERE command_id = ? OR attempt_id = ?
+                """,
+                (checked_command, checked_attempt),
+            ).fetchone() is not None:
+                raise StateConflict("entry submission authority is already consumed")
+            material = {
+                "command_id": checked_command,
+                "attempt_id": checked_attempt,
+                "signed_evidence_hash": checked_signed,
+                "nonce": attempt.nonce,
+                "action_hash": attempt.action_hash,
+                "wire_hash": attempt.wire_hash,
+                "worker_id": checked_worker,
+                "fencing_token": token,
+                "issued_at": checked_at,
+                "lease_expires_at": outbox.lease_expires_at,
+            }
+            authority_hash = _record_hash("entry-submission-authority", material)
+            payload = {**material, "authority_hash": authority_hash}
+            payload_json, content_hash = _canonical_payload(payload)
+            connection.execute(
+                """
+                INSERT INTO execution_submission_authorities (
+                    authority_hash, command_id, attempt_id,
+                    signed_evidence_hash, worker_id, fencing_token,
+                    issued_at, lease_expires_at, payload_json,
+                    content_hash, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    authority_hash,
+                    checked_command,
+                    checked_attempt,
+                    checked_signed,
+                    checked_worker,
+                    token,
+                    _time_text(checked_at, field="issued_at"),
+                    _time_text(outbox.lease_expires_at, field="lease_expires_at"),
+                    payload_json,
+                    content_hash,
+                    _record_hash(
+                        "entry-submission-authority-record",
+                        {
+                            "authority_hash": authority_hash,
+                            "payload_json": payload_json,
+                            "content_hash": content_hash,
+                        },
+                    ),
+                ),
+            )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="entry_submission_authority_consumed",
+                occurred_at=checked_at,
+                payload={
+                    "attempt_id": checked_attempt,
+                    "signed_evidence_hash": checked_signed,
+                    "authority_hash": authority_hash,
+                    "retry_allowed": False,
+                },
+            )
+            return EntrySubmissionAuthority(
+                command_id=checked_command,
+                attempt_id=checked_attempt,
+                signed_evidence_hash=checked_signed,
+                nonce=attempt.nonce,
+                action_hash=attempt.action_hash,
+                wire_hash=attempt.wire_hash,
+                worker_id=checked_worker,
+                fencing_token=token,
+                lease_expires_at=outbox.lease_expires_at,
+                authority_hash=authority_hash,
             )
 
     def get_attempt(self, command_id: str) -> AttemptRecord:
@@ -5355,7 +6437,99 @@ class ExecutionStore:
             raise StateConflict("fill does not match a command leg")
         if fill.occurred_at > observed_at:
             raise ValidationError("fill cannot postdate reconciliation observation")
-        payload = {"command_id": command_id, **fill.as_dict()}
+        if connection.execute(
+            "SELECT 1 FROM execution_recovery_fills WHERE fill_id = ?",
+            (fill.fill_id,),
+        ).fetchone() is not None:
+            raise StateConflict("venue fill cannot belong to recovery and parent")
+        if fill.venue_oid is not None:
+            recovery_owner = connection.execute(
+                """
+                SELECT 1 FROM execution_recovery_fills
+                WHERE venue_oid = ? AND venue_trade_id = ?
+                    AND transaction_hash = ? AND occurred_at = ?
+                """,
+                (
+                    fill.venue_oid,
+                    fill.venue_trade_id,
+                    fill.transaction_hash,
+                    _time_text(fill.occurred_at, field="occurred_at"),
+                ),
+            ).fetchone()
+            if recovery_owner is not None:
+                raise StateConflict(
+                    "venue fill cannot belong to recovery and parent"
+                )
+        existing = connection.execute(
+            "SELECT * FROM execution_fills WHERE fill_id = ?", (fill.fill_id,)
+        ).fetchone()
+        if existing is not None:
+            existing_payload_json = str(existing["payload_json"])
+            existing_content_hash = _stored_hash(
+                existing["content_hash"], field="fill content_hash"
+            )
+            _decode_payload(
+                existing_payload_json,
+                existing_content_hash,
+                field="fill",
+            )
+            existing_material = {
+                "fill_id": str(existing["fill_id"]),
+                "command_id": str(existing["command_id"]),
+                "role": str(existing["role"]),
+                "cloid": str(existing["cloid"]),
+                "quantity": str(existing["quantity"]),
+                "price": str(existing["price"]),
+                "fee": str(existing["fee"]),
+                "occurred_at": str(existing["occurred_at"]),
+            }
+            if existing["observed_at"] is not None:
+                existing_material.update(
+                    {
+                        "venue_oid": existing["venue_oid"],
+                        "venue_trade_id": existing["venue_trade_id"],
+                        "transaction_hash": existing["transaction_hash"],
+                        "closed_pnl": existing["closed_pnl"],
+                        "fee_token": existing["fee_token"],
+                        "observed_at": str(existing["observed_at"]),
+                    }
+                )
+            existing_material.update(
+                {
+                    "content_hash": existing_content_hash,
+                    "payload_json": existing_payload_json,
+                }
+            )
+            if _stored_hash(
+                existing["record_hash"], field="fill record_hash"
+            ) != _record_hash("fill", existing_material):
+                raise StorageError("persisted fill record hash does not match")
+            comparisons = {
+                "command_id": command_id,
+                "role": fill.role,
+                "cloid": fill.cloid,
+                "quantity": _decimal_text(fill.quantity, field="quantity"),
+                "price": _decimal_text(fill.price, field="price"),
+                "fee": _decimal_text(fill.fee, field="fee"),
+                "occurred_at": _time_text(fill.occurred_at, field="occurred_at"),
+                "venue_oid": fill.venue_oid,
+                "venue_trade_id": fill.venue_trade_id,
+                "transaction_hash": fill.transaction_hash,
+                "closed_pnl": (
+                    None
+                    if fill.closed_pnl is None
+                    else _decimal_text(fill.closed_pnl, field="closed_pnl")
+                ),
+                "fee_token": fill.fee_token,
+            }
+            if all(existing[field] == expected for field, expected in comparisons.items()):
+                return
+            raise StateConflict("fill ID is already bound to different content")
+        payload = {
+            "command_id": command_id,
+            **fill.as_dict(),
+            "observed_at": _time_text(observed_at, field="observed_at"),
+        }
         payload_json, content_hash = _canonical_payload(payload)
         material = {
             "fill_id": fill.fill_id,
@@ -5366,23 +6540,28 @@ class ExecutionStore:
             "price": _decimal_text(fill.price, field="price"),
             "fee": _decimal_text(fill.fee, field="fee"),
             "occurred_at": _time_text(fill.occurred_at, field="occurred_at"),
+            "venue_oid": fill.venue_oid,
+            "venue_trade_id": fill.venue_trade_id,
+            "transaction_hash": fill.transaction_hash,
+            "closed_pnl": (
+                None
+                if fill.closed_pnl is None
+                else _decimal_text(fill.closed_pnl, field="closed_pnl")
+            ),
+            "fee_token": fill.fee_token,
+            "observed_at": _time_text(observed_at, field="observed_at"),
             "content_hash": content_hash,
             "payload_json": payload_json,
         }
         record_hash = _record_hash("fill", material)
-        existing = connection.execute(
-            "SELECT * FROM execution_fills WHERE fill_id = ?", (fill.fill_id,)
-        ).fetchone()
-        if existing is not None:
-            if existing["record_hash"] == record_hash:
-                return
-            raise StateConflict("fill ID is already bound to different content")
         connection.execute(
             """
             INSERT INTO execution_fills (
                 fill_id, command_id, role, cloid, quantity, price, fee,
-                occurred_at, payload_json, content_hash, record_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                occurred_at, payload_json, content_hash, record_hash,
+                venue_oid, venue_trade_id, transaction_hash, closed_pnl,
+                fee_token, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fill.fill_id,
@@ -5396,6 +6575,16 @@ class ExecutionStore:
                 payload_json,
                 content_hash,
                 record_hash,
+                fill.venue_oid,
+                fill.venue_trade_id,
+                fill.transaction_hash,
+                (
+                    None
+                    if fill.closed_pnl is None
+                    else _decimal_text(fill.closed_pnl, field="closed_pnl")
+                ),
+                fill.fee_token,
+                _time_text(observed_at, field="observed_at"),
             ),
         )
 
@@ -5667,6 +6856,7 @@ class ExecutionStore:
         signed_position_quantity: Decimal | str | int,
         protected_quantity: Decimal | str | int,
         fills: Sequence[VenueFill] = (),
+        mutation_at: datetime | None = None,
     ) -> CommandRecord:
         checked_command = _text(command_id, field="command_id", maximum=128)
         checked_worker = _text(worker_id, field="worker_id", maximum=128)
@@ -5678,6 +6868,11 @@ class ExecutionStore:
             account_snapshot_hash, field="account_snapshot_hash"
         )
         checked_at = _utc(observed_at, field="observed_at")
+        checked_mutation_at = (
+            checked_at
+            if mutation_at is None
+            else _utc(mutation_at, field="mutation_at")
+        )
         if type(complete) is not bool:
             raise TypeError("complete must be bool")
         leg_values = tuple(legs)
@@ -5732,12 +6927,12 @@ class ExecutionStore:
             "reconciliation", reconciliation_material
         )
         with self._transaction() as connection:
-            _, outbox_row = self._require_claim_locked(
+            current_outbox, outbox_row = self._require_claim_locked(
                 connection,
                 command_id=checked_command,
                 worker_id=checked_worker,
                 fencing_token=token,
-                at=checked_at,
+                at=checked_mutation_at,
                 allowed_states=frozenset({"reconciling"}),
             )
             existing = connection.execute(
@@ -5749,6 +6944,28 @@ class ExecutionStore:
             ).fetchone()
             if existing is not None:
                 if existing["record_hash"] == reconciliation_hash:
+                    self._set_outbox_locked(
+                        connection,
+                        outbox_row,
+                        state="reconciling",
+                        at=checked_mutation_at,
+                        worker_id=None,
+                        fencing_token=token,
+                        claimed_at=None,
+                        lease_expires_at=None,
+                        current_attempt_id=current_outbox.current_attempt_id,
+                        attempt_count=current_outbox.attempt_count,
+                    )
+                    self._append_event_locked(
+                        connection,
+                        command_id=checked_command,
+                        event_type="reconciliation_replay_released",
+                        occurred_at=checked_mutation_at,
+                        payload={
+                            "reconciliation_id": checked_id,
+                            "account_snapshot_hash": snapshot_hash,
+                        },
+                    )
                     return self._command_from_row(
                         connection.execute(
                             "SELECT * FROM execution_commands WHERE command_id = ?",
@@ -5853,7 +7070,7 @@ class ExecutionStore:
                     ),
                     command_id=checked_command,
                     code=code,
-                    severity="critical" if protection.state == "failed" else "high",
+                    severity="critical",
                     at=checked_at,
                     details={
                         "signed_position_quantity": _decimal_text(
@@ -5928,20 +7145,20 @@ class ExecutionStore:
                     loss=next_loss,
                     notional=next_notional,
                     previous_revision=exposure_revision,
-                    at=checked_at,
+                    at=checked_mutation_at,
                 )
                 command = self._set_command_state_locked(
                     connection,
                     command_row,
                     state="terminal",
-                    at=checked_at,
+                    at=checked_mutation_at,
                     terminal=True,
                 )
                 self._set_outbox_locked(
                     connection,
                     outbox_row,
                     state="terminal",
-                    at=checked_at,
+                    at=checked_mutation_at,
                     worker_id=None,
                     fencing_token=token,
                     claimed_at=None,
@@ -5965,13 +7182,90 @@ class ExecutionStore:
                     """,
                     (_record_hash("ticket", terminal_ticket), command.ticket_hash),
                 )
+                terminal_flat_incidents = connection.execute(
+                    """
+                    SELECT * FROM execution_incidents
+                    WHERE command_id = ? AND severity = 'critical'
+                      AND (
+                          state = 'contained'
+                          OR (
+                              state = 'open'
+                              AND code =
+                                  'UNKNOWN_SUBMISSION_ALL_CLOIDS_MISSING'
+                          )
+                      )
+                    ORDER BY opened_at, incident_id
+                    """,
+                    (checked_command,),
+                ).fetchall()
+                for incident_row in terminal_flat_incidents:
+                    incident = self._incident_from_row(incident_row)
+                    details_json, details_hash = _canonical_payload(
+                        dict(incident.details), maximum=_MAX_DETAILS_BYTES
+                    )
+                    closed_material = self._incident_material(
+                        incident.incident_id,
+                        incident.command_id,
+                        incident.code,
+                        incident.severity,
+                        "closed",
+                        incident.opened_at,
+                        checked_mutation_at,
+                        incident.revision + 1,
+                        details_json,
+                        details_hash,
+                    )
+                    connection.execute(
+                        """
+                        UPDATE execution_incidents SET state = 'closed',
+                            updated_at = ?, revision = ?, record_hash = ?
+                        WHERE incident_id = ? AND state = ?
+                        """,
+                        (
+                            _time_text(checked_mutation_at, field="updated_at"),
+                            incident.revision + 1,
+                            _record_hash("incident", closed_material),
+                            incident.incident_id,
+                            incident.state,
+                        ),
+                    )
+                    self._append_event_locked(
+                        connection,
+                        command_id=checked_command,
+                        event_type=(
+                            "contained_incident_closed_terminal_flat"
+                            if incident.state == "contained"
+                            else "ambiguity_incident_closed_terminal_flat"
+                        ),
+                        occurred_at=checked_mutation_at,
+                        payload={
+                            "incident_id": incident.incident_id,
+                            "incident_code": incident.code,
+                            "previous_state": incident.state,
+                            "account_snapshot_hash": snapshot_hash,
+                        },
+                    )
+            else:
+                current_outbox = self._outbox_from_row(outbox_row)
+                self._set_outbox_locked(
+                    connection,
+                    outbox_row,
+                    state="reconciling",
+                    at=checked_mutation_at,
+                    worker_id=None,
+                    fencing_token=token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=current_outbox.current_attempt_id,
+                    attempt_count=current_outbox.attempt_count,
+                )
             self._append_event_locked(
                 connection,
                 command_id=checked_command,
                 event_type=(
                     "reconciliation_terminal" if terminal else "reconciliation_recorded"
                 ),
-                occurred_at=checked_at,
+                occurred_at=checked_mutation_at,
                 payload={
                     "reconciliation_id": checked_id,
                     "account_snapshot_hash": snapshot_hash,
@@ -5984,6 +7278,64 @@ class ExecutionStore:
                 },
             )
             return command
+
+    def release_reconciliation_claim(
+        self,
+        command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        at: datetime,
+        reason: str,
+    ) -> OutboxRecord:
+        checked_command = _text(command_id, field="command_id", maximum=128)
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        checked_reason = _text(reason, field="reason", maximum=128)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_outbox WHERE command_id = ?",
+                (checked_command,),
+            ).fetchone()
+            if row is None:
+                raise RecordNotFound("execution outbox is missing")
+            current = self._outbox_from_row(row)
+            if (
+                current.state != "reconciling"
+                or current.worker_id != checked_worker
+                or current.fencing_token != token
+                or current.claimed_at is None
+                or current.lease_expires_at is None
+                or checked_at < current.claimed_at
+            ):
+                raise StateConflict(
+                    "reconciliation claim release is stale or mismatched"
+                )
+            released = self._set_outbox_locked(
+                connection,
+                row,
+                state="reconciling",
+                at=checked_at,
+                worker_id=None,
+                fencing_token=token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=current.current_attempt_id,
+                attempt_count=current.attempt_count,
+            )
+            self._append_event_locked(
+                connection,
+                command_id=checked_command,
+                event_type="reconciliation_claim_released",
+                occurred_at=checked_at,
+                payload={
+                    "reason": checked_reason,
+                    "fencing_token": token,
+                    "venue_write_attempted": False,
+                },
+            )
+            return released
 
     # -- incidents and reconciled reads -------------------------------
 
@@ -6294,6 +7646,16 @@ class ExecutionStore:
             raise RecordNotFound("position has not been reconciled")
         return self._position_from_row(row)
 
+    def list_positions(self) -> tuple[PositionRecord, ...]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM execution_positions ORDER BY instrument"
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._position_from_row(row) for row in rows)
+
     def get_protection(self, command_id: str) -> ProtectionRecord:
         checked = _text(command_id, field="command_id", maximum=128)
         connection = self._connect()
@@ -6307,6 +7669,16 @@ class ExecutionStore:
         if row is None:
             raise RecordNotFound("protection has not been reconciled")
         return self._protection_from_row(row)
+
+    def list_protections(self) -> tuple[ProtectionRecord, ...]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM execution_protection ORDER BY command_id"
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._protection_from_row(row) for row in rows)
 
     def list_fills(self, command_id: str) -> tuple[VenueFill, ...]:
         checked = _text(command_id, field="command_id", maximum=128)
@@ -6327,7 +7699,7 @@ class ExecutionStore:
             content_hash = _stored_hash(
                 row["content_hash"], field="fill content_hash"
             )
-            _decode_payload(payload_json, content_hash, field="fill")
+            payload = _decode_payload(payload_json, content_hash, field="fill")
             material = {
                 "fill_id": str(row["fill_id"]),
                 "command_id": str(row["command_id"]),
@@ -6337,9 +7709,27 @@ class ExecutionStore:
                 "price": str(row["price"]),
                 "fee": str(row["fee"]),
                 "occurred_at": str(row["occurred_at"]),
-                "content_hash": content_hash,
-                "payload_json": payload_json,
             }
+            if row["observed_at"] is not None:
+                material.update(
+                    {
+                        "venue_oid": row["venue_oid"],
+                        "venue_trade_id": row["venue_trade_id"],
+                        "transaction_hash": row["transaction_hash"],
+                        "closed_pnl": row["closed_pnl"],
+                        "fee_token": row["fee_token"],
+                        "observed_at": str(row["observed_at"]),
+                    }
+                )
+                if not isinstance(payload, dict) or payload.get(
+                    "observed_at"
+                ) != row["observed_at"]:
+                    raise StorageError(
+                        "persisted fill observation differs from payload"
+                    )
+            material.update(
+                {"content_hash": content_hash, "payload_json": payload_json}
+            )
             if _stored_hash(row["record_hash"], field="fill record_hash") != _record_hash(
                 "fill", material
             ):
@@ -6354,6 +7744,32 @@ class ExecutionStore:
                     fee=Decimal(str(row["fee"])),
                     occurred_at=_parse_time(
                         row["occurred_at"], field="fill occurred_at"
+                    ),
+                    venue_oid=(
+                        None if row["venue_oid"] is None else int(row["venue_oid"])
+                    ),
+                    venue_trade_id=(
+                        None
+                        if row["venue_trade_id"] is None
+                        else int(row["venue_trade_id"])
+                    ),
+                    transaction_hash=(
+                        None
+                        if row["transaction_hash"] is None
+                        else str(row["transaction_hash"])
+                    ),
+                    closed_pnl=(
+                        None
+                        if row["closed_pnl"] is None
+                        else Decimal(str(row["closed_pnl"]))
+                    ),
+                    fee_token=(
+                        None if row["fee_token"] is None else str(row["fee_token"])
+                    ),
+                    observed_at=(
+                        None
+                        if row["observed_at"] is None
+                        else _parse_time(row["observed_at"], field="fill observed_at")
                     ),
                 )
             )
@@ -7019,6 +8435,27 @@ class ExecutionStore:
             raise RecordNotFound("recovery command is not registered")
         return self._recovery_command_from_row(row)
 
+    def list_recovery_commands(
+        self,
+        *,
+        active_only: bool = False,
+    ) -> tuple[RecoveryCommand, ...]:
+        if type(active_only) is not bool:
+            raise TypeError("active_only must be bool")
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                (
+                    "SELECT * FROM execution_recovery_commands "
+                    "WHERE state != 'terminal' ORDER BY priority, created_at, recovery_command_id"
+                    if active_only
+                    else "SELECT * FROM execution_recovery_commands ORDER BY created_at, recovery_command_id"
+                )
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._recovery_command_from_row(row) for row in rows)
+
     def get_recovery_outbox(self, recovery_command_id: str) -> RecoveryOutbox:
         checked = _text(
             recovery_command_id, field="recovery_command_id", maximum=128
@@ -7037,6 +8474,28 @@ class ExecutionStore:
         if row is None:
             raise RecordNotFound("recovery outbox is not registered")
         return self._recovery_outbox_from_row(row)
+
+    def list_recovery_outboxes(
+        self,
+        *,
+        active_only: bool = False,
+    ) -> tuple[RecoveryOutbox, ...]:
+        if type(active_only) is not bool:
+            raise TypeError("active_only must be bool")
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                (
+                    "SELECT * FROM execution_recovery_outbox WHERE state != 'terminal' "
+                    "ORDER BY created_at, recovery_command_id"
+                    if active_only
+                    else "SELECT * FROM execution_recovery_outbox "
+                    "ORDER BY created_at, recovery_command_id"
+                )
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._recovery_outbox_from_row(row) for row in rows)
 
     def _normalize_expired_recovery_locked(
         self, connection: sqlite3.Connection, *, at: datetime
@@ -7061,26 +8520,57 @@ class ExecutionStore:
                 raise StorageError("expired recovery claim has no command")
             if outbox.current_attempt_id is None:
                 if outbox.state == "claimed":
-                    next_state = "queued"
+                    self._set_recovery_outbox_locked(
+                        connection,
+                        row,
+                        state="queued",
+                        worker_id=None,
+                        fencing_token=outbox.fencing_token,
+                        claimed_at=None,
+                        lease_expires_at=None,
+                        current_attempt_id=None,
+                        attempt_count=outbox.attempt_count,
+                        at=at,
+                    )
+                    self._set_recovery_command_state_locked(
+                        connection, command_row, state="queued", at=at
+                    )
                 else:
-                    # Signing authority may already have reached a wallet and
-                    # burned a nonce.  Never issue it again after lease loss.
-                    next_state = "submitted_unknown"
-                self._set_recovery_outbox_locked(
-                    connection,
-                    row,
-                    state=next_state,
-                    worker_id=None,
-                    fencing_token=outbox.fencing_token,
-                    claimed_at=None,
-                    lease_expires_at=None,
-                    current_attempt_id=None,
-                    attempt_count=outbox.attempt_count,
-                    at=at,
-                )
-                self._set_recovery_command_state_locked(
-                    connection, command_row, state=next_state, at=at
-                )
+                    # Transport is ordered strictly after durable attempt
+                    # creation.  No attempt therefore proves no venue write,
+                    # even if signing burned a nonce.  Terminalize this exact
+                    # authority and let safety issue a fresh short-lived one.
+                    command = self._set_recovery_command_state_locked(
+                        connection,
+                        command_row,
+                        state="terminal",
+                        at=at,
+                        terminal=True,
+                    )
+                    self._set_recovery_outbox_locked(
+                        connection,
+                        row,
+                        state="terminal",
+                        worker_id=None,
+                        fencing_token=outbox.fencing_token,
+                        claimed_at=None,
+                        lease_expires_at=None,
+                        current_attempt_id=None,
+                        attempt_count=outbox.attempt_count,
+                        at=at,
+                    )
+                    self._append_event_locked(
+                        connection,
+                        command_id=command.parent_command_id,
+                        event_type="recovery_signing_expired_unsent",
+                        occurred_at=at,
+                        payload={
+                            "recovery_command_id": command.recovery_command_id,
+                            "venue_write_attempted": False,
+                            "nonce_may_have_been_burned": True,
+                            "replacement_permit_required": True,
+                        },
+                    )
             else:
                 attempt_row = connection.execute(
                     """
@@ -7091,6 +8581,44 @@ class ExecutionStore:
                 if attempt_row is None:
                     raise StorageError("recovery outbox attempt is missing")
                 attempt = self._recovery_attempt_from_row(attempt_row)
+                if attempt.state == "prepared":
+                    command = self._set_recovery_command_state_locked(
+                        connection,
+                        command_row,
+                        state="terminal",
+                        at=at,
+                        terminal=True,
+                    )
+                    self._set_recovery_outbox_locked(
+                        connection,
+                        row,
+                        state="terminal",
+                        worker_id=None,
+                        fencing_token=outbox.fencing_token,
+                        claimed_at=None,
+                        lease_expires_at=None,
+                        current_attempt_id=attempt.attempt_id,
+                        attempt_count=outbox.attempt_count,
+                        at=at,
+                    )
+                    self._append_event_locked(
+                        connection,
+                        command_id=command.parent_command_id,
+                        event_type="recovery_attempt_expired_proven_unsent",
+                        occurred_at=at,
+                        payload={
+                            "recovery_command_id": command.recovery_command_id,
+                            "attempt_id": attempt.attempt_id,
+                            "submission_authority_consumed": False,
+                            "venue_write_attempted": False,
+                            "replacement_permit_required": True,
+                        },
+                    )
+                    continue
+                if attempt.state != "sending":
+                    raise StorageError(
+                        "expired recovery attempt is not prepared or sending"
+                    )
                 evidence = TransportOutcomeEvidence(
                     command_id=attempt.recovery_command_id,
                     attempt_id=attempt.attempt_id,
@@ -7129,6 +8657,20 @@ class ExecutionStore:
                 )
                 self._set_recovery_command_state_locked(
                     connection, command_row, state="submitted_unknown", at=at
+                )
+                command = self._recovery_command_from_row(command_row)
+                self._append_event_locked(
+                    connection,
+                    command_id=command.parent_command_id,
+                    event_type="recovery_prepared_attempt_became_unknown",
+                    occurred_at=at,
+                    payload={
+                        "recovery_command_id": command.recovery_command_id,
+                        "attempt_id": attempt.attempt_id,
+                        "transport_evidence_hash": evidence.evidence_hash,
+                        "evidence_basis": "claim_expiry",
+                        "retry_allowed": False,
+                    },
                 )
 
     def _terminalize_expired_queued_recovery_locked(
@@ -7192,6 +8734,34 @@ class ExecutionStore:
                     "replacement_permit_required": True,
                 },
             )
+
+    def normalize_expired_claims(self, *, at: datetime) -> bool:
+        """Durably classify expired parent/recovery claims before routing.
+
+        A worker crash after attempt persistence has an unknown venue outcome,
+        never a retryable send.  This public state-machine operation lets the
+        runtime normalize that fact before a reconciliation adapter tries to
+        load transport evidence.  It performs no network, signing, or claim.
+        """
+
+        checked_at = _utc(at, field="at")
+        with self._transaction() as connection:
+            before = int(
+                connection.execute(
+                    "SELECT count(*) FROM execution_events"
+                ).fetchone()[0]
+            )
+            self._normalize_expired_claims_locked(connection, at=checked_at)
+            self._normalize_expired_recovery_locked(connection, at=checked_at)
+            self._terminalize_expired_queued_recovery_locked(
+                connection, at=checked_at
+            )
+            after = int(
+                connection.execute(
+                    "SELECT count(*) FROM execution_events"
+                ).fetchone()[0]
+            )
+            return after != before
 
     def claim_next_recovery(
         self,
@@ -8204,6 +9774,29 @@ class ExecutionStore:
             ):
                 raise StateConflict("terminal noop attempt is not accepted")
 
+            transport_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_transport_evidence
+                WHERE recovery_command_id = ?
+                """,
+                (command.recovery_command_id,),
+            ).fetchone()
+            if transport_row is None:
+                raise StorageError("terminal noop transport evidence is missing")
+            transport = self._recovery_transport_from_row(transport_row)
+            if (
+                transport.attempt_id != attempt.attempt_id
+                or transport.signed_evidence_hash != attempt.signed_evidence_hash
+                or transport.evidence_hash != attempt.transport_evidence_hash
+            ):
+                raise StateConflict("terminal noop transport binding differs")
+            if (
+                transport.outcome != "response_received"
+                or transport.evidence_basis != "transport_result"
+                or transport.detail_code != "response_received"
+            ):
+                raise StateConflict("terminal noop transport is not accepted")
+
             response_row = connection.execute(
                 """
                 SELECT * FROM execution_noop_fence_responses
@@ -8245,8 +9838,11 @@ class ExecutionStore:
                 "reconciliation_id",
                 "proof",
                 "incident_resolution",
+                "fills",
             }:
                 raise StorageError("terminal noop reconciliation payload is invalid")
+            if payload["fills"] != []:
+                raise StateConflict("terminal noop reconciliation cannot own fills")
             proof_document = payload["proof"]
             if not isinstance(proof_document, dict):
                 raise StorageError("terminal noop proof payload is invalid")
@@ -8297,6 +9893,7 @@ class ExecutionStore:
                 "reconciliation_id": reconciliation_id,
                 "proof": proof.as_dict(),
                 "incident_resolution": incident_resolution,
+                "fills": [],
                 "payload_json": payload_json,
                 "content_hash": content_hash,
             }
@@ -8667,6 +10264,205 @@ class ExecutionStore:
                 )
             return claimed
 
+    @staticmethod
+    def _recovery_fill_material(
+        fill: RecoveryVenueFill,
+        *,
+        recovery_command_id: str,
+        parent_command_id: str,
+        payload_json: str,
+        content_hash: str,
+    ) -> dict[str, object]:
+        return {
+            "recovery_command_id": recovery_command_id,
+            "parent_command_id": parent_command_id,
+            **fill.as_dict(),
+            "payload_json": payload_json,
+            "content_hash": content_hash,
+        }
+
+    @classmethod
+    def _recovery_fill_from_row(cls, row: Mapping[str, Any]) -> RecoveryVenueFill:
+        payload_json = str(row["payload_json"])
+        content_hash = _stored_hash(
+            row["content_hash"], field="recovery fill content_hash"
+        )
+        payload = _decode_payload(
+            payload_json, content_hash, field="recovery fill"
+        )
+        fill = RecoveryVenueFill(
+            fill_id=str(row["fill_id"]),
+            recovery_command_id=str(row["recovery_command_id"]),
+            parent_command_id=str(row["parent_command_id"]),
+            cloid=str(row["cloid"]),
+            symbol=str(row["symbol"]),
+            side=str(row["side"]),
+            quantity=Decimal(str(row["quantity"])),
+            signed_quantity=Decimal(str(row["signed_quantity"])),
+            start_position=Decimal(str(row["start_position"])),
+            end_position=Decimal(str(row["end_position"])),
+            price=Decimal(str(row["price"])),
+            fee=Decimal(str(row["fee"])),
+            closed_pnl=Decimal(str(row["closed_pnl"])),
+            fee_token=str(row["fee_token"]),
+            crossed=bool(int(row["crossed"])),
+            builder_fee=(
+                None
+                if row["builder_fee"] is None
+                else Decimal(str(row["builder_fee"]))
+            ),
+            venue_oid=int(row["venue_oid"]),
+            venue_trade_id=int(row["venue_trade_id"]),
+            transaction_hash=str(row["transaction_hash"]),
+            occurred_at=_parse_time(
+                row["occurred_at"], field="recovery fill occurred_at"
+            ),
+            observed_at=_parse_time(
+                row["observed_at"], field="recovery fill observed_at"
+            ),
+            account_snapshot_hash=str(row["account_snapshot_hash"]),
+            venue_evidence_hash=str(row["venue_evidence_hash"]),
+        )
+        expected_payload = fill.as_dict()
+        if payload != expected_payload:
+            raise StorageError("persisted recovery fill payload differs")
+        material = cls._recovery_fill_material(
+            fill,
+            recovery_command_id=str(row["recovery_command_id"]),
+            parent_command_id=str(row["parent_command_id"]),
+            payload_json=payload_json,
+            content_hash=content_hash,
+        )
+        if _stored_hash(
+            row["record_hash"], field="recovery fill record_hash"
+        ) != _record_hash("recovery-fill", material):
+            raise StorageError("persisted recovery fill record hash differs")
+        return fill
+
+    def _put_recovery_fill_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        command: RecoveryCommand,
+        fill: RecoveryVenueFill,
+    ) -> None:
+        if command.kind != "reduce_only_close":
+            raise StateConflict("only a reduce-only close may own recovery fills")
+        if (
+            fill.recovery_command_id != command.recovery_command_id
+            or fill.parent_command_id != command.parent_command_id
+        ):
+            raise StateConflict("recovery fill owner differs from durable command")
+        try:
+            material = json.loads(command.recovery_material_json)
+        except ValueError as error:
+            raise StorageError("recovery material is invalid JSON") from error
+        original = _decimal(
+            material.get("original_signed_position"),
+            field="original_signed_position",
+        )
+        if (
+            material.get("cloid") != fill.cloid
+            or material.get("symbol") != fill.symbol
+            or fill.side != ("sell" if original > ZERO else "buy")
+        ):
+            raise StateConflict("recovery fill differs from durable close action")
+        if fill.observed_at < fill.occurred_at:
+            raise StateConflict("recovery fill observation ordering differs")
+        parent_fill = connection.execute(
+            """
+            SELECT 1 FROM execution_fills
+            WHERE fill_id = ? OR (
+                venue_oid = ? AND venue_trade_id = ?
+                AND transaction_hash = ? AND occurred_at = ?
+            )
+            """,
+            (
+                fill.fill_id,
+                fill.venue_oid,
+                fill.venue_trade_id,
+                fill.transaction_hash,
+                _time_text(fill.occurred_at, field="occurred_at"),
+            ),
+        ).fetchone()
+        if parent_fill is not None:
+            raise StateConflict("venue fill cannot belong to parent and recovery")
+        payload = fill.as_dict()
+        payload_json, content_hash = _canonical_payload(payload)
+        record_material = self._recovery_fill_material(
+            fill,
+            recovery_command_id=command.recovery_command_id,
+            parent_command_id=command.parent_command_id,
+            payload_json=payload_json,
+            content_hash=content_hash,
+        )
+        record_hash = _record_hash("recovery-fill", record_material)
+        existing = connection.execute(
+            "SELECT * FROM execution_recovery_fills WHERE fill_id = ?",
+            (fill.fill_id,),
+        ).fetchone()
+        if existing is not None:
+            current = self._recovery_fill_from_row(existing)
+            current_core = current.as_dict()
+            incoming_core = fill.as_dict()
+            for field in (
+                "observed_at",
+                "account_snapshot_hash",
+                "venue_evidence_hash",
+            ):
+                current_core.pop(field)
+                incoming_core.pop(field)
+            if current_core == incoming_core:
+                return
+            raise StateConflict("recovery fill identity is bound differently")
+        connection.execute(
+            """
+            INSERT INTO execution_recovery_fills (
+                fill_id, recovery_command_id, parent_command_id, cloid,
+                symbol, side, quantity, signed_quantity, start_position,
+                end_position, price, fee, closed_pnl, fee_token, crossed,
+                builder_fee, venue_oid, venue_trade_id, transaction_hash,
+                occurred_at, observed_at, account_snapshot_hash,
+                venue_evidence_hash, payload_json, content_hash, record_hash
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                fill.fill_id,
+                command.recovery_command_id,
+                command.parent_command_id,
+                fill.cloid,
+                fill.symbol,
+                fill.side,
+                _decimal_text(fill.quantity, field="quantity"),
+                _decimal_text(fill.signed_quantity, field="signed_quantity"),
+                _decimal_text(fill.start_position, field="start_position"),
+                _decimal_text(fill.end_position, field="end_position"),
+                _decimal_text(fill.price, field="price"),
+                _decimal_text(fill.fee, field="fee"),
+                _decimal_text(fill.closed_pnl, field="closed_pnl"),
+                fill.fee_token,
+                int(fill.crossed),
+                (
+                    None
+                    if fill.builder_fee is None
+                    else _decimal_text(fill.builder_fee, field="builder_fee")
+                ),
+                fill.venue_oid,
+                fill.venue_trade_id,
+                fill.transaction_hash,
+                _time_text(fill.occurred_at, field="occurred_at"),
+                _time_text(fill.observed_at, field="observed_at"),
+                fill.account_snapshot_hash,
+                fill.venue_evidence_hash,
+                payload_json,
+                content_hash,
+                record_hash,
+            ),
+        )
+
     def reconcile_recovery(
         self,
         recovery_command_id: str,
@@ -8676,6 +10472,8 @@ class ExecutionStore:
         reconciliation_id: str,
         proof: RecoveryReconciliationProof,
         incident_resolution: str | None,
+        fills: Sequence[RecoveryVenueFill] = (),
+        mutation_at: datetime | None = None,
     ) -> RecoveryCommand:
         checked_id = _text(
             recovery_command_id, field="recovery_command_id", maximum=128
@@ -8690,17 +10488,27 @@ class ExecutionStore:
         if proof.recovery_command_id != checked_id:
             raise StateConflict("recovery proof targets another command")
         checked_at = proof.observed_at
+        checked_mutation_at = (
+            checked_at
+            if mutation_at is None
+            else _utc(mutation_at, field="mutation_at")
+        )
         if incident_resolution not in {None, "contained", "closed"}:
             raise ValidationError("incident_resolution is invalid")
         if incident_resolution is not None and (not proof.complete or not proof.success):
             raise ValidationError("incident resolution requires complete success")
+        fill_values = tuple(fills)
+        if any(not isinstance(item, RecoveryVenueFill) for item in fill_values):
+            raise TypeError("fills must contain RecoveryVenueFill records")
+        if len({item.fill_id for item in fill_values}) != len(fill_values):
+            raise ValidationError("recovery fills repeat identity")
         with self._transaction() as connection:
             outbox, outbox_row = self._require_recovery_claim_locked(
                 connection,
                 recovery_command_id=checked_id,
                 worker_id=checked_worker,
                 fencing_token=token,
-                at=checked_at,
+                at=checked_mutation_at,
                 states={"reconciling"},
             )
             command_row = connection.execute(
@@ -8766,10 +10574,25 @@ class ExecutionStore:
                         raise StateConflict(
                             "noop proof does not resolve persisted original nonce"
                         )
+            if fill_values and command.kind != "reduce_only_close":
+                raise StateConflict("non-close recovery cannot persist fills")
+            if any(
+                fill.account_snapshot_hash != proof.account_snapshot_hash
+                or fill.observed_at != proof.observed_at
+                for fill in fill_values
+            ):
+                raise StateConflict("recovery fills differ from reconciliation proof")
+            for fill in fill_values:
+                self._put_recovery_fill_locked(
+                    connection,
+                    command=command,
+                    fill=fill,
+                )
             payload = {
                 "reconciliation_id": checked_reconciliation,
                 "proof": proof.as_dict(),
                 "incident_resolution": incident_resolution,
+                "fills": [item.as_dict() for item in fill_values],
             }
             payload_json, content_hash = _canonical_payload(payload)
             record_hash = _record_hash(
@@ -8789,6 +10612,30 @@ class ExecutionStore:
             ).fetchone()
             if existing is not None:
                 if existing["record_hash"] == record_hash:
+                    if int(existing["complete"]) == 0:
+                        self._set_recovery_outbox_locked(
+                            connection,
+                            outbox_row,
+                            state="reconciling",
+                            worker_id=None,
+                            fencing_token=token,
+                            claimed_at=None,
+                            lease_expires_at=None,
+                            current_attempt_id=outbox.current_attempt_id,
+                            attempt_count=outbox.attempt_count,
+                            at=checked_mutation_at,
+                        )
+                        self._append_event_locked(
+                            connection,
+                            command_id=command.parent_command_id,
+                            event_type="recovery_reconciliation_replay_released",
+                            occurred_at=checked_mutation_at,
+                            payload={
+                                "recovery_command_id": checked_id,
+                                "reconciliation_id": checked_reconciliation,
+                                "account_snapshot_hash": proof.account_snapshot_hash,
+                            },
+                        )
                     return command
                 raise StateConflict("recovery reconciliation ID conflicts")
             connection.execute(
@@ -8814,6 +10661,31 @@ class ExecutionStore:
                 ),
             )
             if not proof.complete:
+                self._set_recovery_outbox_locked(
+                    connection,
+                    outbox_row,
+                    state="reconciling",
+                    worker_id=None,
+                    fencing_token=token,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    current_attempt_id=outbox.current_attempt_id,
+                    attempt_count=outbox.attempt_count,
+                    at=checked_mutation_at,
+                )
+                self._append_event_locked(
+                    connection,
+                    command_id=command.parent_command_id,
+                    event_type="recovery_reconciliation_incomplete",
+                    occurred_at=checked_mutation_at,
+                    payload={
+                        "recovery_command_id": checked_id,
+                        "reconciliation_id": checked_reconciliation,
+                        "proof_hash": proof.proof_hash,
+                        "retry_allowed": False,
+                        "fresh_venue_read_required": True,
+                    },
+                )
                 return command
             plan_row = connection.execute(
                 """
@@ -8893,7 +10765,7 @@ class ExecutionStore:
                     incident.severity,
                     incident_resolution,
                     incident.opened_at,
-                    checked_at,
+                    checked_mutation_at,
                     incident.revision + 1,
                     details_json,
                     details_hash,
@@ -8905,7 +10777,7 @@ class ExecutionStore:
                     """,
                     (
                         incident_resolution,
-                        _time_text(checked_at, field="updated_at"),
+                        _time_text(checked_mutation_at, field="updated_at"),
                         incident.revision + 1,
                         _record_hash("incident", updated_incident),
                         incident.incident_id,
@@ -8915,7 +10787,7 @@ class ExecutionStore:
                 connection,
                 command_row,
                 state="terminal",
-                at=checked_at,
+                at=checked_mutation_at,
                 terminal=True,
             )
             self._set_recovery_outbox_locked(
@@ -8928,13 +10800,13 @@ class ExecutionStore:
                 lease_expires_at=None,
                 current_attempt_id=outbox.current_attempt_id,
                 attempt_count=outbox.attempt_count,
-                at=checked_at,
+                at=checked_mutation_at,
             )
             self._append_event_locked(
                 connection,
                 command_id=command.parent_command_id,
                 event_type="recovery_reconciliation_terminal",
-                occurred_at=checked_at,
+                occurred_at=checked_mutation_at,
                 payload={
                     "recovery_command_id": checked_id,
                     "success": proof.success,
@@ -8943,6 +10815,80 @@ class ExecutionStore:
                 },
             )
             return terminal
+
+    def release_recovery_reconciliation_claim(
+        self,
+        recovery_command_id: str,
+        worker_id: str,
+        fencing_token: int,
+        *,
+        at: datetime,
+        reason: str,
+    ) -> RecoveryOutbox:
+        checked_id = _text(
+            recovery_command_id, field="recovery_command_id", maximum=128
+        )
+        checked_worker = _text(worker_id, field="worker_id", maximum=128)
+        token = _positive_int(fencing_token, field="fencing_token")
+        checked_at = _utc(at, field="at")
+        checked_reason = _text(reason, field="reason", maximum=128)
+        with self._transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_outbox
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if row is None:
+                raise RecordNotFound("recovery outbox is missing")
+            current = self._recovery_outbox_from_row(row)
+            if (
+                current.state != "reconciling"
+                or current.worker_id != checked_worker
+                or current.fencing_token != token
+                or current.claimed_at is None
+                or current.lease_expires_at is None
+                or checked_at < current.claimed_at
+            ):
+                raise StateConflict(
+                    "recovery claim release is stale or mismatched"
+                )
+            command_row = connection.execute(
+                """
+                SELECT * FROM execution_recovery_commands
+                WHERE recovery_command_id = ?
+                """,
+                (checked_id,),
+            ).fetchone()
+            if command_row is None:
+                raise StorageError("recovery command disappeared")
+            command = self._recovery_command_from_row(command_row)
+            released = self._set_recovery_outbox_locked(
+                connection,
+                row,
+                state="reconciling",
+                worker_id=None,
+                fencing_token=token,
+                claimed_at=None,
+                lease_expires_at=None,
+                current_attempt_id=current.current_attempt_id,
+                attempt_count=current.attempt_count,
+                at=checked_at,
+            )
+            self._append_event_locked(
+                connection,
+                command_id=command.parent_command_id,
+                event_type="recovery_reconciliation_claim_released",
+                occurred_at=checked_at,
+                payload={
+                    "recovery_command_id": checked_id,
+                    "reason": checked_reason,
+                    "fencing_token": token,
+                    "venue_write_attempted": False,
+                },
+            )
+            return released
 
     def get_recovery_attempt(self, recovery_command_id: str) -> RecoveryAttempt:
         checked = _text(
@@ -8962,6 +10908,39 @@ class ExecutionStore:
         if row is None:
             raise RecordNotFound("recovery attempt is not registered")
         return self._recovery_attempt_from_row(row)
+
+    def list_recovery_fills(
+        self,
+        *,
+        parent_command_id: str | None = None,
+        recovery_command_id: str | None = None,
+    ) -> tuple[RecoveryVenueFill, ...]:
+        if (parent_command_id is None) == (recovery_command_id is None):
+            raise ValidationError(
+                "select exactly one parent_command_id or recovery_command_id"
+            )
+        if parent_command_id is not None:
+            field = "parent_command_id"
+            selected = _text(
+                parent_command_id, field=field, maximum=128
+            )
+        else:
+            field = "recovery_command_id"
+            selected = _text(
+                recovery_command_id, field=field, maximum=128
+            )
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM execution_recovery_fills
+                WHERE {field} = ? ORDER BY occurred_at, fill_id
+                """,
+                (selected,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._recovery_fill_from_row(row) for row in rows)
 
     def get_recovery_permit_state(self, permit_id: str) -> str:
         checked = _text(permit_id, field="permit_id", maximum=128)
@@ -9051,6 +11030,7 @@ __all__ = (
     "AttemptRecord",
     "CommandRecord",
     "DispatchPreflight",
+    "EntrySubmissionAuthority",
     "EXECUTION_SCHEMA_VERSION",
     "EventRecord",
     "ExecutionStore",
@@ -9066,6 +11046,7 @@ __all__ = (
     "RecoveryCommand",
     "RecoveryOutbox",
     "RecoveryPermit",
+    "RecoveryVenueFill",
     "SignedEnvelopeEvidence",
     "SignedRecoveryEvidence",
     "TransportOutcomeEvidence",

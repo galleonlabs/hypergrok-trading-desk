@@ -7,10 +7,16 @@ from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from ipaddress import ip_address
+import os
+from pathlib import Path
 import sys
 from typing import Any, Protocol
 
 from .tool_api import TOOL_CATALOG, ToolService
+from .executor_config import load_executor_config
+from .grant_artifact import load_signed_infrastructure_grant
+from .learning_tool_service import build_testnet_learning_tool_service
+from .errors import HarnessError
 
 
 _STREAMABLE_HTTP_PATH = "/mcp"
@@ -72,6 +78,13 @@ def _port(value: str) -> int:
     return parsed
 
 
+def _absolute_path(value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute() or os.path.normpath(value) != value:
+        raise argparse.ArgumentTypeError("path must be normalized and absolute")
+    return path
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the local transport CLI without any public-bind option."""
 
@@ -97,7 +110,46 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_HTTP_PORT,
         help="loopback port for streamable HTTP (default: 8000)",
     )
+    parser.add_argument(
+        "--learning-executor-config",
+        type=_absolute_path,
+        help=(
+            "owner-only strict TESTNET executor config for the configured "
+            "non-authoritative learning profile"
+        ),
+    )
+    parser.add_argument(
+        "--learning-research-db",
+        type=_absolute_path,
+        help="absolute research SQLite path for the configured learning profile",
+    )
+    parser.add_argument(
+        "--learning-grant",
+        type=_absolute_path,
+        help="owner-only signed infrastructure-learning grant artifact",
+    )
     return parser
+
+
+def _configured_service(arguments: argparse.Namespace) -> ToolService:
+    values = (
+        arguments.learning_executor_config,
+        arguments.learning_research_db,
+        arguments.learning_grant,
+    )
+    if not any(value is not None for value in values):
+        return ToolService()
+    if any(value is None for value in values):
+        raise ValueError(
+            "configured learning profile requires executor config, research DB, and grant"
+        )
+    config = load_executor_config(arguments.learning_executor_config)
+    signed_grant = load_signed_infrastructure_grant(arguments.learning_grant)
+    return build_testnet_learning_tool_service(
+        config=config,
+        research_database=arguments.learning_research_db,
+        signed_grant=signed_grant,
+    )
 
 
 def _load_mcp_runtime() -> _MCPRuntime:
@@ -238,6 +290,33 @@ def build_mcp_server(
             ),
         ),
     )
+    stage_arguments = runtime.create_model(
+        "StageTradeCandidateArguments",
+        __base__=StrictArguments,
+        asset_id=(str, runtime.field(min_length=1, max_length=128)),
+        expected_analysis_hash=(
+            str,
+            runtime.field(pattern=r"^[0-9a-f]{64}$"),
+        ),
+        idempotency_key=(
+            str,
+            runtime.field(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            ),
+        ),
+    )
+    get_stage_arguments = runtime.create_model(
+        "GetTradeStageArguments",
+        __base__=StrictArguments,
+        document_id=(str, runtime.field(min_length=1, max_length=80)),
+    )
+    learning_review_arguments = runtime.create_model(
+        "GetLearningReviewArguments",
+        __base__=StrictArguments,
+        cycle_id=(str, runtime.field(min_length=1, max_length=128)),
+    )
     output_model = runtime.root_model[dict[str, Any]]
 
     definitions = {definition.name: definition for definition in TOOL_CATALOG}
@@ -343,18 +422,54 @@ def build_mcp_server(
             tool_service.get_node_status(node_id),
         )
 
+    def stage_trade_candidate(
+        asset_id: str,
+        expected_analysis_hash: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return validate_output(
+            "stage_trade_candidate",
+            tool_service.stage_trade_candidate(
+                asset_id,
+                expected_analysis_hash,
+                idempotency_key,
+            ),
+        )
+
+    def get_trade_stage(document_id: str) -> dict[str, Any]:
+        return validate_output(
+            "get_trade_stage",
+            tool_service.get_trade_stage(document_id),
+        )
+
+    def get_learning_review(cycle_id: str) -> dict[str, Any]:
+        return validate_output(
+            "get_learning_review",
+            tool_service.get_learning_review(cycle_id),
+        )
+
+    def get_learning_summary() -> dict[str, Any]:
+        return validate_output(
+            "get_learning_summary",
+            tool_service.get_learning_summary(),
+        )
+
     functions = {
         "analyze_asset": (analyze_asset, asset_arguments),
         "get_latest_sentiment": (get_latest_sentiment, asset_arguments),
         "get_node_status": (get_node_status, node_arguments),
         "get_harness_status": (get_harness_status, status_arguments),
+        "get_learning_review": (get_learning_review, learning_review_arguments),
+        "get_learning_summary": (get_learning_summary, empty_arguments),
         "get_market_brief": (get_market_brief, market_arguments),
+        "get_trade_stage": (get_trade_stage, get_stage_arguments),
         "list_tracked_assets": (list_tracked_assets, empty_arguments),
         "pause_tracked_asset": (pause_tracked_asset, pause_arguments),
         "record_manual_sentiment": (
             record_manual_sentiment,
             sentiment_arguments,
         ),
+        "stage_trade_candidate": (stage_trade_candidate, stage_arguments),
         "track_asset": (track_asset, track_arguments),
         "validate_candidate_profitability": (
             validate_candidate_profitability,
@@ -413,9 +528,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     arguments = build_parser().parse_args(argv)
     try:
-        server = build_mcp_server()
+        server = build_mcp_server(service=_configured_service(arguments))
     except MCPRuntimeUnavailable as error:
         print(f"trading-harness MCP: {error}", file=sys.stderr)
+        return 2
+    except (HarnessError, OSError, RuntimeError, TypeError, ValueError) as error:
+        print(
+            f"trading-harness MCP profile failed: {type(error).__name__}",
+            file=sys.stderr,
+        )
         return 2
     if arguments.transport == "stdio":
         server.run(transport="stdio")

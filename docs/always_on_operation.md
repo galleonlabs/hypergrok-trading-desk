@@ -1,9 +1,10 @@
-# Always-on research-node operation
+# Always-on research and isolated TESTNET operation
 
-Status: research-only deployment guide. This document does not enable an
-exchange writer, signer, testnet order, or mainnet order.
+Status: deployable research node plus an isolated, mainnet-impossible TESTNET
+worker. No account is configured or live-qualified by the repository, and no
+agent tool can approve, sign, or submit an order.
 
-The first always-on process is the credential-free research node. It polls
+The first always-on process is the credential-free, research-only node. It polls
 registered assets, writes immutable research artifacts and heartbeats to one
 explicit SQLite database, and exits cleanly on `SIGINT` or `SIGTERM`. The
 current CLI deliberately has no execution command and no network/account
@@ -18,12 +19,12 @@ X bearer token, browser profile, approval key, signer socket, shell startup
 file containing credentials, or access to the execution database.
 
 The TESTNET signer/executor is a separate deployment, not another argument to
-this service. Its code boundary exists, but its supervisor definition is
-withheld until live qualification. Provision it under a different non-login
-OS identity with its own reviewed binary, state directory, credential
-boundary, egress policy and service definition. ChatGPT, Codex, OpenCode, the
-MCP process and the research node must not be members of the signer's
-credential group.
+the research service. Its checked-in supervisor templates must be installed
+only after foreground validation. Provision it under a different non-login OS
+identity with its own reviewed binary, state directory, Keychain ACL, egress
+policy and service definition. ChatGPT, Codex, OpenCode and the research/MCP
+process must fail negative-access tests against the API-wallet and recovery
+Keychain items.
 
 Testnet and mainnet execution must use separate:
 
@@ -54,9 +55,10 @@ python3.11 -m venv .venv
 ```
 
 `doctor` must report Python `>=3.11`, `live_trading: false`, venue writes
-disabled and credential loading disabled. Installation does not need an MCP
-runtime; the research-node implementation and application runtime are
-standard-library-only.
+disabled and credential loading disabled. The research node itself does not
+need MCP. The separate Codex/OpenCode service does; install it in the reviewed
+research venv with `./.venv/bin/python -m pip install '.[mcp]'` before enabling
+the learning-MCP supervisor. A `--no-deps` install cannot run that service.
 
 Create the state and log directories before starting a supervisor. The
 research user owns those directories with mode `0700`; the database and backup
@@ -157,6 +159,202 @@ Application status remains:
 /opt/trading-desk/research/.venv/bin/trading-harness node status --state-db /var/lib/trading-desk/research/research.sqlite3 --node-id trading-desk-research
 ```
 
+## Isolated TESTNET learning worker
+
+This worker exists to collect trustworthy execution evidence. It does not
+claim that the registered strategy is profitable, and every grant/ticket
+records `profitability_qualified: false` and `mainnet_authorized: false`.
+
+Install the `execution` extra in a separately reviewed Python 3.11 virtual
+environment. Render
+`deploy/config/testnet-executor.toml.example` to an absolute owner-only file,
+replace every placeholder, and leave the compiled default risk-policy hash
+unchanged unless the code and policy change together. The four Keychain items
+must be distinct:
+
+- API-wallet secp256k1 private key, readable only by the executor identity;
+- approval HMAC key, readable only by the attended control identity;
+- recovery HMAC key, readable only by the executor identity;
+- learning-grant HMAC key, readable only by the grant issuer and attended
+  control identities, never the research/MCP identity.
+
+HMAC items are independent nonzero random 32-byte values stored as 64 hex
+characters. Never put any of these values in TOML, an environment variable, a
+shell argument, a log, chat, or the repository. Verify Keychain access under
+each final service identity—including negative tests—before live use.
+
+For a boot-time macOS LaunchDaemon, every credential stanza must name the
+explicit `/Library/Keychains/System.keychain`; do not rely on a login-keychain
+search list or `HOME`. Provision from an attended admin terminal with
+`/usr/bin/security` itself in the item ACL—the harness invokes that executable,
+not Python. `-w` remains last so the secret is prompted, never placed in argv:
+
+```sh
+sudo /usr/bin/security add-generic-password -U -a hyperliquid-api-wallet -s com.jawndiego.trading-desk.testnet-signer -T /usr/bin/security /Library/Keychains/System.keychain -w
+sudo /usr/bin/security add-generic-password -U -a approval-hmac -s com.jawndiego.trading-desk.testnet-approval -T /usr/bin/security /Library/Keychains/System.keychain -w
+sudo /usr/bin/security add-generic-password -U -a recovery-hmac -s com.jawndiego.trading-desk.testnet-recovery -T /usr/bin/security /Library/Keychains/System.keychain -w
+sudo /usr/bin/security add-generic-password -U -a grant-hmac -s com.jawndiego.trading-desk.testnet-grant -T /usr/bin/security /Library/Keychains/System.keychain -w
+```
+
+The first prompt is a 32-byte API-wallet key encoded as 64 hex characters;
+the other three are separately generated nonzero 32-byte HMAC keys in the same
+encoding. Treat trusting `/usr/bin/security` as safe only together with strict
+OS-user separation. Before installing launchd, positively test each permitted
+lookup under its final UID with the explicit keychain path, and negatively test
+the research UID. Do not proceed if a LaunchDaemon cannot read the intended
+item after reboot without unlocking a login session.
+
+Use three different local directories: executor-private state for execution,
+nonce, daily-loss and the control socket; learning-shared state for only
+`staging.sqlite3` and `learning.sqlite3` (including their WAL/SHM sidecars); and
+research-private state for research data. Never put these files under one
+writable parent: directory write access permits unlink/replacement even when a
+database is mode `0600`. The research/MCP identity must have no read or write
+access to executor-private state. In particular, it must never open the
+authoritative daily-loss database; agent quotes mark daily loss as deferred and
+the executor performs the mandatory same-cycle refresh before any entry send.
+
+Keep the reviewed config admin/root-owned, mode `0400`, and grant exact read
+ACLs to the executor and attended-control identities. The loader accepts an
+admin-owned file but rejects group/world mode bits. Create executor-private
+parents as the executor UID with mode `0700`; create the learning-shared parent
+with narrow per-identity ACLs for only research, executor and control. Run
+`init` as the executor UID, never as root, so capital-state files have the final
+owner. Do not run Codex/OpenCode as the executor or control UID.
+
+A reviewed macOS layout is, for example:
+
+- `/var/db/trading-desk/executor-private/`: execution, nonce, daily-loss and
+  control socket; executor RW, control RW only where authorization requires,
+  research no access;
+- `/var/db/trading-desk/learning-shared/`: staging and learning SQLite files;
+  research, executor and control receive only the required ACL entries;
+- `/var/db/trading-desk/research/`: research SQLite; research only.
+
+Apply ACLs to the exact directories/files and SQLite sidecars, then prove the
+research UID cannot list, read, create, unlink or replace anything in
+`executor-private`.
+
+Validate and initialize without credential or network access:
+
+```sh
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor validate --config /etc/trading-desk/testnet-executor.toml
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor init --config /etc/trading-desk/testnet-executor.toml
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor status --config /etc/trading-desk/testnet-executor.toml
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor dry-run --config /etc/trading-desk/testnet-executor.toml
+```
+
+`validate`, `init`, `status`, and `dry-run` do not load Keychain items or call
+Hyperliquid. `init` refuses missing/insecure parent directories, binds every
+database to the exact config, and makes state files owner-only. `status` and
+`dry-run` may verify/apply reviewed local SQLite schema migrations when opening
+an older deployment; they make no runtime state transition or venue call.
+
+Issue a short-lived infrastructure-learning grant in a direct terminal:
+
+```sh
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor issue-grant --config /etc/trading-desk/testnet-executor.toml --output /var/db/trading-desk/control/active-learning-grant.json --grant-id testnet-learning-001 --ttl-seconds 3600
+```
+
+The command opens `/dev/tty` and requires the exact displayed confirmation. It
+does not accept confirmation through stdin or an argument and never overwrites
+an existing artifact. A PTY is not proof of human identity: the control UID
+must never run Codex/OpenCode or expose an agent shell, and its Keychain ACLs
+must be tested independently.
+
+Run the configured agent-facing MCP service under the research identity:
+
+```sh
+/opt/trading-desk/research/.venv/bin/trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000 --learning-executor-config /etc/trading-desk/research-testnet-profile.toml --learning-research-db /var/db/trading-desk/research/research.sqlite3 --learning-grant /var/db/trading-desk/research/active-learning-grant.json
+```
+
+Before startup, the research-readable admin-owned config and signed-grant
+copies must have exact bytes/hashes matching the control-plane artifacts;
+never make the control copy writable by research. Research uses the signed grant only as a quote scope and
+does not receive its symmetric HMAC key. Its fifteen tools can analyze and stage, but still
+cannot approve, reserve, load the API wallet, sign, or write to `/exchange`.
+It also cannot open the executor daily-loss database: staged quotes explicitly
+defer that value, and an entry requires a complete authoritative loss refresh
+in the exact executor tick that is allowed to dispatch.
+
+Point Codex at the configured loopback service, not an ambient `python3`
+process. The [official Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
+supports a URL-backed server; for this endpoint:
+
+```sh
+codex mcp add tradingDesk --url http://127.0.0.1:8000/mcp
+```
+
+The checked-in plugin MCP descriptor uses the same URL. [OpenCode MCP configuration](https://opencode.ai/docs/mcp-servers/)
+uses a remote
+entry with `"type": "remote"` and
+`"url": "http://127.0.0.1:8000/mcp"`. Confirm the service is running and list
+the tools from the actual client before relying on it; a config edit does not
+make a server callable in an already-running agent session.
+After Codex/ChatGPT returns
+a staged document ID, review and authorize it from the separate attended
+terminal:
+
+```sh
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor show-stage --config /etc/trading-desk/testnet-executor.toml --document-id stg_REVIEWED_ID
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor authorize-stage --config /etc/trading-desk/testnet-executor.toml --grant /var/db/trading-desk/control/active-learning-grant.json --document-id stg_REVIEWED_ID --approver-id local-operator
+```
+
+After the configured MCP passes in the foreground, render the matching
+`deploy/launchd/com.jawndiego.trading-desk-learning-mcp.plist.example` or
+`deploy/systemd/trading-desk-learning-mcp.service.example`. It binds only to
+numeric loopback and is not an authenticated public service.
+
+The grant is loaded once at MCP startup. Renew it by issuing a new,
+non-overwriting artifact with an incremented generation, verifying/copying its
+exact bytes to a new research-owned path, updating the rendered MCP service to
+that path, and restarting only the MCP service. Keep the matching control copy
+for `authorize-stage`; never overwrite or reuse an expired generation.
+
+Only then run the worker in the foreground. It synchronizes exact fills and
+funding, refuses stale/incomplete daily-loss coverage, performs startup
+reconciliation before READY, serializes safety ahead of new entry, always uses
+the three-leg mandatory-stop group, and drains bounded safety work on SIGTERM:
+
+```sh
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor run --config /etc/trading-desk/testnet-executor.toml --worker-id isolated-testnet-worker
+```
+
+After foreground qualification on macOS, render
+`deploy/launchd/com.jawndiego.trading-desk-executor.plist.example`. It contains
+no shell, environment override, credential value, mainnet switch, or agent
+interface. A supervisor restart never bypasses startup reconciliation. Linux
+execution is unsupported until a reviewed non-Keychain secret provider exists;
+the systemd templates in this repository are for credential-free research/MCP
+processes, not the executor.
+
+Install the rendered executor and learning-MCP plists with admin ownership and
+mode `0644`, then use their exact system labels:
+
+```sh
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.jawndiego.trading-desk-testnet-executor.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.jawndiego.trading-desk-learning-mcp.plist
+sudo launchctl print system/com.jawndiego.trading-desk-testnet-executor
+sudo launchctl print system/com.jawndiego.trading-desk-learning-mcp
+sudo launchctl kickstart -k system/com.jawndiego.trading-desk-testnet-executor
+sudo launchctl kill SIGTERM system/com.jawndiego.trading-desk-testnet-executor
+sudo launchctl kill SIGTERM system/com.jawndiego.trading-desk-learning-mcp
+sudo launchctl bootout system /Library/LaunchDaemons/com.jawndiego.trading-desk-testnet-executor.plist
+sudo launchctl bootout system /Library/LaunchDaemons/com.jawndiego.trading-desk-learning-mcp.plist
+```
+
+If a transient internal failure leaves a sticky halt after the owning service
+lease has expired, inspect `status`, then acknowledge only its exact revision
+and reason from the attended control terminal:
+
+```sh
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor acknowledge-halt --config /etc/trading-desk/testnet-executor.toml --expected-revision REVIEWED_REVISION --expected-reason internal_error
+```
+
+The command requires an exact `/dev/tty` phrase, loads no credential, performs
+no venue write and leaves the risk gate HALTED. Restart still has to complete
+startup reconciliation before READY.
+
 ## Health, restart and graceful-stop checks
 
 An operator check should verify all of the following:
@@ -170,12 +368,24 @@ An operator check should verify all of the following:
    group/world writable.
 5. Filesystem usage, log growth, request errors and clock offset remain within
    locally declared limits.
+6. `trading-harness-executor status` shows one current fenced lease, a fresh
+   heartbeat, exact config binding, complete fresh loss coverage, and no
+   unresolved reconciliation/protection work before it can report READY.
+7. The executor log contains no address, Keychain label, secret, raw venue
+   payload, approval token, or browser evidence; status uses fingerprints.
+8. The learning review advances with command/fill evidence, or explicitly
+   reports missing path/outcome evidence; it never silently declares profit.
+9. Mainnet remains absent from config, signer, store, transport and service
+   arguments.
 
 Stop through launchd/systemd or send `SIGTERM`; do not use `kill -9` during
-normal operation. The CLI signal handler completes the current bounded cycle,
+normal operation. A signal received before the final entry submission guard
+prevents the send; once that guard has consumed the one-shot authority, the
+bounded send is the point of no return and is reconciled before shutdown. The
+CLI signal handler completes the current bounded cycle,
 marks runtime `stopping` then `stopped`, and releases its lease. After the
-supervisor reports stopped, run the node-status command and retain the result
-with the change record.
+supervisor reports stopped, run the applicable node/executor status command and
+retain the result with the change record.
 
 ## Backup and recovery
 
@@ -196,6 +406,13 @@ sqlite3 /absolute/backup/research-YYYYMMDDTHHMMSSZ.sqlite3 "PRAGMA integrity_che
 directory with access limited to the research backup operator. Do not put
 executor keys, authorization tokens or browser/X credentials in this
 backup set.
+
+Back up execution, nonce, daily-loss, staging and learning databases as one
+documented consistency set after a graceful executor stop. Never restore only
+the outbox without its nonce/reconciliation state, copy a live WAL database as
+a lone main file, or reuse a restored API wallet against two active executor
+instances. Grant artifacts and config contain no raw secret but remain
+owner-only deployment authority and belong in a separately controlled backup.
 
 For a restore drill: stop the service, preserve the failed database and WAL
 sidecars for investigation, restore a verified backup to a new file, set the
@@ -229,11 +446,10 @@ recovery technique.
 
 ## Promotion boundary
 
-This deployment proves only that the read-only research node can run and
-recover continuously. Paper profitability, Hyperliquid testnet mechanics and
-mainnet canary authority are separate gates. Do not add a private key or an
-execution command to either research template. The isolated TESTNET worker
-uses its own execution/nonce databases and macOS Keychain item; install a
-service definition for it only after the live checklist in
+The research deployment proves continuous evidence collection. The isolated
+worker can separately prove TESTNET mechanics and produce learning evidence;
+that does not establish strategy profitability or mainnet safety. Do not add a
+private key or execution command to a research/agent template. Install the
+TESTNET service only after the live checklist in
 `docs/testnet_qualification.md` passes. Mainnet remains a separate future
-deployment and is hard-disabled in this build.
+architecture and is hard-disabled in this build.

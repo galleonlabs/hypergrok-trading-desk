@@ -22,7 +22,7 @@ from .errors import HarnessError, ValidationError
 
 _STREAMABLE_HTTP_PATH = "/mcp"
 _DEFAULT_HTTP_HOST = "127.0.0.1"
-_DEFAULT_HTTP_PORT = 8000
+_DEFAULT_HTTP_PORT = 8765
 
 
 class MCPRuntimeUnavailable(RuntimeError):
@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--port",
         type=_port,
         default=_DEFAULT_HTTP_PORT,
-        help="loopback port for streamable HTTP (default: 8000)",
+        help="loopback port for streamable HTTP (default: 8765)",
     )
     parser.add_argument(
         "--learning-executor-config",

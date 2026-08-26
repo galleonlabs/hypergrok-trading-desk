@@ -159,6 +159,38 @@ Application status remains:
 /opt/trading-desk/research/.venv/bin/trading-harness node status --state-db /var/lib/trading-desk/research/research.sqlite3 --node-id trading-desk-research
 ```
 
+## Local Ubuntu VM router lab
+
+The repository can render a private-key-field-free Ubuntu 24.04 ARM64 router
+bundle from
+`deploy/ubuntu-router/router-spec.json.example`. This VM is network-only; the
+executor, signer, System Keychain, control plane and every SQLite database stay
+on macOS. Follow [`ubuntu_vm_router.md`](ubuntu_vm_router.md) and retain the
+rendered bundle manifest with the deployment record.
+
+`local_nat_lab` is intentionally narrow. It creates a Mac-to-VM WireGuard
+full-tunnel path and default-drop VM forwarding, but exits through the same
+home/office connection. It does not change the public IP, stop macOS host
+bypass, supply a remote VPN peer or gate admission inside the application.
+If the selected route blackholes after durable authority consumption, the
+attempt remains unknown and must reconcile without retry. If macOS removes the
+route, traffic may instead bypass the VM and succeed directly; no application
+fallback exists, but host fallback remains possible. Success alone does not
+prove VM traversal.
+
+Router preparation is venue-credential-free. Generate WireGuard private keys
+on their owning machines before rendering public-key inputs; never place one in
+the public profile, repository, chat, cloud-init, environment or argv. The VM
+receives no API-wallet, approval secret, account config, repository mount,
+shared state, MCP server or agent runtime.
+
+Before relying on the lab, update macOS to a current security release, reboot,
+qualify both VM NICs and interface names, verify IPv4/IPv6 and DNS behavior,
+exercise VM/tunnel/hypervisor loss, and prove a read-only TESTNET `/info` call.
+Do not install launchd or queue a command merely to test routing. The remaining
+machine and live-workflow gaps are tracked in
+[`testnet_commissioning.md`](testnet_commissioning.md).
+
 ## Isolated TESTNET learning worker
 
 This worker exists to collect trustworthy execution evidence. It does not
@@ -390,7 +422,7 @@ must be tested independently.
 Run the configured agent-facing MCP service under the research identity:
 
 ```sh
-/opt/trading-desk/research/.venv/bin/trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000 --learning-executor-config /etc/trading-desk/research-testnet-profile.toml --learning-research-db /var/db/trading-desk/research/research.sqlite3 --learning-grant /var/db/trading-desk/research/learning-grant-g1.json
+/opt/trading-desk/research/.venv/bin/trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8765 --learning-executor-config /etc/trading-desk/research-testnet-profile.toml --learning-research-db /var/db/trading-desk/research/research.sqlite3 --learning-grant /var/db/trading-desk/research/learning-grant-g1.json
 ```
 
 Before startup, use a research-readable root-owned config and a root-owned
@@ -409,13 +441,13 @@ process. The [official Codex MCP configuration](https://learn.chatgpt.com/docs/e
 supports a URL-backed server; for this endpoint:
 
 ```sh
-codex mcp add tradingDesk --url http://127.0.0.1:8000/mcp
+codex mcp add tradingDesk --url http://127.0.0.1:8765/mcp
 ```
 
 The checked-in plugin MCP descriptor uses the same URL. [OpenCode MCP configuration](https://opencode.ai/docs/mcp-servers/)
 uses a remote
 entry with `"type": "remote"` and
-`"url": "http://127.0.0.1:8000/mcp"`. Confirm the service is running and list
+`"url": "http://127.0.0.1:8765/mcp"`. Confirm the service is running and list
 the tools from the actual client before relying on it; a config edit does not
 make a server callable in an already-running agent session.
 After Codex/ChatGPT returns

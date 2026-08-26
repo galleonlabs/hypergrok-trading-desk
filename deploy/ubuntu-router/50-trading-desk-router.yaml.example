@@ -1,0 +1,13 @@
+network:
+  version: 2
+  ethernets:
+    "__REVIEWED_WAN_INTERFACE__":
+      dhcp4: true
+      dhcp6: false
+      accept-ra: false
+    "__REVIEWED_INGRESS_INTERFACE__":
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      addresses:
+        - __REVIEWED_ROUTER_ENDPOINT_INTERFACE__

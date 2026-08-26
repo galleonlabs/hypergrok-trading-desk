@@ -243,6 +243,57 @@ executor-private commit/recovery headroom. File-size checks alone are not this
 boundary. Qualification MUST fill the research quota and prove private
 execution, nonce and daily-loss commits still succeed.
 
+### 2.6 Executor egress and local router qualification
+
+The executor's application endpoint binding, the operating-system route and a
+router/VPN path are different controls. A network component MUST NOT receive a
+venue credential, signing capability, approval secret, command authority,
+executor database, control socket or agent runtime. Network availability MUST
+NOT be interpreted as admission or approval.
+
+Capital-path HTTP clients MUST use the compiled exact Hyperliquid URLs, reject
+redirects and disable ambient urllib proxy discovery. Executor configuration
+MUST fail closed when its process environment contains upper- or lowercase
+HTTP(S)/ALL/NO proxy variables, OpenSSL certificate-path overrides,
+requests/curl CA-bundle overrides or TLS key logging. Values of those variables
+MUST never be read or logged. A reviewed root-owned CA policy and normal TLS
+hostname verification remain required.
+
+The checked-in Ubuntu router schema v1 has exactly one mode:
+`local_nat_lab`. It keeps signing and execution on macOS and renders only
+reviewed topology and key strings attested as public by the operator. Its
+bundle MUST emit no `PrivateKey` field, venue credential, mainnet authority or
+venue-write authorization; the renderer cannot infer key provenance from the
+shared WireGuard encoding. It MUST declare that it neither changes public
+egress IP nor prevents direct host bypass. The router VM MUST have no
+repository/shared-state mount and MUST use default-drop forwarding, distinct
+ingress/WAN interfaces, NAT limited to the WireGuard IPv4 subnet and deliberate
+IPv6 non-forwarding.
+
+WireGuard private keys MUST be generated and retained on their owning machines
+outside repo, chat, cloud-init, argv and environment variables. Router-only key
+generation, preparation and read-only qualification MUST occur before venue
+credential provisioning. A local VM is not a VPN until it connects to a
+second remote peer; no documentation or status may call `local_nat_lab`
+VPN-qualified.
+
+Router health is not currently an application admission capability. If route
+loss occurs after durable authority consumption, the single permitted send may
+fail with an unknown outcome. That outcome MUST remain reserved and reconcile
+without resend. No application-configured direct-network fallback is permitted.
+In `local_nat_lab`, macOS may still bypass the VM if its route disappears;
+that disqualifies egress isolation and a successful request does not prove VM
+traversal. If the selected route instead blackholes, cancel/flatten recovery
+may remain unavailable until that path returns.
+
+Before the first harness TESTNET order write, qualification MUST cover normal
+read-only routing plus VM/tunnel/hypervisor loss, IPv4 and IPv6 leakage, DNS/DoT/QUIC
+bypass, interface renumbering, sleep/wake and reboot. Full live qualification
+also requires a narrow GTC/query/cancel canary, retained venue snapshot,
+ordinary attended reduce-only close, WebSocket recovery and forwarded-request
+response-loss injection. These are implementation requirements, not manual
+shortcuts to the existing protected-bracket signer.
+
 ## 3. Why HyperGrok Is Unsafe for Mainnet As-Is
 
 ### 3.1 Controls are instructions rather than enforcement

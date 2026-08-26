@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "mode": "local_nat_lab",
+  "wan_interface": "__REVIEWED_WAN_INTERFACE__",
+  "ingress_interface": "__REVIEWED_INGRESS_INTERFACE__",
+  "management_source_cidr": "__REVIEWED_MANAGEMENT_SOURCE_CIDR__",
+  "router_endpoint_interface": "__REVIEWED_ROUTER_ENDPOINT_INTERFACE__",
+  "listen_port": 51820,
+  "router_ipv4_interface": "10.77.0.1/24",
+  "mac_ipv4_peer": "10.77.0.2/32",
+  "router_ipv6_interface": "fd77:77::1/64",
+  "mac_ipv6_peer": "fd77:77::2/128",
+  "dns_ipv4": "1.1.1.1",
+  "router_public_key": "__REVIEWED_ROUTER_PUBLIC_KEY__",
+  "mac_public_key": "__REVIEWED_MAC_PUBLIC_KEY__"
+}

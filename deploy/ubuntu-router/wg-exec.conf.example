@@ -1,0 +1,8 @@
+[Interface]
+Address = __REVIEWED_ROUTER_IPV4_INTERFACE__, __REVIEWED_ROUTER_IPV6_INTERFACE__
+ListenPort = __REVIEWED_LISTEN_PORT__
+PostUp = /usr/bin/wg set %i private-key /etc/wireguard/trading-desk-router.key
+
+[Peer]
+PublicKey = __REVIEWED_MAC_PUBLIC_KEY__
+AllowedIPs = __REVIEWED_MAC_IPV4_PEER__, __REVIEWED_MAC_IPV6_PEER__

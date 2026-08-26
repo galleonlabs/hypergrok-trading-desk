@@ -26,6 +26,13 @@ Use this fork's GitHub **Report a vulnerability** flow to open a private securit
 - Agents must never receive exchange signing credentials or direct venue-write capability.
 - MCP tool annotations are advisory; authorization and validation are repeated inside every handler. Local research writes confer no capital authority.
 - The signer code must run under a separate security principal with a narrow typed API, explicit account/network/asset/recovery-CLOID/action allowlists, restricted egress, and managed key storage. Checked-in service templates do not provision or qualify that principal.
+- The optional Ubuntu VM is a network-only local router. It receives no venue
+  credential, executor state, repository mount or authority. Its
+  `local_nat_lab` profile keeps the existing public IP and cannot prevent a
+  macOS process from bypassing the VM; it is not a VPN or capital boundary.
+- Capital HTTP clients ignore ambient urllib proxy discovery, and executor
+  config rejects proxy, CA-bundle and TLS-key-log environment variables. Route
+  selection and trust roots may not be silently replaced by a login shell.
 - Human approval must occur in the separate operator control plane and bind the exact staged risk ticket. The current TESTNET CLI reads confirmation directly from `/dev/tty`; approval in agent chat or piped stdin is invalid.
 - `/dev/tty` is an attended TESTNET gesture, not cryptographic proof of a
   human. Running an agent shell under the control/executor UID is unsupported;
@@ -129,11 +136,23 @@ capacity reserve that research cannot consume. Until that quota and an
 exhaustion probe pass after reboot, resource isolation is unqualified and
 always-on operation is forbidden.
 
+The local router and machine setup do not make the live checklist executable.
+A qualification-only GTC/query/cancel canary, attended ordinary reduce-only
+close, retained venue snapshot, WebSocket recovery path and bounded
+forwarded-request/response-drop control remain reviewed implementation gaps.
+The first harness order write is forbidden until those gaps and the commissioning
+sequence in [`docs/testnet_commissioning.md`](docs/testnet_commissioning.md)
+are closed.
+
 The normative requirements are in [`docs/trading_harness_spec.md`](docs/trading_harness_spec.md).
 
 ## Forbidden until explicit qualification
 
-- Any testnet or mainnet exchange write.
+- Any harness-originated TESTNET order/cancel/recovery write before its exact
+  qualification step, and any mainnet exchange write.
+- Treating the separately attended out-of-band `approveAgent` registration as
+  harness qualification evidence. API-wallet registration is an account
+  prerequisite and still must occur outside agents/chat/repository.
 - Treating the local testnet HMAC approval helper as suitable for mainnet; mainnet requires a later independently reviewed hardware-backed/asymmetric authority.
 - Loading an API-wallet or main-wallet key.
 - Transfers, withdrawals, bridges, vault/subaccount fund movement, builder fees, or staking actions.

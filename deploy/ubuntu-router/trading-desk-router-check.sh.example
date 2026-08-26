@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+wg_interface=wg-exec
+wan_interface=__REVIEWED_WAN_INTERFACE__
+ingress_interface=__REVIEWED_INGRESS_INTERFACE__
+management_source=__REVIEWED_MANAGEMENT_SOURCE_CIDR__
+router_endpoint=__REVIEWED_ROUTER_ENDPOINT_INTERFACE__
+router_address=__REVIEWED_ROUTER_IPV4_INTERFACE__
+router_network=__REVIEWED_ROUTER_IPV4_NETWORK__
+dns_address=__REVIEWED_DNS_IPV4__
+expected_peer=__REVIEWED_MAC_PUBLIC_KEY__
+expected_ipv4_peer=__REVIEWED_MAC_IPV4_PEER__
+expected_ipv6_peer=__REVIEWED_MAC_IPV6_PEER__
+listen_port=__REVIEWED_LISTEN_PORT__
+max_handshake_age=180
+
+[ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ]
+[ "$(cat /proc/sys/net/ipv6/conf/all/forwarding)" = 0 ]
+[ "$(stat -c '%u:%g:%a' /etc/wireguard/trading-desk-router.key)" = 0:0:600 ]
+
+systemctl is-active --quiet nftables.service
+systemctl is-active --quiet "wg-quick@${wg_interface}.service"
+ip link show dev "$wan_interface" | grep -E '<[^>]*UP[^>]*>' >/dev/null
+ip -4 route show default | grep -F "dev ${wan_interface}" >/dev/null
+ip -4 address show dev "$ingress_interface" | grep -F "inet ${router_endpoint}" >/dev/null
+ip -4 address show dev "$wg_interface" | grep -F "inet ${router_address}" >/dev/null
+nft list chain inet trading_desk_filter input | grep -F 'policy drop' >/dev/null
+nft list chain inet trading_desk_filter forward | grep -F 'policy drop' >/dev/null
+nft list chain inet trading_desk_filter output | grep -F 'policy accept' >/dev/null
+input_rules=$(nft -nn list chain inet trading_desk_filter input)
+[ "$(printf '%s\n' "$input_rules" | grep -c ' accept')" = 7 ]
+printf '%s\n' "$input_rules" | grep -F "iifname \"${wan_interface}\" udp sport 67 udp dport 68 accept" >/dev/null
+printf '%s\n' "$input_rules" | grep -F "iifname \"${ingress_interface}\" ip saddr ${management_source} udp dport ${listen_port} accept" >/dev/null
+printf '%s\n' "$input_rules" | grep -F "iifname \"${ingress_interface}\" ip saddr ${management_source} tcp dport 22 accept" >/dev/null
+forward_rules=$(nft -nn list chain inet trading_desk_filter forward)
+[ "$(printf '%s\n' "$forward_rules" | grep -c ' accept')" = 5 ]
+printf '%s\n' "$forward_rules" | grep -F "iifname \"${wg_interface}\" oifname \"${wan_interface}\" ip saddr ${router_network} ip daddr ${dns_address} udp dport 53" >/dev/null
+printf '%s\n' "$forward_rules" | grep -F "iifname \"${wg_interface}\" oifname \"${wan_interface}\" ip saddr ${router_network} ip daddr ${dns_address} tcp dport 53" >/dev/null
+printf '%s\n' "$forward_rules" | grep -F "iifname \"${wg_interface}\" oifname \"${wan_interface}\" ip saddr ${router_network} tcp dport 443" >/dev/null
+printf '%s\n' "$forward_rules" | grep -F "iifname \"${wg_interface}\" oifname \"${wan_interface}\" ip saddr ${router_network} udp dport 123" >/dev/null
+printf '%s\n' "$forward_rules" | grep -F "iifname \"${wan_interface}\" oifname \"${wg_interface}\" ip daddr ${router_network} ct state established,related" >/dev/null
+nft -nn list chain ip trading_desk_nat postrouting | grep -F "oifname \"${wan_interface}\" ip saddr ${router_network} masquerade" >/dev/null
+[ "$(wg show "$wg_interface" listen-port)" = "$listen_port" ]
+[ "$(wg show "$wg_interface" peers)" = "$expected_peer" ]
+allowed_ips=$(wg show "$wg_interface" allowed-ips)
+[ "$(printf '%s\n' "$allowed_ips" | wc -l | tr -d ' ')" = 1 ]
+printf '%s\n' "$allowed_ips" | grep -F "$expected_peer" | grep -F "$expected_ipv4_peer" | grep -F "$expected_ipv6_peer" >/dev/null
+
+latest_handshake=$(wg show "$wg_interface" latest-handshakes | awk -v peer="$expected_peer" '$1 == peer { print $2 }')
+[ -n "$latest_handshake" ]
+[ "$latest_handshake" -gt 0 ]
+now=$(date +%s)
+age=$((now - latest_handshake))
+[ "$age" -ge 0 ]
+[ "$age" -le "$max_handshake_age" ]
+
+printf '%s\n' "router_local_checks_passed peer_handshake_age_seconds=${age}"

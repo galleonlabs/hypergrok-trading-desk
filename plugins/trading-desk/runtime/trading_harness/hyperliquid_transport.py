@@ -440,7 +440,10 @@ def _default_sender(endpoint: str, body: bytes, timeout: float) -> HttpExchangeR
         },
         method="POST",
     )
-    opener = urlrequest.build_opener(_RejectRedirectHandler())
+    opener = urlrequest.build_opener(
+        urlrequest.ProxyHandler({}),
+        _RejectRedirectHandler(),
+    )
     try:
         with opener.open(request, timeout=timeout) as response:
             return HttpExchangeResponse(

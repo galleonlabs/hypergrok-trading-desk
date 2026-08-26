@@ -122,10 +122,13 @@ def _default_transport(
     )
 
     try:
-        # urllib's global opener follows redirects by default.  A private
-        # opener with an explicit rejecting handler preserves the endpoint
-        # allowlist before a second outbound request can occur.
-        opener = urlrequest.build_opener(_RejectRedirectHandler())
+        # Ignore ambient HTTP(S)_PROXY settings and reject redirects. The
+        # executor binds network routing outside the process; shell proxy
+        # configuration must not silently insert another transport hop.
+        opener = urlrequest.build_opener(
+            urlrequest.ProxyHandler({}),
+            _RejectRedirectHandler(),
+        )
         with opener.open(http_request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
             final_url = response.geturl()
             if final_url != endpoint:

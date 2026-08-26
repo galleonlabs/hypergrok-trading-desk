@@ -1,6 +1,7 @@
 # Hyperliquid testnet qualification
 
-Status: **offline implementation complete; live venue qualification not run**.
+Status: **offline capital core implemented; commissioning and live-workflow
+gaps remain; live venue qualification not run**.
 
 The TESTNET execution functions are real and armed when the isolated worker is
 explicitly constructed. No account, API wallet or worker service is configured
@@ -16,6 +17,8 @@ Provision outside Codex/chat and outside the repository:
 
 - a dedicated Hyperliquid testnet main/subaccount address;
 - a newly registered API wallet used only by the isolated testnet signer;
+- fresh `userRole`/agent evidence that the API wallet still maps to the
+  intended main account/subaccount and has not been pruned or replaced;
 - testnet collateral/faucet eligibility;
 - a dedicated non-login OS identity and private credential store;
 - separate file-backed execution, nonce, daily-loss, staging and learning
@@ -24,6 +27,11 @@ Provision outside Codex/chat and outside the repository:
   executor-private artifacts;
 - explicit account, asset, notional, loss and 2x leverage caps;
 - the standard `default`/`disabled` account mode, not unified or portfolio margin.
+- a currently supported macOS security release, followed by reboot and runtime
+  requalification;
+- a qualified network path. The checked-in local Ubuntu router profile is only
+  `local_nat_lab`: it preserves the existing public IP and does not prevent
+  host bypass.
 
 Never paste the API-wallet private key into a task, config committed to Git,
 environment variable visible to the agent, issue, log or test fixture. The
@@ -55,15 +63,11 @@ The harness only reads that item, verifies the derived public signer address,
 and zeroes its command-output buffers. It has no credential provisioning,
 export, environment-variable, or plaintext-file path.
 
-Install a reviewed commit in a Python 3.11 execution environment with the exact
-optional SDK pin:
-
-```sh
-python3.11 -m venv .venv-execution
-.venv-execution/bin/python -m pip install -e '.[execution]'
-```
-
-Installing dependencies does not enable execution.
+Install the reviewed commit non-editably into the sealed, root-owned Python
+3.11 execution environment using the hash-checked wheelhouse described in
+[`always_on_operation.md`](always_on_operation.md). Do not run the service from
+an editable checkout or a user-writable Homebrew runtime. Installing
+dependencies does not enable execution.
 
 Render the strict executor config from
 `deploy/config/testnet-executor.toml.example`. Schema v2 requires the exact
@@ -118,6 +122,33 @@ On this new machine, run `init` only after proving no harness state exists. If
 any v1-bound or other nonempty state is discovered, preserve its main and
 sidecar files and stop for a separately reviewed migration.
 
+## Known blockers before the live sequence
+
+The target live sequence below is intentionally stronger than the currently
+exposed CLI. Do not skip its first steps by sending the already-armed bracket.
+The following reviewed capabilities still need implementation and observable
+tests:
+
+- a narrow attended TESTNET-only GTC canary/query/cancel workflow;
+- an operator-facing retained account/metadata/order snapshot;
+- an ordinary attended bounded reduce-only close available before any canary
+  that could fill unexpectedly;
+- WebSocket monitoring and disconnect/fill/REST recovery;
+- bounded fault injection that forwards one exact request while dropping its
+  response;
+- optional application-level router health if router readiness is to be an
+  admission gate rather than an OS-only failure boundary.
+- an enforced free-space shutdown monitor and a deterministic qualification
+  artifact builder/signing workflow.
+
+The current signer accepts only the mandatory three-leg `normalTpsl` group
+with IOC entry, ordinary flatten is incident-driven, and runtime monitoring is
+REST polling. Machine setup and credentials alone therefore do not make the
+first harness order write responsible. API-wallet `approveAgent` registration
+is a separate attended out-of-band account-provisioning write, not harness
+order qualification. See
+[`testnet_commissioning.md`](testnet_commissioning.md).
+
 ## Offline gates
 
 Before connecting the signer process, retain passing evidence for:
@@ -165,21 +196,34 @@ Before connecting the signer process, retain passing evidence for:
     commit; and independently approaching the executor-volume shutdown
     threshold must halt before the 1 GiB reopen ceiling while retaining tested
     emergency WAL/recovery headroom, both before and after reboot.
+23. executor config rejecting upper/lowercase proxy variables, CA-bundle
+    overrides and TLS key logging, while the real urllib info/exchange openers
+    contain an explicit empty `ProxyHandler` before their redirect-deny handler;
+24. the rendered Ubuntu router manifest and nftables/WireGuard state matching,
+    with no `PrivateKey` field, retained public-key provenance, and explicit
+    evidence that local mode retains the host public IP and permits host bypass;
+25. VM stop, WireGuard loss, hypervisor stop, sleep/wake, DHCP renewal, reboot,
+    IPv6, alternate DNS and QUIC paths, including durable unknown-outcome
+    behavior and no resend when routing fails around a write.
 
 ## Live testnet sequence
 
-Run with minimum notional and a hard operator stop condition. Persist every
-request identity, response hash, account snapshot and reconciliation result.
+Run only after the known blockers above are closed, with minimum notional and
+a hard operator stop condition. Persist every request identity, response hash,
+account snapshot, router manifest/health result and reconciliation result.
 
-1. Issue a short-lived `profitability_qualified: false` infrastructure grant,
-   run one Codex/ChatGPT analysis, stage its exact hash, and prove every staging
-   authority flag is false. Review and authorize it only through the
-   direct-terminal CLI; preserve the learning cycle and command IDs.
-2. Query `userAbstraction`, metadata, account state and frontend orders using
-   the main account address. Verify signer address differs and the account is
-   flat with no foreign orders.
-3. Place a far non-marketable GTC test order with an owned 128-bit CLOID, query
-   it by CLOID/OID, cancel by CLOID and prove terminal cancellation.
+1. Retain clock offset, fresh API-wallet `userRole`, `userAbstraction`, metadata,
+   account state and frontend-order evidence. Verify the signer maps to the
+   intended account, the account is flat and there are no foreign orders.
+2. With the ordinary attended reduce-only close already qualified, place a far
+   non-marketable GTC test order with an owned 128-bit CLOID, query it by
+   CLOID/OID, and cancel it within a bounded timeout. If it fills unexpectedly,
+   halt and flatten through the prequalified close path; prove terminal-flat.
+3. Only after the canary is terminal, issue a short-lived
+   `profitability_qualified: false` infrastructure grant, run one Codex/ChatGPT
+   analysis, stage its exact hash, and prove every staging authority flag is
+   false. Review and authorize it only through the direct-terminal CLI;
+   preserve the learning cycle and command IDs.
 4. Submit a minimum-size long IOC + reduce-only SL + TP as `normalTpsl`.
    Accept only a full entry plus an independently visible stop covering the
    exact signed position.
@@ -211,9 +255,10 @@ stop: it cancels all open orders, including protection.
 
 The signed review artifact must identify the reviewed commit, SDK/package lock,
 testnet account and API-wallet public addresses, database identities, asset
-metadata hashes, each test command/CLOID/nonce, UTC times, raw-response hashes,
-final account snapshot, incidents and reviewer identities. It contains no
-private key or reusable approval token.
+metadata hashes, Ubuntu image/hypervisor and rendered router-bundle hashes,
+observed egress IP, each test command/CLOID/nonce, UTC times,
+raw-response hashes, final account snapshot, incidents and reviewer identities.
+It contains no private key or reusable approval token.
 
 Any unresolved or contradictory state fails qualification. Re-running after a
 code, dependency, account-mode, signer, policy or venue-contract change creates

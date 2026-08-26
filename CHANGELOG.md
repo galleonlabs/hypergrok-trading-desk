@@ -36,6 +36,15 @@
   preflight denial results, post-read mutation leases, exact replay claim
   release, an attended stale-halt acknowledgement, explicit Keychain paths and
   split executor-private versus learning-shared deployment directories.
+- Added a deterministic, private-key-field-free `local_nat_lab` Ubuntu VM router bundle,
+  renderer, nftables/WireGuard checks and an explicit TESTNET commissioning gap
+  register. The local VM is network-only, preserves the host public IP and is
+  not represented as VPN or mainnet qualification.
+- Disabled ambient urllib proxy discovery for exact Hyperliquid info/exchange
+  clients and made executor config reject proxy, CA-bundle and TLS-key-log
+  environment variables before state, credentials or network access.
+- Standardized the MCP server default, plugin descriptor, OpenCode and operator
+  examples on the reviewed loopback port 8765.
 - Expanded the Codex/ChatGPT plugin to six skills and fifteen bounded research/learning tools; five tools write only local non-capital state. OpenCode mirrors the same interface with those writes set to `ask`.
 - Added an independent disposition of `SMA-outfits` as a draft hypothesis catalog rather than evidence or executable strategy.
 

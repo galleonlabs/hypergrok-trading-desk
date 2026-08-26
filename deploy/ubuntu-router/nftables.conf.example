@@ -1,0 +1,40 @@
+#!/usr/sbin/nft -f
+
+# Dedicated local-router VM only. This intentionally replaces the VM's whole
+# ruleset; never install it on the macOS host or a shared Linux server.
+flush ruleset
+
+table inet trading_desk_filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state invalid drop
+        ct state established,related accept
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+        iifname "__REVIEWED_WAN_INTERFACE__" udp sport 67 udp dport 68 accept
+        iifname "__REVIEWED_INGRESS_INTERFACE__" ip saddr __REVIEWED_MANAGEMENT_SOURCE_CIDR__ udp dport __REVIEWED_LISTEN_PORT__ accept
+        iifname "__REVIEWED_INGRESS_INTERFACE__" ip saddr __REVIEWED_MANAGEMENT_SOURCE_CIDR__ tcp dport 22 accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state invalid drop
+        iifname "wg-exec" oifname "__REVIEWED_WAN_INTERFACE__" ip saddr __REVIEWED_ROUTER_IPV4_NETWORK__ ip daddr __REVIEWED_DNS_IPV4__ udp dport 53 ct state new,established accept
+        iifname "wg-exec" oifname "__REVIEWED_WAN_INTERFACE__" ip saddr __REVIEWED_ROUTER_IPV4_NETWORK__ ip daddr __REVIEWED_DNS_IPV4__ tcp dport 53 ct state new,established accept
+        iifname "wg-exec" oifname "__REVIEWED_WAN_INTERFACE__" ip saddr __REVIEWED_ROUTER_IPV4_NETWORK__ tcp dport 443 ct state new,established accept
+        iifname "wg-exec" oifname "__REVIEWED_WAN_INTERFACE__" ip saddr __REVIEWED_ROUTER_IPV4_NETWORK__ udp dport 123 ct state new,established accept
+        iifname "__REVIEWED_WAN_INTERFACE__" oifname "wg-exec" ip daddr __REVIEWED_ROUTER_IPV4_NETWORK__ ct state established,related accept
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+table ip trading_desk_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "__REVIEWED_WAN_INTERFACE__" ip saddr __REVIEWED_ROUTER_IPV4_NETWORK__ masquerade
+    }
+}

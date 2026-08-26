@@ -42,7 +42,8 @@ staged under an explicit `profitability_qualified: false` grant.
 | Isolated credential provider | macOS Keychain reader implemented; no env/file key loader |
 | Always-on serialized executor runtime | Implemented with fenced lease, daily-loss sync, strict recovery priority and graceful drain |
 | Direct attended control CLI | Implemented; confirmation is read from `/dev/tty`, never MCP/chat/stdin |
-| Live Hyperliquid testnet | **Code armed; no account configured; not live-qualified** |
+| Local Ubuntu VM egress router | Secret-free renderer/templates implemented; `local_nat_lab` only, not installed or VPN-qualified |
+| Live Hyperliquid testnet | **Code armed; no account configured; first responsible write blocked by commissioning and qualification-workflow gaps** |
 | Live Hyperliquid mainnet | **Hard-disabled in store, signer and transport** |
 
 The research/MCP executor remains disabled. Environment variables cannot turn
@@ -90,10 +91,16 @@ non-authoritative TESTNET staging inbox
 direct-terminal approval + atomic execution store (not MCP/chat)
         |
         v
+daily-loss sync + independent reconciliation + protection watchdog
+        |
+        v
 isolated signer process + one-shot TESTNET transport
         |
         v
-daily-loss sync + independent reconciliation + protection watchdog
+local Ubuntu VM router lab (optional, no credentials or authority)
+        |
+        v
+Hyperliquid TESTNET API
         |
         v
 immutable fill/fee/slippage/PnL review by exact component version
@@ -189,10 +196,10 @@ reviewed launchd/systemd templates.
 
 ```bash
 python -m pip install -e '.[mcp]'
-trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000
+trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8765
 ```
 
-The endpoint is `http://127.0.0.1:8000/mcp`. Public binding is rejected because
+The endpoint is `http://127.0.0.1:8765/mcp`. Public binding is rejected because
 the local server has no user-authentication layer. The checked-in Codex plugin
 and OpenCode config target this loopback URL; they do not launch ambient
 `python3`. A server started without the three learning arguments remains
@@ -201,7 +208,7 @@ dedicated local research service enables real staging with:
 
 ```bash
 trading-harness-mcp \
-  --transport streamable-http --host 127.0.0.1 --port 8000 \
+  --transport streamable-http --host 127.0.0.1 --port 8765 \
   --learning-executor-config /absolute/private/testnet-executor.toml \
   --learning-research-db /absolute/state/research.sqlite3 \
   --learning-grant /absolute/private/active-learning-grant.json
@@ -218,7 +225,7 @@ Using the [official Codex MCP configuration](https://learn.chatgpt.com/docs/exte
 add the configured URL-backed server with:
 
 ```bash
-codex mcp add tradingDesk --url http://127.0.0.1:8000/mcp
+codex mcp add tradingDesk --url http://127.0.0.1:8765/mcp
 ```
 
 ### Isolated TESTNET execution environment
@@ -231,6 +238,28 @@ python3.11 -m venv .venv-execution
 source .venv-execution/bin/activate
 python -m pip install -e '.[execution]'
 ```
+
+The optional local Ubuntu 24.04 router is composed from public values with:
+
+```bash
+python3 scripts/render_ubuntu_router.py \
+  --spec /absolute/reviewed/router-spec.json \
+  --output-dir /absolute/new/router-bundle
+python3 scripts/render_ubuntu_router.py \
+  --check-bundle /absolute/new/router-bundle \
+  --expected-manifest-sha256 REVIEWED_DIGEST_FROM_RENDER_OUTPUT
+```
+
+Start from
+[`deploy/ubuntu-router/router-spec.json.example`](deploy/ubuntu-router/router-spec.json.example)
+and follow [`docs/ubuntu_vm_router.md`](docs/ubuntu_vm_router.md). The rendered
+`local_nat_lab` bundle emits no `PrivateKey` field or venue credential. Because
+WireGuard public/private strings share an encoding, the operator must verify
+that both supplied key strings came from the public-key derivation step. It
+routes through the same home/office public IP and does not stop macOS from
+bypassing the VM, so it is functional TESTNET infrastructure rather than VPN
+qualification. The complete first-write blockers are tracked in
+[`docs/testnet_commissioning.md`](docs/testnet_commissioning.md).
 
 Start from
 [`deploy/config/testnet-executor.toml.example`](deploy/config/testnet-executor.toml.example),
@@ -367,6 +396,12 @@ account (see the [full qualification checklist](docs/testnet_qualification.md)):
 7. stop disappearance/under-protection detection;
 8. restart with zero unresolved outbox records;
 9. final flat account with no orphan orders.
+
+This is a target checklist, not the current CLI surface. The GTC canary/cancel,
+ordinary attended close, WebSocket monitor and response-drop injection remain
+implementation gaps tracked in
+[`docs/testnet_commissioning.md`](docs/testnet_commissioning.md); the first
+harness order write remains blocked until they are closed.
 
 Testnet proves mechanics, not profit or mainnet fill quality. Mainnet remains
 disabled until execution qualification and independent profitability/shadow

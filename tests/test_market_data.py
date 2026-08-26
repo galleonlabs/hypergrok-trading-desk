@@ -525,9 +525,12 @@ class DefaultTransportBoundaryTests(unittest.TestCase):
                     "http://169.254.169.254/latest/meta-data",
                 )
 
-        def build_opener(handler: object) -> RedirectingOpener:
-            self.assertIsInstance(handler, market_data._RejectRedirectHandler)
-            return RedirectingOpener(handler)
+        def build_opener(*handlers: object) -> RedirectingOpener:
+            self.assertEqual(len(handlers), 2)
+            self.assertIsInstance(handlers[0], market_data.urlrequest.ProxyHandler)
+            self.assertEqual(handlers[0].proxies, {})  # type: ignore[attr-defined]
+            self.assertIsInstance(handlers[1], market_data._RejectRedirectHandler)
+            return RedirectingOpener(handlers[1])
 
         with mock.patch.object(
             market_data.urlrequest,

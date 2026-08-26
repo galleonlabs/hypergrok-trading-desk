@@ -188,6 +188,19 @@ class StrictExecutorConfigTests(unittest.TestCase):
             {"TRADING_HARNESS_EXECUTOR_ENVIRONMENT": "testnet"},
             {"TRADING_HARNESS_ENVIRONMENT": "testnet"},
             {"HYPERLIQUID_MAINNET": "false"},
+            {"HTTP_PROXY": "http://127.0.0.1:1"},
+            {"HTTPS_PROXY": "http://127.0.0.1:1"},
+            {"ALL_PROXY": "socks5://127.0.0.1:1"},
+            {"NO_PROXY": "api.hyperliquid-testnet.xyz"},
+            {"http_proxy": "http://127.0.0.1:1"},
+            {"https_proxy": "http://127.0.0.1:1"},
+            {"all_proxy": "socks5://127.0.0.1:1"},
+            {"no_proxy": "api.hyperliquid-testnet.xyz"},
+            {"SSL_CERT_FILE": "/unreviewed/ca.pem"},
+            {"SSL_CERT_DIR": "/unreviewed/certs"},
+            {"REQUESTS_CA_BUNDLE": "/unreviewed/requests.pem"},
+            {"CURL_CA_BUNDLE": "/unreviewed/curl.pem"},
+            {"SSLKEYLOGFILE": "/unreviewed/tls.keys"},
         )
         for environ in override_sets:
             with self.subTest(environ=environ):

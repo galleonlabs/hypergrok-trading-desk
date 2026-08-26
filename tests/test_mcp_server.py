@@ -320,8 +320,6 @@ class MCPAdapterTests(unittest.TestCase):
                     "streamable-http",
                     "--host",
                     "127.0.0.2",
-                    "--port",
-                    "8765",
                 ]
             )
 
@@ -429,7 +427,7 @@ class PluginWiringTests(unittest.TestCase):
 
         self.assertEqual(set(config["mcpServers"]), {"trading_desk"})
         server = config["mcpServers"]["trading_desk"]
-        self.assertEqual(server["url"], "http://127.0.0.1:8000/mcp")
+        self.assertEqual(server["url"], "http://127.0.0.1:8765/mcp")
         self.assertNotIn("command", server)
         self.assertNotIn("args", server)
         self.assertNotIn("env", server)

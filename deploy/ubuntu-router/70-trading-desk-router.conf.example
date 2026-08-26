@@ -1,0 +1,5 @@
+# Forward only IPv4 traffic accepted by the dedicated nftables ruleset.
+# The Mac fragment captures IPv6 into wg-exec; the router deliberately does
+# not forward it in local_nat_lab mode, preventing a native-IPv6 leak.
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 0

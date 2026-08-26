@@ -1,0 +1,12 @@
+# In the official macOS WireGuard app, create an empty tunnel first so the app
+# generates and retains the private key. Keep that PrivateKey line and append
+# the public fragment below. This file is intentionally not importable alone.
+
+Address = __REVIEWED_MAC_IPV4_PEER__, __REVIEWED_MAC_IPV6_PEER__
+DNS = __REVIEWED_DNS_IPV4__
+
+[Peer]
+PublicKey = __REVIEWED_ROUTER_PUBLIC_KEY__
+Endpoint = __REVIEWED_ROUTER_ENDPOINT__
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25

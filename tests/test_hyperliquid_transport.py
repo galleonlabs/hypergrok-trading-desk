@@ -736,8 +736,14 @@ class HardenedDefaultSenderTests(unittest.TestCase):
 
         self.assertEqual(result.status, 200)
         self.assertEqual(result.body, b"{}")
+        self.assertEqual(len(build.call_args.args), 2)
         self.assertIsInstance(
             build.call_args.args[0],
+            hyperliquid_transport.urlrequest.ProxyHandler,
+        )
+        self.assertEqual(build.call_args.args[0].proxies, {})
+        self.assertIsInstance(
+            build.call_args.args[1],
             hyperliquid_transport._RejectRedirectHandler,  # type: ignore[attr-defined]
         )
         request = opener.open.call_args.args[0]

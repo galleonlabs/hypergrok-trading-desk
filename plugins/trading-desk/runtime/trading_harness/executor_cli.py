@@ -29,6 +29,8 @@ from .executor_config import ExecutorConfig, load_executor_config
 from .execution_store import ExecutionStore
 from .domain import Environment
 from .executor_service import (
+    _validate_state_database_layout,
+    _verify_state_database_binding,
     build_active_testnet_executor_service,
     initialize_testnet_executor_state,
     open_testnet_executor_state,
@@ -103,12 +105,21 @@ def _inbox(config: ExecutorConfig, *, clock: Clock = _clock) -> TradeStagingInbo
             block_code="trusted_quote_profile_not_loaded"
         ),
         clock=clock,
+        must_exist=True,
     )
 
 
-def _require_state_file(path: Path, *, label: str) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise StateConflict(f"{label} state must be initialized")
+def _require_state_file(
+    config: ExecutorConfig,
+    path: Path,
+    *,
+    label: str,
+) -> None:
+    try:
+        _validate_state_database_layout(config, path, existing=True)
+        _verify_state_database_binding(config, path)
+    except (OSError, ValidationError) as error:
+        raise StateConflict(f"{label} state must be initialized") from error
 
 
 def _ticket_view(config: ExecutorConfig, document_id: str, *, clock: Clock = _clock):
@@ -184,8 +195,11 @@ def _init(config_path: Path) -> int:
 def _status(config_path: Path) -> int:
     try:
         config = _load(config_path)
-        status = open_testnet_executor_state(config).observer.status()
-        _json(status.as_dict())
+        state = open_testnet_executor_state(config)
+        report = state.observer.status().as_dict()
+        report["shared_learning_available"] = state.learning is not None
+        report["entry_blocked_by_shared_learning"] = state.learning is None
+        _json(report)
         return 0
     except Exception as error:
         return _failure("status", error)
@@ -194,8 +208,11 @@ def _status(config_path: Path) -> int:
 def _dry_run(config_path: Path) -> int:
     try:
         config = _load(config_path)
-        result = open_testnet_executor_state(config).observer.dry_run()
-        _json(result.as_dict())
+        state = open_testnet_executor_state(config)
+        report = state.observer.dry_run().as_dict()
+        report["shared_learning_available"] = state.learning is not None
+        report["entry_blocked_by_shared_learning"] = state.learning is None
+        _json(report)
         return 0
     except Exception as error:
         return _failure("dry-run", error)
@@ -210,8 +227,12 @@ def _acknowledge_halt(
 ) -> int:
     try:
         config = _load(config_path)
-        _require_state_file(config.paths.execution_database, label="executor")
-        runtime_store = ExecutorRuntimeStore(config)
+        _require_state_file(
+            config,
+            config.paths.execution_database,
+            label="executor",
+        )
+        runtime_store = ExecutorRuntimeStore(config, must_exist=True)
         current = runtime_store.read()
         reason = ManualHaltReason(expected_reason)
         if (
@@ -237,6 +258,11 @@ def _acknowledge_halt(
         )
         if prompt(f'Type exactly: "{phrase}"\n> ') != phrase:
             raise ValidationError("halt acknowledgement confirmation differs")
+        _require_state_file(
+            config,
+            config.paths.execution_database,
+            label="executor",
+        )
         updated = runtime_store.acknowledge_stale_manual_halt(
             expected_revision=expected_revision,
             expected_reason=reason,
@@ -260,8 +286,17 @@ def _acknowledge_halt(
 def _show_stage(config_path: Path, document_id: str) -> int:
     try:
         config = _load(config_path)
-        _require_state_file(config.paths.staging_database, label="staging")
+        _require_state_file(
+            config,
+            config.paths.staging_database,
+            label="staging",
+        )
         view, payload, ticket = _ticket_view(config, document_id)
+        _require_state_file(
+            config,
+            config.paths.staging_database,
+            label="staging",
+        )
         _json(
             {
                 "schema_version": "attended_stage_review.v1",
@@ -301,7 +336,11 @@ def _authorize_stage(
             (config.paths.learning_database, "learning"),
             (config.paths.execution_database, "executor"),
         ):
-            _require_state_file(path, label=label)
+            _require_state_file(
+                config,
+                path,
+                label=label,
+            )
         view, _, ticket = _ticket_view(config, document_id, clock=clock)
         expected = AttendedTestnetControlPlane.confirmation_for(ticket)
         _json(
@@ -359,6 +398,7 @@ def _authorize_stage(
             account_id=config.account_id,
             max_reserved_loss=config.max_reserved_loss,
             max_reserved_notional=config.max_reserved_notional,
+            must_exist=True,
         )
         control = AttendedTestnetControlPlane(
             _inbox(config, clock=clock),
@@ -367,10 +407,20 @@ def _authorize_stage(
             grant=trusted_grant,
             approval_authority=approval_authority,
             learning_recorder=LearningRecorder(
-                LearningLedger(config.paths.learning_database, clock=clock)
+                LearningLedger(
+                    config.paths.learning_database,
+                    clock=clock,
+                    must_exist=True,
+                )
             ),
             clock=clock,
         )
+        for path, label in (
+            (config.paths.staging_database, "staging"),
+            (config.paths.learning_database, "learning"),
+            (config.paths.execution_database, "executor"),
+        ):
+            _require_state_file(config, path, label=label)
         result = control.authorize_stage(
             document_id,
             confirmation=supplied,
@@ -621,8 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+def _dispatch(arguments: argparse.Namespace) -> int:
     if arguments.command == "validate":
         return _validate(arguments.config)
     if arguments.command == "init":
@@ -660,6 +709,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.worker_id,
         arguments.max_drain_steps,
     )
+
+
+def _require_command_identity(arguments: argparse.Namespace) -> None:
+    if arguments.command == "validate":
+        return
+    config = _load(arguments.config)
+    control_commands = frozenset(
+        {"show-stage", "authorize-stage", "acknowledge-halt", "issue-grant"}
+    )
+    if arguments.command in control_commands:
+        expected_uid = config.control_uid
+        role = "control"
+    else:
+        expected_uid = config.executor_uid
+        role = "executor"
+    if not hasattr(os, "geteuid") or os.geteuid() != expected_uid:
+        raise ValidationError(f"command requires the configured {role} UID")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    previous_umask = os.umask(0o077)
+    try:
+        try:
+            _require_command_identity(arguments)
+        except Exception as error:
+            return _failure(arguments.command, error)
+        return _dispatch(arguments)
+    finally:
+        os.umask(previous_umask)
 
 
 if __name__ == "__main__":

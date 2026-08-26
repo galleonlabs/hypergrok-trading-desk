@@ -19,11 +19,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from functools import lru_cache
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
+import tempfile
 from typing import Any
 
 from .canonical import canonical_json, domain_hash
@@ -49,6 +53,113 @@ _EVENT_TYPES = frozenset(
         "lease_released",
     }
 )
+
+
+def _file_signature(file_stat: os.stat_result) -> tuple[int, ...]:
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        stat.S_IMODE(file_stat.st_mode),
+        file_stat.st_uid,
+        file_stat.st_gid,
+        file_stat.st_nlink,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _snapshot_regular_file(
+    path: Path, *, label: str, required_mode: int | None = None
+) -> tuple[tuple[int, ...], str, bytes]:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise StorageError(f"{label} must be a regular single-link file")
+        if required_mode is not None and stat.S_IMODE(before.st_mode) != required_mode:
+            raise StorageError(f"{label} mode must be {required_mode:04o}")
+        digest = hashlib.sha256()
+        header = b""
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            if len(header) < 20:
+                header += chunk[: 20 - len(header)]
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if _file_signature(before) != _file_signature(after):
+            raise StorageError(f"{label} changed while it was read")
+        return _file_signature(after), digest.hexdigest(), header
+    except OSError as error:
+        raise StorageError(f"{label} is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _copy_verification_file(
+    source: Path,
+    destination: Path,
+    *,
+    label: str,
+    expected: tuple[tuple[int, ...], str, bytes],
+) -> None:
+    source_descriptor = -1
+    destination_descriptor = -1
+    try:
+        source_descriptor = os.open(
+            source,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        source_stat = os.fstat(source_descriptor)
+        if _file_signature(source_stat) != expected[0]:
+            raise StorageError(f"{label} changed before verification snapshot")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(destination_descriptor, 0o600)
+        digest = hashlib.sha256()
+        header = b""
+        while True:
+            chunk = os.read(source_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            if len(header) < 20:
+                header += chunk[: 20 - len(header)]
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_descriptor, view)
+                view = view[written:]
+        os.fsync(destination_descriptor)
+        if (
+            _file_signature(os.fstat(source_descriptor)) != expected[0]
+            or digest.hexdigest() != expected[1]
+            or header != expected[2]
+        ):
+            raise StorageError(f"{label} changed during verification snapshot")
+    except OSError as error:
+        raise StorageError(f"{label} could not be snapshotted") from error
+    finally:
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+    copied = _snapshot_regular_file(
+        destination, label=f"temporary {label}", required_mode=0o600
+    )
+    if copied[1:] != expected[1:] or copied[0][6] != expected[0][6]:
+        raise StorageError(f"temporary {label} does not match its source")
+
+
 _PROCESS_TRANSITIONS: Mapping[ExecutorProcessState, frozenset[ExecutorProcessState]] = {
     ExecutorProcessState.STARTING: frozenset(
         {
@@ -407,14 +518,53 @@ _EXPECTED_TRIGGERS = {
 }
 
 
+def _runtime_schema_objects(
+    connection: sqlite3.Connection,
+) -> tuple[tuple[str, str, str], ...]:
+    rows = connection.execute(
+        """
+        SELECT type, name, sql FROM sqlite_master
+        WHERE sql IS NOT NULL AND (
+            name LIKE 'executor_runtime_%'
+            OR tbl_name LIKE 'executor_runtime_%'
+        )
+        ORDER BY type, name
+        """
+    ).fetchall()
+    return tuple(
+        (str(row["type"]), str(row["name"]), _normalized_sql(row["sql"]))
+        for row in rows
+    )
+
+
+@lru_cache(maxsize=1)
+def _expected_runtime_schema_objects() -> tuple[tuple[str, str, str], ...]:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    try:
+        for statement in _SCHEMA_STATEMENTS:
+            connection.execute(statement)
+        return _runtime_schema_objects(connection)
+    finally:
+        connection.close()
+
+
 class ExecutorRuntimeStore:
     """Config-bound singleton lease and fail-closed runtime state machine."""
 
-    def __init__(self, config: ExecutorConfig, *, clock: Clock | None = None) -> None:
+    def __init__(
+        self,
+        config: ExecutorConfig,
+        *,
+        clock: Clock | None = None,
+        must_exist: bool = False,
+    ) -> None:
         if not isinstance(config, ExecutorConfig):
             raise TypeError("config must be ExecutorConfig")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
+        if type(must_exist) is not bool:
+            raise TypeError("must_exist must be a boolean")
         database = config.paths.execution_database
         if database.exists() and database.is_symlink():
             raise ValidationError("executor runtime database may not be a symlink")
@@ -422,6 +572,7 @@ class ExecutorRuntimeStore:
             raise ValidationError("executor runtime database parent must be a real directory")
         self._config = config
         self._database = database
+        self._must_exist = must_exist
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._deployment_fingerprint = domain_hash(
             "trading-harness/executor-runtime-deployment/v1",
@@ -430,9 +581,28 @@ class ExecutorRuntimeStore:
         self._initialize()
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
+    def _connection(
+        self,
+        *,
+        read_only: bool = False,
+        verification_path: Path | None = None,
+    ) -> Iterator[sqlite3.Connection]:
         try:
-            connection = sqlite3.connect(self._database, timeout=5, isolation_level=None)
+            database_path = (
+                self._database if verification_path is None else verification_path
+            )
+            database: str | Path = database_path
+            if read_only:
+                immutable = "&immutable=1" if verification_path is None else ""
+                database = f"{database_path.absolute().as_uri()}?mode=ro{immutable}"
+            elif self._must_exist:
+                database = f"{self._database.absolute().as_uri()}?mode=rw"
+            connection = sqlite3.connect(
+                database,
+                timeout=5,
+                isolation_level=None,
+                uri=read_only or self._must_exist,
+            )
         except sqlite3.Error as error:
             raise StorageError("executor runtime database is unavailable") from error
         connection.row_factory = sqlite3.Row
@@ -441,7 +611,10 @@ class ExecutorRuntimeStore:
             connection.execute("PRAGMA trusted_schema = OFF")
             connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("PRAGMA journal_mode = WAL")
+            if read_only:
+                connection.execute("PRAGMA query_only = ON")
+            else:
+                connection.execute("PRAGMA journal_mode = WAL")
             yield connection
         except sqlite3.Error as error:
             raise StorageError("executor runtime database operation failed") from error
@@ -464,6 +637,9 @@ class ExecutorRuntimeStore:
         return _clock_read(self._clock)
 
     def _initialize(self) -> None:
+        if self._must_exist:
+            self._verify_existing()
+            return
         now = self._now()
         with self._write() as connection:
             connection.execute(_SCHEMA_STATEMENTS[0])
@@ -528,6 +704,112 @@ class ExecutorRuntimeStore:
             elif tail != (0, _ZERO_HASH):
                 raise StorageError("runtime journal exists without runtime state")
 
+    def _verify_existing(self) -> None:
+        database_snapshot = _snapshot_regular_file(
+            self._database, label="executor runtime database"
+        )
+        header = database_snapshot[2]
+        if (
+            len(header) != 20
+            or header[:16] != b"SQLite format 3\x00"
+            or header[18:20] != b"\x02\x02"
+        ):
+            raise StorageError(
+                "executor runtime database is not a WAL-mode SQLite file"
+            )
+        verification_directory: tempfile.TemporaryDirectory[str] | None = None
+        verification_path: Path | None = None
+        wal_path = Path(f"{self._database}-wal")
+        wal_snapshot = (
+            _snapshot_regular_file(wal_path, label="executor runtime WAL")
+            if os.path.lexists(wal_path)
+            else None
+        )
+        try:
+            if wal_snapshot is not None and wal_snapshot[0][6] > 0:
+                verification_directory = tempfile.TemporaryDirectory(
+                    prefix=".executor-runtime-verify-",
+                    dir=self._database.parent,
+                )
+                verification_path = (
+                    Path(verification_directory.name) / self._database.name
+                )
+                _copy_verification_file(
+                    self._database,
+                    verification_path,
+                    label="executor runtime database",
+                    expected=database_snapshot,
+                )
+                _copy_verification_file(
+                    wal_path,
+                    Path(f"{verification_path}-wal"),
+                    label="executor runtime WAL",
+                    expected=wal_snapshot,
+                )
+                if (
+                    _snapshot_regular_file(
+                        self._database, label="executor runtime database"
+                    )
+                    != database_snapshot
+                    or _snapshot_regular_file(
+                        wal_path, label="executor runtime WAL"
+                    )
+                    != wal_snapshot
+                ):
+                    raise StorageError(
+                        "executor runtime database changed during verification snapshot"
+                    )
+            with self._connection(
+                read_only=True, verification_path=verification_path
+            ) as connection:
+                self._verify_existing_locked(connection)
+            current_wal_snapshot = (
+                _snapshot_regular_file(wal_path, label="executor runtime WAL")
+                if os.path.lexists(wal_path)
+                else None
+            )
+            if (
+                _snapshot_regular_file(
+                    self._database, label="executor runtime database"
+                )
+                != database_snapshot
+                or current_wal_snapshot != wal_snapshot
+            ):
+                raise StorageError(
+                    "executor runtime database changed during verification"
+                )
+        except OSError as error:
+            raise StorageError(
+                "executor runtime database snapshot is unavailable"
+            ) from error
+        finally:
+            if verification_directory is not None:
+                verification_directory.cleanup()
+
+    def _verify_existing_locked(self, connection: sqlite3.Connection) -> None:
+        query_only = connection.execute("PRAGMA query_only").fetchone()
+        if query_only is None or int(query_only[0]) != 1:
+            raise StorageError(
+                "executor runtime verification is not query-only"
+            )
+        integrity = connection.execute("PRAGMA quick_check").fetchall()
+        if not integrity or any(str(row[0]).lower() != "ok" for row in integrity):
+            raise StorageError("executor runtime database integrity check failed")
+        self._verify_schema_locked(connection)
+        self._verify_binding_locked(connection)
+        tail = self._verify_journal_locked(connection)
+        state_row = connection.execute(
+            "SELECT * FROM executor_runtime_state WHERE singleton = 1"
+        ).fetchone()
+        if state_row is not None:
+            state = self._state_from_row(state_row)
+            if (state.last_event_sequence, state.last_event_hash) != tail:
+                raise StorageError(
+                    "runtime state does not reference the journal tail"
+                )
+        elif tail != (0, _ZERO_HASH):
+            raise StorageError("runtime journal exists without runtime state")
+
     @staticmethod
     def _verify_schema_locked(connection: sqlite3.Connection) -> None:
         for table, expected in _EXPECTED_COLUMNS.items():
@@ -555,6 +837,8 @@ class ExecutorRuntimeStore:
         expected = {name: _normalized_sql(sql) for name, sql in _EXPECTED_TRIGGERS.items()}
         if actual != expected:
             raise StorageError("executor runtime immutability triggers do not match")
+        if _runtime_schema_objects(connection) != _expected_runtime_schema_objects():
+            raise StorageError("executor runtime database schema does not match")
 
     def _verify_deployment_row(self, row: sqlite3.Row) -> None:
         created_at = _parse_time(row["created_at"], field="deployment created_at")

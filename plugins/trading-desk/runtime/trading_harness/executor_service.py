@@ -10,10 +10,11 @@ runtime.  Mainnet is not representable by ``ExecutorConfig`` or this module.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import stat
 import re
 from typing import Any
 
@@ -27,11 +28,19 @@ from .errors import ValidationError
 from .execution_store import ExecutionStore
 from .execution_work_scanner import ExecutionWorkScanner
 from .executor_config import ExecutorConfig
+from .executor_state_binding import (
+    state_file_size_limit as _state_file_size_limit,
+    verify_state_database_binding as _verify_state_database_binding,
+    verify_state_bindings as _verify_state_bindings,
+    write_state_database_binding as _write_state_database_binding,
+    write_state_bindings as _write_state_bindings,
+)
 from .executor_handlers import (
     TestnetExecutorHandlerSet,
     build_testnet_executor_handlers,
 )
 from .execution_learning_sync import (
+    LearningProjectionError,
     ExecutionLearningProjector,
     ExecutionLearningSyncReport,
 )
@@ -68,13 +77,20 @@ from .recovery_dispatcher import (
     RecoveryExecutionDispatcher,
 )
 from .recovery_reconciliation import RecoveryReconciliationCoordinator
-from .staging_inbox import TradeStagingInbox, TrustedQuoteDecision
+from .staging_inbox import (
+    TradeStagingInbox,
+    TrustedQuoteDecision,
+)
 
 
 Clock = Callable[[], datetime]
 AccountReader = Callable[[str, str], HyperliquidAccountSnapshot]
 MarketReader = Callable[[str, str], Mapping[str, Any]]
-
+_VERIFICATION_DIRECTORY_PREFIXES = (
+    ".trading-sqlite-verify-",
+    ".execution-store-verify-",
+    ".executor-runtime-verify-",
+)
 
 def _clock() -> datetime:
     return datetime.now(timezone.utc)
@@ -102,44 +118,155 @@ def _state_files(config: ExecutorConfig) -> tuple[Path, ...]:
     )
 
 
-def _state_artifacts(config: ExecutorConfig) -> tuple[Path, ...]:
-    result: list[Path] = []
-    for database in _state_files(config):
-        result.append(database)
-        result.extend(
-            Path(str(database) + suffix)
-            for suffix in ("-wal", "-shm", "-journal")
-        )
-    return tuple(result)
+def _core_state_files(config: ExecutorConfig) -> tuple[Path, ...]:
+    return (
+        config.paths.execution_database,
+        config.paths.nonce_database,
+        config.paths.daily_loss_database,
+    )
 
 
-def _validate_state_layout(config: ExecutorConfig, *, existing: bool) -> None:
-    directories = {path.parent for path in _state_files(config)} | {
-        config.paths.control_socket.parent
+def _shared_state_files(config: ExecutorConfig) -> tuple[Path, ...]:
+    return (
+        config.paths.learning_database,
+        config.paths.staging_database,
+    )
+
+
+def _state_database_policies(
+    config: ExecutorConfig,
+) -> dict[Path, frozenset[int]]:
+    executor_only = frozenset({config.executor_uid})
+    return {
+        config.paths.execution_database: frozenset(
+            {config.executor_uid, config.control_uid}
+        ),
+        config.paths.nonce_database: executor_only,
+        config.paths.daily_loss_database: executor_only,
+        config.paths.learning_database: frozenset(
+            {config.executor_uid, config.research_uid, config.control_uid}
+        ),
+        config.paths.staging_database: frozenset(
+            {config.executor_uid, config.research_uid, config.control_uid}
+        ),
     }
-    for directory in directories:
+
+
+def _validate_state_database_layout(
+    config: ExecutorConfig,
+    database: Path,
+    *,
+    existing: bool,
+) -> None:
+    policies = _state_database_policies(config)
+    try:
+        sidecar_owners = policies[database]
+    except KeyError as error:
+        raise ValidationError("database is not a configured executor state path") from error
+    expected_parent_mode = 0o700
+    try:
+        parent_metadata = database.parent.lstat()
+    except OSError as error:
+        raise ValidationError("executor state directory is unavailable") from error
+    if not stat.S_ISDIR(parent_metadata.st_mode):
+        raise ValidationError("executor state parent must be a real directory")
+    if stat.S_IMODE(parent_metadata.st_mode) != expected_parent_mode:
+        raise ValidationError(
+            f"executor state directory must have mode {expected_parent_mode:04o}"
+        )
+    if parent_metadata.st_uid != config.executor_uid:
+        raise ValidationError("executor state directory has an invalid owner")
+    try:
+        entries = tuple(database.parent.iterdir())
+    except OSError as error:
+        raise ValidationError("executor state directory cannot be inspected") from error
+    if any(
+        entry.name.startswith(_VERIFICATION_DIRECTORY_PREFIXES)
+        for entry in entries
+    ):
+        raise ValidationError("stale SQLite verification directory requires review")
+
+    artifacts = (
+        (database, frozenset({config.executor_uid}), True),
+        *(
+            (
+                Path(str(database) + suffix),
+                sidecar_owners,
+                False,
+            )
+            for suffix in ("-wal", "-shm", "-journal")
+        ),
+    )
+    present: set[Path] = set()
+    for path, allowed_owners, is_main_database in artifacts:
         try:
-            metadata = directory.stat()
-        except OSError as error:
-            raise ValidationError("executor state directory is unavailable") from error
-        if not directory.is_dir() or directory.is_symlink():
-            raise ValidationError("executor state parent must be a real directory")
-        if metadata.st_mode & 0o077:
-            raise ValidationError("executor state directory must have mode 0700")
-        if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
-            raise ValidationError("executor state directory must be process-owned")
-    for path in _state_artifacts(config):
-        if not path.exists():
-            if existing and path in _state_files(config):
-                raise ValidationError("executor state is not initialized")
+            metadata = path.lstat()
+        except FileNotFoundError:
             continue
-        if path.is_symlink() or not path.is_file():
+        except OSError as error:
+            raise ValidationError("executor state artifact is unavailable") from error
+        present.add(path)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise ValidationError("executor state file must be a regular non-symlink")
-        metadata = path.stat()
-        if existing and metadata.st_mode & 0o077:
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
             raise ValidationError("executor state file must have mode 0600")
-        if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
-            raise ValidationError("executor state file must be process-owned")
+        if metadata.st_uid not in allowed_owners:
+            raise ValidationError("executor state file has an invalid owner")
+        if metadata.st_size > _state_file_size_limit(config, database):
+            raise ValidationError("executor state file exceeds its size limit")
+        if is_main_database and metadata.st_size <= 0:
+            raise ValidationError("executor state main database is empty")
+    if existing and database not in present:
+        raise ValidationError("executor state is not initialized")
+    if database not in present and any(path in present for path, _, _ in artifacts[1:]):
+        raise ValidationError("executor state sidecar has no main database")
+    if not existing and present:
+        raise ValidationError("executor state initialization requires empty paths")
+
+
+def _validate_state_layout(
+    config: ExecutorConfig,
+    *,
+    existing: bool,
+    include_shared: bool = True,
+) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() != config.executor_uid:
+        raise ValidationError("executor state requires the configured executor UID")
+    selected_files = _core_state_files(config) + (
+        _shared_state_files(config) if include_shared else ()
+    )
+    for database in selected_files:
+        _validate_state_database_layout(config, database, existing=existing)
+
+    socket_parent = config.paths.control_socket.parent
+    try:
+        metadata = socket_parent.lstat()
+    except OSError as error:
+        raise ValidationError("executor state directory is unavailable") from error
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValidationError("executor state parent must be a real directory")
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise ValidationError("executor state directory must have mode 0700")
+    if metadata.st_uid != config.executor_uid:
+        raise ValidationError("executor state directory has an invalid owner")
+    try:
+        config.paths.control_socket.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise ValidationError("control socket path is unavailable") from error
+    else:
+        raise ValidationError("control socket runtime is not implemented")
+
+    if not existing:
+        directories = {path.parent for path in selected_files} | {socket_parent}
+        for directory in directories:
+            try:
+                has_entries = next(directory.iterdir(), None) is not None
+            except OSError as error:
+                raise ValidationError("executor state directory cannot be inspected") from error
+            if has_entries:
+                raise ValidationError("executor state initialization requires empty directories")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,22 +277,33 @@ class ExecutorLocalState:
     daily_loss: DailyLossLedger
     scanner: ExecutionWorkScanner
     nonce_allocator: PersistentNonceAllocator
-    learning: LearningLedger
+    learning: LearningLedger | None
     observer: ExecutorRuntime
 
 
-def initialize_testnet_executor_state(
+def _reserve_new_state_files(config: ExecutorConfig) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    for path in _state_files(config):
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except OSError as error:
+            raise ValidationError("executor state file reservation failed") from error
+        try:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _compose_testnet_executor_state(
     config: ExecutorConfig,
     *,
-    clock: Clock = _clock,
+    clock: Clock,
+    must_exist: bool,
+    include_shared: bool = True,
 ) -> ExecutorLocalState:
-    """Create/bind local TESTNET databases without credentials or network I/O."""
-
-    if not isinstance(config, ExecutorConfig):
-        raise TypeError("config must be ExecutorConfig")
-    if not callable(clock):
-        raise TypeError("clock must be callable")
-    _validate_state_layout(config, existing=False)
     previous_umask = os.umask(0o077)
     try:
         store = ExecutionStore(
@@ -174,8 +312,13 @@ def initialize_testnet_executor_state(
             account_id=config.account_id,
             max_reserved_loss=config.max_reserved_loss,
             max_reserved_notional=config.max_reserved_notional,
+            must_exist=must_exist,
         )
-        runtime_store = ExecutorRuntimeStore(config, clock=clock)
+        runtime_store = ExecutorRuntimeStore(
+            config,
+            clock=clock,
+            must_exist=must_exist,
+        )
         loss = DailyLossLedger(
             config.paths.daily_loss_database,
             binding=DailyLossBinding(
@@ -186,31 +329,32 @@ def initialize_testnet_executor_state(
                 settlement_currency=config.settlement_currency,
             ),
             clock=clock,
+            must_exist=must_exist,
         )
         nonce = PersistentNonceAllocator(
             config.paths.nonce_database,
             signer_address=config.api_wallet_address,
             network=HyperliquidNetwork.TESTNET,
             clock=clock,
+            must_exist=must_exist,
         )
-        learning = LearningLedger(config.paths.learning_database, clock=clock)
-        TradeStagingInbox(
-            config.paths.staging_database,
-            quote_callback=lambda _request: TrustedQuoteDecision.blocked(
-                block_code="trusted_quote_profile_not_loaded"
-            ),
-            clock=clock,
-        )
+        learning: LearningLedger | None = None
+        if include_shared:
+            learning = LearningLedger(
+                config.paths.learning_database,
+                clock=clock,
+                must_exist=must_exist,
+            )
+            TradeStagingInbox(
+                config.paths.staging_database,
+                quote_callback=lambda _request: TrustedQuoteDecision.blocked(
+                    block_code="trusted_quote_profile_not_loaded"
+                ),
+                clock=clock,
+                must_exist=must_exist,
+            )
     finally:
         os.umask(previous_umask)
-    for path in _state_artifacts(config):
-        if not path.exists():
-            continue
-        try:
-            path.chmod(0o600)
-        except OSError as error:
-            raise ValidationError("executor state permissions could not be set") from error
-    _validate_state_layout(config, existing=True)
     scanner = ExecutionWorkScanner(store, clock=clock)
     observer = ExecutorRuntime(
         runtime_store=runtime_store,
@@ -232,6 +376,57 @@ def initialize_testnet_executor_state(
     )
 
 
+def _open_shared_learning_state(
+    config: ExecutorConfig,
+    *,
+    clock: Clock,
+) -> LearningLedger:
+    for database in _shared_state_files(config):
+        _validate_state_database_layout(config, database, existing=True)
+        _verify_state_database_binding(config, database)
+    learning = LearningLedger(
+        config.paths.learning_database,
+        clock=clock,
+        must_exist=True,
+    )
+    TradeStagingInbox(
+        config.paths.staging_database,
+        quote_callback=lambda _request: TrustedQuoteDecision.blocked(
+            block_code="trusted_quote_profile_not_loaded"
+        ),
+        clock=clock,
+        must_exist=True,
+    )
+    for database in _shared_state_files(config):
+        _validate_state_database_layout(config, database, existing=True)
+        _verify_state_database_binding(config, database)
+    return learning
+
+
+def initialize_testnet_executor_state(
+    config: ExecutorConfig,
+    *,
+    clock: Clock = _clock,
+) -> ExecutorLocalState:
+    """Create/bind local TESTNET databases without credentials or network I/O."""
+
+    if not isinstance(config, ExecutorConfig):
+        raise TypeError("config must be ExecutorConfig")
+    if not callable(clock):
+        raise TypeError("clock must be callable")
+    _validate_state_layout(config, existing=False)
+    _reserve_new_state_files(config)
+    state = _compose_testnet_executor_state(
+        config,
+        clock=clock,
+        must_exist=False,
+    )
+    _write_state_bindings(config)
+    _validate_state_layout(config, existing=True)
+    _verify_state_bindings(config)
+    return state
+
+
 def open_testnet_executor_state(
     config: ExecutorConfig,
     *,
@@ -239,8 +434,31 @@ def open_testnet_executor_state(
 ) -> ExecutorLocalState:
     """Open already-initialized state; never create a missing deployment."""
 
-    _validate_state_layout(config, existing=True)
-    return initialize_testnet_executor_state(config, clock=clock)
+    if not isinstance(config, ExecutorConfig):
+        raise TypeError("config must be ExecutorConfig")
+    if not callable(clock):
+        raise TypeError("clock must be callable")
+    _validate_state_layout(config, existing=True, include_shared=False)
+    for database in _core_state_files(config):
+        _verify_state_database_binding(config, database)
+    state = _compose_testnet_executor_state(
+        config,
+        clock=clock,
+        must_exist=True,
+        include_shared=False,
+    )
+    try:
+        learning = _open_shared_learning_state(config, clock=clock)
+    except Exception:
+        # Shared research evidence is non-capital-authoritative. Any failure at
+        # this trust boundary blocks learning and entry, but must not block
+        # independently verified reconciliation or account-safety recovery.
+        learning = None
+    state = replace(state, learning=learning)
+    _validate_state_layout(config, existing=True, include_shared=False)
+    for database in _core_state_files(config):
+        _verify_state_database_binding(config, database)
+    return state
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +468,7 @@ class ActiveExecutorCycle:
     loss_sync_skipped_for_priority: bool
     learning_sync: ExecutionLearningSyncReport | None
     learning_sync_failed: bool
+    learning_sync_skipped_for_priority: bool
     runtime_step: RuntimeStepResult
 
     def as_dict(self) -> dict[str, object]:
@@ -262,10 +481,23 @@ class ActiveExecutorCycle:
                 None if self.learning_sync is None else self.learning_sync.as_dict()
             ),
             "learning_sync_failed": self.learning_sync_failed,
+            "learning_sync_skipped_for_priority": (
+                self.learning_sync_skipped_for_priority
+            ),
             "runtime_step": self.runtime_step.as_dict(),
             "environment": "testnet",
             "mainnet_authorized": False,
         }
+
+
+class _UnavailableLearningProjector:
+    def synchronize(self) -> ExecutionLearningSyncReport:
+        raise LearningProjectionError("shared learning state is unavailable")
+
+    def require_entry_ready(self, _command_id: str) -> None:
+        raise LearningProjectionError(
+            "entry is blocked while shared learning state is unavailable"
+        )
 
 
 @dataclass(slots=True)
@@ -273,7 +505,7 @@ class ActiveTestnetExecutorService:
     state: ExecutorLocalState
     handlers: TestnetExecutorHandlerSet
     loss_synchronizer: HyperliquidDailyLossSynchronizer
-    learning_projector: ExecutionLearningProjector
+    learning_projector: ExecutionLearningProjector | _UnavailableLearningProjector
     runtime: ExecutorRuntime
     clock: Clock
     _last_loss_sync_at: datetime | None = field(default=None, init=False)
@@ -335,25 +567,39 @@ class ActiveTestnetExecutorService:
                 failed = True
         learning_report: ExecutionLearningSyncReport | None = None
         learning_failed = False
-        try:
-            learning_report = self.learning_projector.synchronize()
-        except Exception:
-            learning_failed = True
+        learning_skipped = skipped
+        if not skipped:
+            try:
+                learning_report = self.learning_projector.synchronize()
+            except Exception:
+                learning_failed = True
         runtime_step = self.runtime.tick(
             entry_refresh_permitted=(
-                report is not None and report.complete and not failed
+                report is not None
+                and report.complete
+                and not failed
+                and learning_report is not None
+                and not learning_failed
             )
         )
-        try:
-            learning_report = self.learning_projector.synchronize()
-        except Exception:
-            learning_failed = True
+        post_step_urgent = (
+            runtime_step.venue_write_attempted
+            or runtime_step.step in urgent_steps
+        )
+        if not skipped and not post_step_urgent:
+            try:
+                learning_report = self.learning_projector.synchronize()
+            except Exception:
+                learning_failed = True
+        elif post_step_urgent:
+            learning_skipped = True
         return ActiveExecutorCycle(
             loss_sync=report,
             loss_sync_failed=failed,
             loss_sync_skipped_for_priority=skipped,
             learning_sync=learning_report,
             learning_sync_failed=learning_failed,
+            learning_sync_skipped_for_priority=learning_skipped,
             runtime_step=runtime_step,
         )
 
@@ -481,11 +727,15 @@ def build_active_testnet_executor_service(
             maximum_age_seconds=policy.account_max_age_seconds
         ).used,
     )
-    learning_projector = ExecutionLearningProjector(
-        state.execution_store,
-        LearningRecorder(state.learning),
-        settlement_asset=config.settlement_currency,
-    )
+    learning_projector: ExecutionLearningProjector | _UnavailableLearningProjector
+    if state.learning is None:
+        learning_projector = _UnavailableLearningProjector()
+    else:
+        learning_projector = ExecutionLearningProjector(
+            state.execution_store,
+            LearningRecorder(state.learning),
+            settlement_asset=config.settlement_currency,
+        )
 
     def learning_bound_preparer(command, ticket, plan, requested_at):
         learning_projector.require_entry_ready(command.command_id)

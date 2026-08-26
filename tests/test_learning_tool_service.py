@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 from decimal import Decimal
+import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from trading_harness.errors import ValidationError
 from trading_harness.execution_grant import (
@@ -12,11 +15,21 @@ from trading_harness.execution_grant import (
     infrastructure_grant_confirmation,
 )
 from trading_harness.executor_config import parse_executor_config
+from trading_harness.executor_service import _write_state_database_binding
 from trading_harness.hyperliquid_account import fetch_account_snapshot
-from trading_harness.learning_tool_service import build_testnet_learning_tool_service
+from trading_harness.learning_ledger import LearningLedger
+from trading_harness.learning_tool_service import (
+    _shared_state_path,
+    build_testnet_learning_tool_service,
+)
 from trading_harness.planning import RiskSizingPolicy
 from trading_harness.research_api import ResearchService
 from trading_harness.research_store import ResearchStore
+from trading_harness.staging_inbox import (
+    StagingStorageError,
+    TradeStagingInbox,
+    TrustedQuoteDecision,
+)
 from tests.test_account_risk import flat_clearing
 from tests.test_hyperliquid_account import ACCOUNT, FixtureTransport
 from tests.test_learning_quote_service import config_text
@@ -39,6 +52,23 @@ class ConfiguredLearningToolServiceTests(unittest.TestCase):
         self.config = parse_executor_config(
             config_text(self.root, self.policy.policy_hash), environ={}
         )
+        previous_umask = os.umask(0o077)
+        try:
+            LearningLedger(self.config.paths.learning_database, clock=lambda: AT)
+            TradeStagingInbox(
+                self.config.paths.staging_database,
+                quote_callback=lambda _request: TrustedQuoteDecision.blocked(
+                    block_code="test_setup"
+                ),
+                clock=lambda: AT,
+            )
+        finally:
+            os.umask(previous_umask)
+        for path in (
+            self.config.paths.learning_database,
+            self.config.paths.staging_database,
+        ):
+            _write_state_database_binding(self.config, path)
         self.research_path = self.root / "research.sqlite3"
         research = ResearchStore(self.research_path)
         research_service = ResearchService(
@@ -155,6 +185,89 @@ class ConfiguredLearningToolServiceTests(unittest.TestCase):
                 clock=lambda: AT,
                 policy=self.policy,
             )
+
+    def test_shared_main_databases_must_preexist_and_remain_executor_owned(self) -> None:
+        self.config.paths.staging_database.unlink()
+        with self.assertRaisesRegex(ValidationError, "layout is invalid"):
+            build_testnet_learning_tool_service(
+                config=self.config,
+                research_database=self.research_path,
+                signed_grant=self.grant,
+                clock=lambda: AT,
+                policy=self.policy,
+            )
+        self.assertFalse(self.config.paths.staging_database.exists())
+
+        self.config.paths.staging_database.touch(mode=0o600)
+        self.config.paths.staging_database.chmod(0o600)
+        real_lstat = Path.lstat
+
+        def selected_lstat(path: Path):
+            metadata = real_lstat(path)
+            if Path(path) != self.config.paths.learning_database:
+                return metadata
+            return SimpleNamespace(
+                st_mode=metadata.st_mode,
+                st_nlink=metadata.st_nlink,
+                st_size=metadata.st_size,
+                st_uid=self.config.control_uid,
+            )
+
+        with (
+            patch.object(
+                Path,
+                "lstat",
+                autospec=True,
+                side_effect=selected_lstat,
+            ),
+            self.assertRaisesRegex(ValidationError, "layout is invalid"),
+        ):
+            build_testnet_learning_tool_service(
+                config=self.config,
+                research_database=self.research_path,
+                signed_grant=self.grant,
+                clock=lambda: AT,
+                policy=self.policy,
+            )
+
+    def test_shared_sidecar_policy_is_checked_before_research_open(self) -> None:
+        sidecar = Path(str(self.config.paths.learning_database) + "-wal")
+        sidecar.write_bytes(b"wal")
+        sidecar.chmod(0o644)
+
+        with self.assertRaisesRegex(ValidationError, "layout is invalid"):
+            build_testnet_learning_tool_service(
+                config=self.config,
+                research_database=self.research_path,
+                signed_grant=self.grant,
+                clock=lambda: AT,
+                policy=self.policy,
+            )
+
+    def test_shared_state_deletion_after_precheck_is_not_recreated(self) -> None:
+        staging_database = self.config.paths.staging_database
+
+        def check_then_delete(path: Path, *, label: str, config) -> None:
+            _shared_state_path(path, label=label, config=config)
+            if path == staging_database:
+                path.unlink()
+
+        with (
+            patch(
+                "trading_harness.learning_tool_service._shared_state_path",
+                side_effect=check_then_delete,
+            ),
+            self.assertRaises(StagingStorageError),
+        ):
+            build_testnet_learning_tool_service(
+                config=self.config,
+                research_database=self.research_path,
+                signed_grant=self.grant,
+                clock=lambda: AT,
+                policy=self.policy,
+            )
+
+        self.assertFalse(staging_database.exists())
 
 
 if __name__ == "__main__":

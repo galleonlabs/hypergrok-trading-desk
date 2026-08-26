@@ -27,8 +27,8 @@ from .errors import ValidationError
 from .policy import exact_decimal
 
 
-EXECUTOR_CONFIG_SCHEMA_VERSION = 1
-EXECUTOR_CONFIG_HASH_DOMAIN = "trading-harness/executor-config/v1"
+EXECUTOR_CONFIG_SCHEMA_VERSION = 2
+EXECUTOR_CONFIG_HASH_DOMAIN = "trading-harness/executor-config/v2"
 MAX_CONFIG_BYTES = 64 * 1024
 
 _ADDRESS_RE = re.compile(r"^0x[0-9a-f]{40}$")
@@ -54,6 +54,9 @@ _ROOT_KEYS = frozenset(
         "environment",
         "venue",
         "node_id",
+        "executor_uid",
+        "research_uid",
+        "control_uid",
         "account_id",
         "main_account_address",
         "api_wallet_address",
@@ -334,6 +337,9 @@ class ExecutorConfig:
     environment: Environment
     venue: str
     node_id: str
+    executor_uid: int
+    research_uid: int
+    control_uid: int
     account_id: str
     main_account_address: str
     api_wallet_address: str
@@ -355,7 +361,10 @@ class ExecutorConfig:
     paths: ExecutorPaths
 
     def __post_init__(self) -> None:
-        if self.schema_version != EXECUTOR_CONFIG_SCHEMA_VERSION:
+        if (
+            type(self.schema_version) is not int
+            or self.schema_version != EXECUTOR_CONFIG_SCHEMA_VERSION
+        ):
             raise ExecutorConfigError(
                 f"schema_version must be {EXECUTOR_CONFIG_SCHEMA_VERSION}"
             )
@@ -373,6 +382,21 @@ class ExecutorConfig:
         if self.venue != "hyperliquid":
             raise ExecutorConfigError("venue must be hyperliquid")
         object.__setattr__(self, "node_id", _identifier(self.node_id, field="node_id"))
+        for field in ("executor_uid", "research_uid", "control_uid"):
+            object.__setattr__(
+                self,
+                field,
+                _integer(
+                    getattr(self, field),
+                    field=field,
+                    minimum=1,
+                    maximum=2_147_483_647,
+                ),
+            )
+        if len({self.executor_uid, self.research_uid, self.control_uid}) != 3:
+            raise ExecutorConfigError(
+                "executor_uid, research_uid, and control_uid must be distinct"
+            )
         object.__setattr__(self, "account_id", _identifier(self.account_id, field="account_id"))
         object.__setattr__(
             self,
@@ -508,6 +532,9 @@ class ExecutorConfig:
                 "environment": self.environment,
                 "venue": self.venue,
                 "node_id": self.node_id,
+                "executor_uid": self.executor_uid,
+                "research_uid": self.research_uid,
+                "control_uid": self.control_uid,
                 "account_id": self.account_id,
                 "main_account_address": self.main_account_address,
                 "api_wallet_address": self.api_wallet_address,
@@ -589,6 +616,9 @@ def parse_executor_config(
         environment=root["environment"],  # type: ignore[arg-type]
         venue=root["venue"],  # type: ignore[arg-type]
         node_id=root["node_id"],  # type: ignore[arg-type]
+        executor_uid=root["executor_uid"],  # type: ignore[arg-type]
+        research_uid=root["research_uid"],  # type: ignore[arg-type]
+        control_uid=root["control_uid"],  # type: ignore[arg-type]
         account_id=root["account_id"],  # type: ignore[arg-type]
         main_account_address=root["main_account_address"],  # type: ignore[arg-type]
         api_wallet_address=root["api_wallet_address"],  # type: ignore[arg-type]

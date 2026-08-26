@@ -1,7 +1,10 @@
-schema_version = 1
+schema_version = 2
 environment = "testnet"
 venue = "hyperliquid"
 node_id = "trading-desk-testnet-executor"
+executor_uid = __REVIEWED_EXECUTOR_UID__
+research_uid = __REVIEWED_RESEARCH_UID__
+control_uid = __REVIEWED_CONTROL_UID__
 account_id = "__REVIEWED_TESTNET_ACCOUNT_ID__"
 main_account_address = "__REVIEWED_MAIN_ACCOUNT_ADDRESS__"
 api_wallet_address = "__REVIEWED_API_WALLET_ADDRESS__"

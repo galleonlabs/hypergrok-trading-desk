@@ -20,6 +20,10 @@ from pathlib import Path
 from .errors import ValidationError
 from .execution_grant import SignedInfrastructureGrant
 from .executor_config import ExecutorConfig
+from .executor_service import (
+    _validate_state_database_layout,
+    _verify_state_database_binding,
+)
 from .hyperliquid_account import HyperliquidAccountSnapshot
 from .learning_bridge import LearningRecorder
 from .learning_ledger import LearningLedger
@@ -78,6 +82,19 @@ def _research_path(value: str | Path, config: ExecutorConfig) -> Path:
     return selected
 
 
+def _shared_state_path(
+    path: Path,
+    *,
+    label: str,
+    config: ExecutorConfig,
+) -> None:
+    try:
+        _validate_state_database_layout(config, path, existing=True)
+        _verify_state_database_binding(config, path)
+    except ValidationError as error:
+        raise ValidationError(f"{label} state layout is invalid") from error
+
+
 def build_testnet_learning_tool_service(
     *,
     config: ExecutorConfig,
@@ -109,7 +126,21 @@ def build_testnet_learning_tool_service(
     if config.risk_policy_hash != policy.policy_hash:
         raise ValidationError("installed risk policy differs from executor configuration")
     selected_research = _research_path(research_database, config)
-    learning = LearningLedger(config.paths.learning_database, clock=clock)
+    _shared_state_path(
+        config.paths.learning_database,
+        label="learning",
+        config=config,
+    )
+    _shared_state_path(
+        config.paths.staging_database,
+        label="staging",
+        config=config,
+    )
+    learning = LearningLedger(
+        config.paths.learning_database,
+        clock=clock,
+        must_exist=True,
+    )
     recorder = LearningRecorder(learning)
     research_store = ResearchStore(selected_research)
     research = ResearchService(
@@ -129,6 +160,17 @@ def build_testnet_learning_tool_service(
         config.paths.staging_database,
         quote_callback=quote,
         clock=clock,
+        must_exist=True,
+    )
+    _shared_state_path(
+        config.paths.learning_database,
+        label="learning",
+        config=config,
+    )
+    _shared_state_path(
+        config.paths.staging_database,
+        label="staging",
+        config=config,
     )
     return ToolService(
         research_service=research,

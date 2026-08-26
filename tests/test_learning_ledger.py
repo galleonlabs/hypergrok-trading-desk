@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from trading_harness.learning_ledger import (
     ApprovalReference,
@@ -30,6 +31,7 @@ from trading_harness.learning_ledger import (
     LedgerBackdatingError,
     LedgerIntegrityError,
     LearningLedger,
+    LearningLedgerError,
     LifecycleError,
     MarketBar,
     MarketPathEvidence,
@@ -41,6 +43,7 @@ from trading_harness.post_trade_review import (
     INTERPRETATION_BOUNDARY,
     PostTradeReviewer,
 )
+from trading_harness.staging_inbox import TradeStagingInbox, TrustedQuoteDecision
 
 
 START = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
@@ -611,11 +614,191 @@ class DecisionAndImmutabilityTests(LearningLedgerTestCase):
             connection.execute(
                 "UPDATE learning_ledger_events SET payload_json = '{}' WHERE sequence = 1"
             )
+            connection.execute(
+                """
+                CREATE TRIGGER learning_ledger_no_update
+                BEFORE UPDATE ON learning_ledger_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'learning ledger events are immutable');
+                END
+                """
+            )
             connection.commit()
         finally:
             connection.close()
+        before = self.path.read_bytes()
         with self.assertRaises(LedgerIntegrityError):
-            LearningLedger(self.path, clock=self.clock)
+            LearningLedger(self.path, clock=self.clock, must_exist=True)
+        self.assertEqual(before, self.path.read_bytes())
+
+
+class ExistingOnlyVerificationTests(LearningLedgerTestCase):
+    def test_learning_event_payload_is_bounded_before_transaction(self) -> None:
+        before = self.path.read_bytes()
+
+        with self.assertRaisesRegex(LearningLedgerError, "payload exceeds"):
+            self.ledger._append(
+                event_type="oversized_test_event",
+                cycle_id="oversized-cycle",
+                semantic_key="oversized-semantic",
+                idempotency_key="oversized-idempotency",
+                occurred_at=START,
+                payload={"evidence": "x" * (1024 * 1024)},
+            )
+
+        self.assertEqual(before, self.path.read_bytes())
+
+    def test_live_append_stops_before_crossing_shared_state_limit(self) -> None:
+        blocked = False
+        limit = 192 * 1024
+        with (
+            patch("trading_harness.learning_ledger.MAX_SHARED_STATE_FILE_BYTES", limit),
+            patch(
+                "trading_harness.learning_ledger._LEARNING_WRITE_HEADROOM_BYTES",
+                32 * 1024,
+            ),
+        ):
+            for index in range(64):
+                try:
+                    self.ledger._append(
+                        event_type="bounded_test_event",
+                        cycle_id=f"bounded-cycle-{index}",
+                        semantic_key=f"bounded-semantic-{index}",
+                        idempotency_key=f"bounded-idempotency-{index}",
+                        occurred_at=START,
+                        payload={"evidence": "x" * 8192},
+                    )
+                except LedgerIntegrityError:
+                    blocked = True
+                    break
+
+        self.assertTrue(blocked)
+        for path in (self.path, Path(f"{self.path}-wal")):
+            if path.exists():
+                self.assertLessEqual(path.stat().st_size, limit)
+
+    def test_existing_only_rejects_invalid_stores_without_mutating_main_file(self) -> None:
+        zero_byte = Path(self.temporary.name) / "zero-byte.sqlite3"
+        zero_byte.touch()
+
+        schema_less = Path(self.temporary.name) / "schema-less.sqlite3"
+        connection = sqlite3.connect(schema_less)
+        try:
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+
+        wrong_store = Path(self.temporary.name) / "staging-store.sqlite3"
+        TradeStagingInbox(
+            wrong_store,
+            quote_callback=lambda request: TrustedQuoteDecision.blocked(
+                block_code="nothing_to_trade"
+            ),
+        )
+
+        for path in (zero_byte, schema_less, wrong_store):
+            with self.subTest(path=path.name):
+                before = path.read_bytes()
+                before_modified = path.stat().st_mtime_ns
+                with self.assertRaises(LedgerIntegrityError):
+                    LearningLedger(path, clock=self.clock, must_exist=True)
+                self.assertEqual(before, path.read_bytes())
+                self.assertEqual(before_modified, path.stat().st_mtime_ns)
+
+    def test_existing_only_does_not_repair_schema_or_metadata(self) -> None:
+        cases = (
+            (
+                "metadata",
+                "DELETE FROM learning_ledger_meta WHERE key = 'schema_version'",
+                "SELECT count(*) FROM learning_ledger_meta",
+            ),
+            (
+                "index",
+                "DROP INDEX learning_ledger_cycle_sequence",
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type = 'index' AND name = 'learning_ledger_cycle_sequence'",
+            ),
+            (
+                "trigger",
+                "DROP TRIGGER learning_ledger_no_delete",
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 'learning_ledger_no_delete'",
+            ),
+        )
+        for name, mutation, absent_query in cases:
+            with self.subTest(name=name):
+                path = Path(self.temporary.name) / f"missing-{name}.sqlite3"
+                LearningLedger(path, clock=self.clock)
+                connection = sqlite3.connect(path)
+                try:
+                    connection.execute(mutation)
+                    connection.commit()
+                finally:
+                    connection.close()
+                before = path.read_bytes()
+
+                with self.assertRaises(LedgerIntegrityError):
+                    LearningLedger(path, clock=self.clock, must_exist=True)
+
+                self.assertEqual(before, path.read_bytes())
+                connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                try:
+                    self.assertEqual(0, connection.execute(absent_query).fetchone()[0])
+                finally:
+                    connection.close()
+
+    def test_existing_only_valid_reopen_keeps_later_operations_writable(self) -> None:
+        reopened = LearningLedger(self.path, clock=self.clock, must_exist=True)
+        event = reopened.record_decision(
+            decision(), idempotency_key="existing-only:decision"
+        )
+        self.assertEqual(event, reopened.events()[0])
+
+    def test_existing_only_verification_includes_a_retained_wal(self) -> None:
+        path = Path(self.temporary.name) / "retained-wal.sqlite3"
+        keeper = sqlite3.connect(path)
+        try:
+            self.assertEqual(
+                "wal", keeper.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            )
+            keeper.execute("PRAGMA wal_autocheckpoint = 0")
+            keeper.execute("BEGIN")
+            keeper.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            ledger = LearningLedger(path, clock=self.clock)
+            expected = ledger.record_decision(
+                decision(), idempotency_key="retained-wal:decision"
+            )
+            wal_path = Path(f"{path}-wal")
+            self.assertTrue(wal_path.is_file())
+            self.assertGreater(wal_path.stat().st_size, 0)
+            main_before = path.read_bytes()
+            wal_before = wal_path.read_bytes()
+
+            reopened = LearningLedger(path, clock=self.clock, must_exist=True)
+
+            self.assertEqual(main_before, path.read_bytes())
+            self.assertEqual(wal_before, wal_path.read_bytes())
+            self.assertEqual((expected,), reopened.events())
+        finally:
+            keeper.close()
+
+    def test_existing_only_rejects_sidecar_symlinks_without_touching_target(self) -> None:
+        for suffix in ("-wal", "-shm"):
+            with self.subTest(suffix=suffix):
+                path = Path(self.temporary.name) / f"symlink{suffix}.sqlite3"
+                LearningLedger(path, clock=self.clock)
+                main_before = path.read_bytes()
+                target = Path(self.temporary.name) / f"target{suffix}"
+                target.write_bytes(b"do-not-touch")
+                sidecar = Path(f"{path}{suffix}")
+                sidecar.unlink(missing_ok=True)
+                sidecar.symlink_to(target)
+
+                with self.assertRaisesRegex(LedgerIntegrityError, "regular file"):
+                    LearningLedger(path, clock=self.clock, must_exist=True)
+
+                self.assertEqual(b"do-not-touch", target.read_bytes())
+                self.assertEqual(main_before, path.read_bytes())
 
 
 class OutcomeAndReviewTests(LearningLedgerTestCase):

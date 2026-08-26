@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 from pathlib import Path
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -158,6 +159,9 @@ class HyperliquidDailyLossSynchronizerTests(unittest.TestCase):
             environment=Environment.TESTNET,
             venue="hyperliquid",
             node_id="loss-sync-node",
+            executor_uid=os.geteuid(),
+            research_uid=os.geteuid() + 1,
+            control_uid=os.geteuid() + 2,
             account_id="dedicated-testnet",
             main_account_address=MAIN_ACCOUNT,
             api_wallet_address=API_WALLET,

@@ -29,6 +29,17 @@ import sqlite3
 from typing import Any
 
 from .canonical import canonical_data, canonical_json, domain_hash, validate_decimal_bounds
+from .executor_state_binding import (
+    MAX_SHARED_STATE_FILE_BYTES,
+    STATE_BINDING_TABLE,
+    STATE_BINDING_TABLE_SQL,
+)
+from .errors import StorageError
+from .sqlite_snapshot import (
+    enforce_sqlite_write_limit,
+    sqlite_verification_snapshot,
+    validate_sqlite_file_sizes,
+)
 
 
 LEDGER_SCHEMA_VERSION = 1
@@ -43,8 +54,80 @@ COUNTERFACTUAL_KEY_DOMAIN = "trading-harness/learning-ledger/counterfactual-key/
 CLOSE_CORRECTION_KEY_DOMAIN = "trading-harness/learning-ledger/close-correction-key/v1"
 COUNTERFACTUAL_DERIVATION_VERSION = "entry-aware-conservative-bracket-path/v2"
 MAX_DECISION_INGEST_LAG = timedelta(minutes=5)
+MAX_LEARNING_EVENT_BYTES = 1024 * 1024
+_LEARNING_WRITE_HEADROOM_BYTES = 2 * 1024 * 1024
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+_EXPECTED_LEDGER_COLUMNS = {
+    "learning_ledger_meta": ("key", "value"),
+    "learning_ledger_events": (
+        "sequence",
+        "event_id",
+        "event_type",
+        "cycle_id",
+        "semantic_key",
+        "idempotency_key",
+        "occurred_at",
+        "recorded_at",
+        "payload_json",
+        "content_hash",
+        "previous_hash",
+        "event_hash",
+        "schema_version",
+    ),
+}
+
+_EXPECTED_LEDGER_SCHEMA_SQL = {
+    "learning_ledger_meta": """
+        CREATE TABLE learning_ledger_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        ) WITHOUT ROWID
+    """,
+    "learning_ledger_events": """
+        CREATE TABLE learning_ledger_events (
+            sequence INTEGER PRIMARY KEY,
+            event_id TEXT NOT NULL UNIQUE,
+            event_type TEXT NOT NULL,
+            cycle_id TEXT NOT NULL,
+            semantic_key TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            occurred_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            previous_hash TEXT NOT NULL,
+            event_hash TEXT NOT NULL UNIQUE,
+            schema_version INTEGER NOT NULL,
+            UNIQUE(event_type, semantic_key)
+        )
+    """,
+    "learning_ledger_cycle_sequence": """
+        CREATE INDEX learning_ledger_cycle_sequence
+        ON learning_ledger_events(cycle_id, sequence)
+    """,
+    "learning_ledger_no_update": """
+        CREATE TRIGGER learning_ledger_no_update
+        BEFORE UPDATE ON learning_ledger_events
+        BEGIN
+            SELECT RAISE(ABORT, 'learning ledger events are immutable');
+        END
+    """,
+    "learning_ledger_no_delete": """
+        CREATE TRIGGER learning_ledger_no_delete
+        BEFORE DELETE ON learning_ledger_events
+        BEGIN
+            SELECT RAISE(ABORT, 'learning ledger events are immutable');
+        END
+    """,
+}
+
+
+def _normalized_schema_sql(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.rstrip("; ").split()).lower()
 
 
 class LearningLedgerError(RuntimeError):
@@ -793,25 +876,61 @@ class LearningLedger:
         path: str | Path,
         *,
         clock: Callable[[], datetime] | None = None,
+        must_exist: bool = False,
     ) -> None:
         if str(path) == ":memory:":
             raise ValueError("learning ledger must be file-backed; :memory: is forbidden")
         self.path = Path(path)
         if self.path.exists() and self.path.is_dir():
             raise ValueError("ledger path must be a file, not a directory")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if type(must_exist) is not bool:
+            raise TypeError("must_exist must be a boolean")
+        self._must_exist = must_exist
+        if not must_exist:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._initialize()
-        self.verify_integrity()
+        if not must_exist:
+            self.verify_integrity()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+    def _connect(
+        self,
+        *,
+        read_only: bool = False,
+        verification_path: Path | None = None,
+    ) -> sqlite3.Connection:
+        database_path = self.path if verification_path is None else verification_path
+        database: str | Path = database_path
+        if read_only:
+            database = f"{database_path.absolute().as_uri()}?mode=ro"
+        elif self._must_exist:
+            database = f"{self.path.absolute().as_uri()}?mode=rw"
+        connection = sqlite3.connect(
+            database,
+            timeout=30,
+            isolation_level=None,
+            uri=read_only or self._must_exist,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
+        if read_only:
+            connection.execute("PRAGMA query_only = ON")
+        else:
+            try:
+                validate_sqlite_file_sizes(
+                    self.path,
+                    max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+                )
+            except StorageError as error:
+                connection.close()
+                raise LedgerIntegrityError(str(error)) from error
         return connection
 
     def _initialize(self) -> None:
+        if self._must_exist:
+            self._verify_existing()
+            return
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
@@ -864,6 +983,90 @@ class LearningLedger:
                 )
             elif existing["value"] != str(LEDGER_SCHEMA_VERSION):
                 raise LedgerIntegrityError("unsupported learning ledger schema version")
+
+    def _verify_existing(self) -> None:
+        try:
+            with sqlite_verification_snapshot(
+                self.path,
+                label="learning ledger database",
+                max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+            ) as snapshot:
+                with closing(
+                    self._connect(
+                        read_only=True,
+                        verification_path=snapshot.database,
+                    )
+                ) as connection:
+                    query_only = connection.execute("PRAGMA query_only").fetchone()
+                    if query_only is None or int(query_only[0]) != 1:
+                        raise LedgerIntegrityError(
+                            "learning ledger verification is not query-only"
+                        )
+                    mode = connection.execute("PRAGMA journal_mode").fetchone()
+                    if mode is None or str(mode[0]).lower() != "wal":
+                        raise LedgerIntegrityError(
+                            "learning ledger database is not in WAL mode"
+                        )
+                    quick_check = connection.execute("PRAGMA quick_check").fetchall()
+                    if not quick_check or any(
+                        str(row[0]).lower() != "ok" for row in quick_check
+                    ):
+                        raise LedgerIntegrityError(
+                            "learning ledger database integrity check failed"
+                        )
+                    self._verify_schema_locked(connection)
+                    self._verify_integrity_locked(connection)
+        except LedgerIntegrityError:
+            raise
+        except StorageError as error:
+            raise LedgerIntegrityError(str(error)) from error
+        except sqlite3.Error as error:
+            raise LedgerIntegrityError(
+                f"learning ledger verification failed: {type(error).__name__}"
+            ) from error
+
+    @staticmethod
+    def _verify_schema_locked(connection: sqlite3.Connection) -> None:
+        for table, expected_columns in _EXPECTED_LEDGER_COLUMNS.items():
+            actual_columns = tuple(
+                str(row["name"])
+                for row in connection.execute(f'PRAGMA table_info("{table}")')
+            )
+            if actual_columns != expected_columns:
+                raise LedgerIntegrityError(
+                    f"learning ledger table {table} has an unexpected schema"
+                )
+        rows = connection.execute(
+            """
+            SELECT name, sql FROM sqlite_master
+            WHERE type IN ('table', 'index', 'trigger', 'view')
+              AND name NOT LIKE 'sqlite_%'
+              AND sql IS NOT NULL
+            """
+        ).fetchall()
+        actual_sql = {
+            str(row["name"]): _normalized_schema_sql(row["sql"]) for row in rows
+        }
+        expected_sql = {
+            name: _normalized_schema_sql(sql)
+            for name, sql in _EXPECTED_LEDGER_SCHEMA_SQL.items()
+        }
+        expected_with_binding = {
+            **expected_sql,
+            STATE_BINDING_TABLE: _normalized_schema_sql(STATE_BINDING_TABLE_SQL),
+        }
+        if actual_sql not in (expected_sql, expected_with_binding):
+            raise LedgerIntegrityError(
+                "learning ledger tables, indexes, or immutability triggers do not match"
+            )
+        metadata = connection.execute(
+            "SELECT key, value FROM learning_ledger_meta ORDER BY key"
+        ).fetchall()
+        if len(metadata) != 1 or (
+            metadata[0]["key"] != "schema_version"
+            or metadata[0]["value"] != str(LEDGER_SCHEMA_VERSION)
+        ):
+            raise LedgerIntegrityError("unsupported learning ledger schema metadata")
 
     def verify_integrity(self) -> str:
         """Verify every persisted event and return the current chain head."""
@@ -968,6 +1171,9 @@ class LearningLedger:
         payload_data = canonical_data(payload)
         if not isinstance(payload_data, Mapping):
             raise TypeError("event payload must canonicalize to a mapping")
+        payload_json = canonical_json(payload_data)
+        if len(payload_json.encode("utf-8")) > MAX_LEARNING_EVENT_BYTES:
+            raise LearningLedgerError("learning event payload exceeds its size limit")
         occurred_text = _iso(occurred_at)
         content = self._event_content(
             event_type=event_type,
@@ -982,6 +1188,15 @@ class LearningLedger:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                try:
+                    enforce_sqlite_write_limit(
+                        connection,
+                        self.path,
+                        max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+                        reserve_bytes=_LEARNING_WRITE_HEADROOM_BYTES,
+                    )
+                except StorageError as error:
+                    raise LedgerIntegrityError(str(error)) from error
                 previous = self._verify_integrity_locked(connection)
                 existing = connection.execute(
                     "SELECT * FROM learning_ledger_events WHERE idempotency_key = ?",
@@ -1055,7 +1270,7 @@ class LearningLedger:
                         idempotency_key,
                         occurred_text,
                         recorded_text,
-                        canonical_json(payload_data),
+                        payload_json,
                         content_hash,
                         previous,
                         event_hash,
@@ -1071,6 +1286,23 @@ class LearningLedger:
             except Exception:
                 connection.rollback()
                 raise
+
+    def require_write_headroom(self) -> None:
+        """Prove one bounded learning append can commit before entry dispatch."""
+
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                enforce_sqlite_write_limit(
+                    connection,
+                    self.path,
+                    max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+                    reserve_bytes=_LEARNING_WRITE_HEADROOM_BYTES,
+                )
+            except StorageError as error:
+                raise LedgerIntegrityError(str(error)) from error
+            finally:
+                connection.rollback()
 
     @staticmethod
     def _row_to_event(row: sqlite3.Row) -> LedgerEvent:

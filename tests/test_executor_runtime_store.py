@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import threading
 import unittest
 
-from trading_harness.errors import StateConflict, StorageError
+from trading_harness.errors import StateConflict, StorageError, ValidationError
 from trading_harness.execution_store import ExecutionStore
-from trading_harness.executor_config import ExecutorConfigDrift, parse_executor_config
+from trading_harness.executor_config import (
+    ExecutorConfig,
+    ExecutorConfigDrift,
+    parse_executor_config,
+)
 from trading_harness.executor_runtime_store import (
     ExecutorRuntimeStore,
     ManualHaltReason,
@@ -33,10 +39,13 @@ def config_text(root: Path, *, poll_interval_ms: int = 1000) -> str:
         directory = root / name
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory.chmod(0o700)
-    return f'''schema_version = 1
+    return f'''schema_version = 2
 environment = "testnet"
 venue = "hyperliquid"
 node_id = "runtime-node-secret-label"
+executor_uid = {os.geteuid()}
+research_uid = {os.geteuid() + 1}
+control_uid = {os.geteuid() + 2}
 account_id = "runtime-account-secret-label"
 main_account_address = "0x1111111111111111111111111111111111111111"
 api_wallet_address = "0x2222222222222222222222222222222222222222"
@@ -94,6 +103,126 @@ class ExecutorRuntimeStoreTests(unittest.TestCase):
         self.config = parse_executor_config(config_text(self.root), environ={})
         self.clock = FakeClock(datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc))
         self.store = ExecutorRuntimeStore(self.config, clock=self.clock)
+
+    @staticmethod
+    def _file_contents(root: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    def test_existing_only_rejects_invalid_files_without_mutation(self) -> None:
+        fixtures: list[tuple[str, Path, ExecutorConfig]] = []
+
+        missing_root = self.root / "missing"
+        missing_root.mkdir()
+        missing_config = parse_executor_config(config_text(missing_root), environ={})
+        fixtures.append(("missing", missing_root, missing_config))
+
+        zero_root = self.root / "zero-byte"
+        zero_root.mkdir()
+        zero_config = parse_executor_config(config_text(zero_root), environ={})
+        zero_path = zero_config.paths.execution_database
+        zero_path.touch()
+        fixtures.append(("zero-byte", zero_root, zero_config))
+
+        empty_root = self.root / "schema-less"
+        empty_root.mkdir()
+        empty_config = parse_executor_config(config_text(empty_root), environ={})
+        empty_path = empty_config.paths.execution_database
+        connection = sqlite3.connect(empty_path)
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+        fixtures.append(("schema-less", empty_root, empty_config))
+
+        wrong_root = self.root / "wrong-store"
+        wrong_root.mkdir()
+        wrong_config = parse_executor_config(config_text(wrong_root), environ={})
+        ExecutionStore(
+            wrong_config.paths.execution_database,
+            environment=wrong_config.environment,
+            account_id=wrong_config.account_id,
+            max_reserved_loss=wrong_config.max_reserved_loss,
+            max_reserved_notional=wrong_config.max_reserved_notional,
+        )
+        fixtures.append(("wrong-store", wrong_root, wrong_config))
+
+        symlink_root = self.root / "symlink"
+        symlink_root.mkdir()
+        symlink_config = parse_executor_config(config_text(symlink_root), environ={})
+        symlink_config.paths.execution_database.symlink_to(
+            self.config.paths.execution_database
+        )
+        fixtures.append(("symlink", symlink_root, symlink_config))
+
+        hardlink_root = self.root / "hardlink"
+        hardlink_root.mkdir()
+        hardlink_config = parse_executor_config(config_text(hardlink_root), environ={})
+        os.link(
+            self.config.paths.execution_database,
+            hardlink_config.paths.execution_database,
+        )
+        fixtures.append(("hardlink", hardlink_root, hardlink_config))
+
+        for name, root, config in fixtures:
+            with self.subTest(name=name):
+                before = self._file_contents(root)
+                with self.assertRaises((StorageError, ValidationError)):
+                    ExecutorRuntimeStore(config, clock=self.clock, must_exist=True)
+                self.assertEqual(before, self._file_contents(root))
+
+    def test_existing_only_valid_reopen_is_read_only_during_verification(self) -> None:
+        before = self._file_contents(self.root)
+        reopened = ExecutorRuntimeStore(
+            self.config, clock=self.clock, must_exist=True
+        )
+        self.assertEqual(before, self._file_contents(self.root))
+        self.assertEqual(RuntimeLeaseState.NOT_STARTED, reopened.read().lease_state)
+
+    def test_existing_only_rejects_extra_runtime_trigger_without_mutation(self) -> None:
+        with closing(
+            sqlite3.connect(self.config.paths.execution_database)
+        ) as connection, connection:
+            connection.execute(
+                """
+                CREATE TRIGGER stealth_runtime_trigger
+                BEFORE INSERT ON executor_runtime_events
+                BEGIN SELECT RAISE(IGNORE); END
+                """
+            )
+        before = self._file_contents(self.root)
+
+        with self.assertRaisesRegex(StorageError, "schema does not match"):
+            ExecutorRuntimeStore(
+                self.config,
+                clock=self.clock,
+                must_exist=True,
+            )
+
+        self.assertEqual(before, self._file_contents(self.root))
+
+    def test_existing_only_verifies_committed_state_retained_in_wal(self) -> None:
+        reader = sqlite3.connect(self.config.paths.execution_database)
+        try:
+            reader.execute("BEGIN")
+            reader.execute(
+                "SELECT COUNT(*) FROM executor_runtime_events"
+            ).fetchone()
+            self.store.acquire(instance_id="wal-worker", lease_seconds=30)
+            wal_path = Path(f"{self.config.paths.execution_database}-wal")
+            self.assertGreater(wal_path.stat().st_size, 0)
+            before = self._file_contents(self.root)
+            reopened = ExecutorRuntimeStore(
+                self.config, clock=self.clock, must_exist=True
+            )
+            self.assertEqual(before, self._file_contents(self.root))
+        finally:
+            reader.close()
+        self.assertEqual(RuntimeLeaseState.ACTIVE, reopened.read().lease_state)
 
     def test_initial_read_is_redacted_not_started_and_halted(self) -> None:
         status = self.store.read()

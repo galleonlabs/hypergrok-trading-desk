@@ -30,6 +30,9 @@ SERVICE_VALUES = {
 }
 CONFIG_VALUES = {
     "__REVIEWED_TESTNET_ACCOUNT_ID__": "dedicated-testnet",
+    "__REVIEWED_EXECUTOR_UID__": "451",
+    "__REVIEWED_RESEARCH_UID__": "450",
+    "__REVIEWED_CONTROL_UID__": "452",
     "__REVIEWED_MAIN_ACCOUNT_ADDRESS__": "0x" + "1" * 40,
     "__REVIEWED_API_WALLET_ADDRESS__": "0x" + "2" * 40,
     "__REVIEWED_INSTRUMENT__": "ETH-PERP",
@@ -111,6 +114,14 @@ class ExecutorDeploymentTemplateTests(unittest.TestCase):
     def test_config_template_renders_to_strict_mainnet_impossible_profile(self) -> None:
         config = parse_executor_config(render(CONFIG, CONFIG_VALUES), environ={})
         self.assertEqual("testnet", config.environment.value)
+        self.assertEqual(
+            (451, 450, 452),
+            (
+                config.executor_uid,
+                config.research_uid,
+                config.control_uid,
+            ),
+        )
         self.assertEqual(RiskSizingPolicy().policy_hash, config.risk_policy_hash)
         self.assertEqual(("ETH-PERP",), config.allowed_instruments)
         self.assertEqual((1,), config.allowed_asset_ids)

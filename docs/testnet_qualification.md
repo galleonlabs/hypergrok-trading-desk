@@ -66,9 +66,57 @@ python3.11 -m venv .venv-execution
 Installing dependencies does not enable execution.
 
 Render the strict executor config from
-`deploy/config/testnet-executor.toml.example`; validate and initialize it with
-`trading-harness-executor validate` and `init`. Retain the redacted config hash
+`deploy/config/testnet-executor.toml.example`. Schema v2 requires the exact
+numeric UIDs of three distinct non-root executor, research, and attended-control
+identities. Validate and initialize it with `trading-harness-executor validate`
+and `init` under the configured executor UID. Retain the redacted config hash
 and confirm `status`/`dry-run` load no credential and make no network call.
+
+Before `init`, retain a root-reviewed directory/ACL report. After `init`, the
+required ownership matrix is:
+
+| Database | Main-file owner | Allowed sidecar owners |
+| --- | --- | --- |
+| Execution | Executor | Executor or attended control |
+| Nonce | Executor | Executor only |
+| Daily loss | Executor | Executor only |
+| Staging | Executor | Executor, attended control, or research |
+| Learning | Executor | Executor, attended control, or research |
+
+“Sidecar” means only the exact `-wal`, `-shm`, or `-journal` path for that
+configured main database. Every artifact must remain a regular, single-link,
+mode-`0600` file with the reviewed ACL. The owner exception never applies to a
+main database. The control socket remains executor-only.
+
+Retain the macOS first-writer probe as evidence: executor-first execution WAL
+and SHM files are executor-owned; control-first WAL and SHM files are
+control-owned while remaining readable and writable by executor through the
+exact inherited ACL. Reopen the control-first database under the executor UID.
+The attended CLI and configured MCP must establish umask `0077` even when
+launched from a shell whose ambient umask is `0022`.
+Prove wrong-UID executor/control command dispatch and wrong-UID configured MCP
+startup fail before a database, grant, Keychain item, or venue client is opened.
+
+On the execution and learning-shared parents, prove control/research have no
+`delete_child`. Before `init`, inherit read/write/read-attribute but no delete;
+after `init`, add delete only to future-file inheritance so existing durable
+mains remain non-deleteable and new SQLite sidecars are cross-cleanable. Retain
+negative unlink, rename and atomic-replacement probes for execution, staging
+and learning mains, plus positive cross-owner WAL/SHM cleanup. Do not proceed
+if main-path replacement is possible under either non-executor identity.
+Permit only the additional direct `list,add_subdirectory` rights required for
+stale-snapshot detection and a
+mode-`0700` verification snapshot beside each DB. Prove snapshots never use
+ambient system temp, clean up normally, remain inside the intended quota, and
+receive only the inherit-only directory `delete` ACE needed to remove their own
+snapshot. They must leave a crash artifact that causes an attended root-review
+stop detected by runtime validation; parent `delete_child` remains forbidden.
+
+Schema v1 is rejected, and the v2 UIDs change the canonical config hash. There
+is no silent state migration, config rebinding, or empty-database recreation.
+On this new machine, run `init` only after proving no harness state exists. If
+any v1-bound or other nonempty state is discovered, preserve its main and
+sidecar files and stop for a separately reviewed migration.
 
 ## Offline gates
 
@@ -98,6 +146,25 @@ Before connecting the signer process, retain passing evidence for:
 15. the research/MCP UID failing read/write access to execution, nonce and
     daily-loss state, while every entry requires a complete same-tick loss
     refresh even across an IDLE-preview/admission race.
+16. the exact v2 UID binding and main/sidecar owner matrix, including a
+    control-first execution WAL/SHM followed by a successful executor reopen;
+17. ambient-`0022` attended CLI launch still producing mode-`0600` SQLite
+    sidecars, with extra ACL principals, wrong owners, hard links, and
+    symlinks all failing closed;
+18. config v1 and nonempty v1-bound state being rejected without mutation,
+    credential loading, database recreation, or venue I/O.
+19. `init` rejecting both a complete rerun and every partial existing/missing
+    state mixture without changing any inode or byte;
+20. existing-only opens rejecting zero-byte, schema-less, wrong-role, drifted
+    or integrity-invalid databases without creating, migrating or rebinding them.
+21. oversized and integrity-invalid shared learning failing fast, blocking all
+    entries, and still allowing core startup reconciliation and each documented
+    account-safety recovery lane from independently verified private state.
+22. exhausting the research UID's dedicated storage quota without consuming
+    executor-private reserve or preventing a nonce/daily-loss/execution WAL
+    commit; and independently approaching the executor-volume shutdown
+    threshold must halt before the 1 GiB reopen ceiling while retaining tested
+    emergency WAL/recovery headroom, both before and after reboot.
 
 ## Live testnet sequence
 

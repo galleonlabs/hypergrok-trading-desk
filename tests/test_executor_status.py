@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -27,10 +28,13 @@ def config_text(root: Path) -> str:
         directory = root / name
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory.chmod(0o700)
-    return f'''schema_version = 1
+    return f'''schema_version = 2
 environment = "testnet"
 venue = "hyperliquid"
 node_id = "sensitive-node-label"
+executor_uid = {os.geteuid()}
+research_uid = {os.geteuid() + 1}
+control_uid = {os.geteuid() + 2}
 account_id = "sensitive-account-label"
 main_account_address = "0x1111111111111111111111111111111111111111"
 api_wallet_address = "0x2222222222222222222222222222222222222222"

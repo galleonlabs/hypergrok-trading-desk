@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -591,6 +593,186 @@ class ExecutionStoreTestCase(unittest.TestCase):
 
 
 class MigrationAndIdentityTests(ExecutionStoreTestCase):
+    @staticmethod
+    def _file_contents(root: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    def test_existing_only_rejects_invalid_files_without_mutation(self) -> None:
+        fixtures: list[tuple[str, Path]] = []
+
+        missing_root = Path(self.temporary.name) / "missing"
+        missing_root.mkdir()
+        fixtures.append(("missing", missing_root / "execution.sqlite3"))
+
+        zero_root = Path(self.temporary.name) / "zero-byte"
+        zero_root.mkdir()
+        zero_path = zero_root / "execution.sqlite3"
+        zero_path.touch()
+        fixtures.append(("zero-byte", zero_path))
+
+        empty_root = Path(self.temporary.name) / "schema-less"
+        empty_root.mkdir()
+        empty_path = empty_root / "execution.sqlite3"
+        connection = sqlite3.connect(empty_path)
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+        fixtures.append(("schema-less", empty_path))
+
+        wrong_root = Path(self.temporary.name) / "wrong-store"
+        wrong_root.mkdir()
+        wrong_path = wrong_root / "execution.sqlite3"
+        SQLiteStore(wrong_path)
+        fixtures.append(("wrong-store", wrong_path))
+
+        symlink_root = Path(self.temporary.name) / "symlink"
+        symlink_root.mkdir()
+        symlink_path = symlink_root / "execution.sqlite3"
+        symlink_path.symlink_to(self.path)
+        fixtures.append(("symlink", symlink_path))
+
+        hardlink_root = Path(self.temporary.name) / "hardlink"
+        hardlink_root.mkdir()
+        hardlink_path = hardlink_root / "execution.sqlite3"
+        os.link(self.path, hardlink_path)
+        fixtures.append(("hardlink", hardlink_path))
+
+        for name, path in fixtures:
+            with self.subTest(name=name):
+                before = self._file_contents(path.parent)
+                with self.assertRaises(StorageError):
+                    ExecutionStore(
+                        path,
+                        environment=Environment.TESTNET,
+                        account_id="testnet-account",
+                        max_reserved_loss="100",
+                        max_reserved_notional="2000",
+                        must_exist=True,
+                    )
+                self.assertEqual(before, self._file_contents(path.parent))
+
+    def test_existing_only_valid_reopen_is_read_only_during_verification(self) -> None:
+        before = self._file_contents(self.path.parent)
+        reopened = ExecutionStore(
+            self.path,
+            environment=Environment.TESTNET,
+            account_id="testnet-account",
+            max_reserved_loss="100",
+            max_reserved_notional="2000",
+            must_exist=True,
+        )
+        self.assertEqual(before, self._file_contents(self.path.parent))
+        self.assertEqual(
+            (Decimal("0"), Decimal("0")), reopened.get_reserved_exposure()
+        )
+
+    def test_existing_only_rejects_extra_trigger_without_mutation(self) -> None:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                CREATE TRIGGER stealth_execution_trigger
+                BEFORE UPDATE ON execution_exposure
+                BEGIN SELECT RAISE(IGNORE); END
+                """
+            )
+        before = self._file_contents(self.path.parent)
+
+        with self.assertRaisesRegex(StorageError, "schema does not match"):
+            ExecutionStore(
+                self.path,
+                environment=Environment.TESTNET,
+                account_id="testnet-account",
+                max_reserved_loss="100",
+                max_reserved_notional="2000",
+                must_exist=True,
+            )
+
+        self.assertEqual(before, self._file_contents(self.path.parent))
+
+    def test_existing_only_rejects_foreign_key_violation_without_mutation(self) -> None:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO execution_plan_legs (
+                    plan_hash, role, cloid, intent_hash, side, reduce_only,
+                    quantity, price_bound, payload_json, content_hash
+                ) VALUES (?, 'entry', ?, ?, 'buy', 0, '1', '1', '{}', ?)
+                """,
+                ("f" * 64, "0x" + "1" * 32, "a" * 64, "b" * 64),
+            )
+        before = self._file_contents(self.path.parent)
+
+        with self.assertRaisesRegex(StorageError, "foreign keys"):
+            ExecutionStore(
+                self.path,
+                environment=Environment.TESTNET,
+                account_id="testnet-account",
+                max_reserved_loss="100",
+                max_reserved_notional="2000",
+                must_exist=True,
+            )
+
+        self.assertEqual(before, self._file_contents(self.path.parent))
+
+    def test_existing_only_verifies_committed_state_retained_in_wal(self) -> None:
+        reader = sqlite3.connect(self.path)
+        try:
+            reader.execute("BEGIN")
+            reader.execute(
+                "SELECT singleton FROM execution_exposure WHERE singleton = 1"
+            ).fetchone()
+            updated_at = NOW + timedelta(seconds=1)
+            exposure_payload = {
+                "reserved_loss": "1",
+                "reserved_notional": "10",
+                "revision": 2,
+                "updated_at": execution_store_module._time_text(
+                    updated_at, field="updated_at"
+                ),
+            }
+            writer = sqlite3.connect(self.path)
+            try:
+                writer.execute("PRAGMA wal_autocheckpoint = 0")
+                writer.execute(
+                    """
+                    UPDATE execution_exposure SET
+                        reserved_loss = '1', reserved_notional = '10',
+                        revision = 2, updated_at = ?, record_hash = ?
+                    WHERE singleton = 1
+                    """,
+                    (
+                        exposure_payload["updated_at"],
+                        execution_store_module._record_hash(
+                            "exposure", exposure_payload
+                        ),
+                    ),
+                )
+                writer.commit()
+            finally:
+                writer.close()
+            self.assertGreater(Path(f"{self.path}-wal").stat().st_size, 0)
+            before = self._file_contents(self.path.parent)
+            reopened = ExecutionStore(
+                self.path,
+                environment=Environment.TESTNET,
+                account_id="testnet-account",
+                max_reserved_loss="100",
+                max_reserved_notional="2000",
+                must_exist=True,
+            )
+            self.assertEqual(before, self._file_contents(self.path.parent))
+        finally:
+            reader.close()
+        self.assertEqual(
+            (Decimal("1"), Decimal("10")), reopened.get_reserved_exposure()
+        )
+
     def test_schema_is_checksummed_wal_and_can_coexist(self) -> None:
         combined = Path(self.temporary.name) / "combined.sqlite"
         SQLiteStore(combined)

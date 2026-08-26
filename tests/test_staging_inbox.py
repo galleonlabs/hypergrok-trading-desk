@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import closing
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 import inspect
@@ -10,7 +11,9 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
+from trading_harness.learning_ledger import LearningLedger
 from trading_harness.staging_inbox import (
     NON_AUTHORITATIVE_STAGING,
     STAGING_INBOX_SCHEMA_VERSION,
@@ -376,6 +379,35 @@ class IdempotencyAndConcurrencyTests(StagingInboxTestCase):
 
 
 class ExpiryAndReadApiTests(StagingInboxTestCase):
+    def test_get_expires_requested_document_beyond_background_batch(self) -> None:
+        created = [
+            self.inbox.stage(
+                self.request(
+                    asset_id=f"batched-asset-{index}",
+                    idempotency_key=f"batched-stage-{index}",
+                )
+            )
+            for index in range(33)
+        ]
+        self.clock.value = NOW + timedelta(minutes=16)
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            first_batch = {
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT document_id FROM staging_documents
+                    ORDER BY expires_at, document_id LIMIT 32
+                    """
+                )
+            }
+        omitted = next(
+            view for view in created if view.document.document_id not in first_batch
+        )
+
+        result = self.inbox.get(omitted.document.document_id)
+
+        self.assertIs(StagingState.EXPIRED, result.state)
+
     def test_expiry_is_one_append_only_event_and_survives_restart(self) -> None:
         created = self.inbox.stage(self.request())
         self.assertIs(StagingState.STAGED, created.state)
@@ -444,6 +476,183 @@ class ExpiryAndReadApiTests(StagingInboxTestCase):
 
 
 class IntegrityAndArchitectureTests(StagingInboxTestCase):
+    def test_live_staging_stops_before_crossing_shared_state_limit(self) -> None:
+        blocked = False
+        limit = 192 * 1024
+        with (
+            patch("trading_harness.staging_inbox.MAX_SHARED_STATE_FILE_BYTES", limit),
+            patch(
+                "trading_harness.staging_inbox._STAGING_WRITE_HEADROOM_BYTES",
+                32 * 1024,
+            ),
+        ):
+            for index in range(128):
+                request = self.request(
+                    asset_id=f"bounded-asset-{index}",
+                    idempotency_key=f"bounded-stage-{index}",
+                )
+                try:
+                    self.inbox.stage(request)
+                except StagingStorageError:
+                    blocked = True
+                    break
+
+        self.assertTrue(blocked)
+        for path in (self.path, Path(f"{self.path}-wal")):
+            if path.exists():
+                self.assertLessEqual(path.stat().st_size, limit)
+
+    def test_existing_only_rejects_invalid_stores_without_mutating_main_file(self) -> None:
+        zero_byte = Path(self.temporary.name) / "zero-byte.sqlite"
+        zero_byte.touch()
+
+        schema_less = Path(self.temporary.name) / "schema-less.sqlite"
+        connection = sqlite3.connect(schema_less)
+        try:
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+
+        wrong_store = Path(self.temporary.name) / "learning-store.sqlite"
+        LearningLedger(wrong_store)
+
+        for path in (zero_byte, schema_less, wrong_store):
+            with self.subTest(path=path.name):
+                before = path.read_bytes()
+                before_modified = path.stat().st_mtime_ns
+                with self.assertRaises(StagingStorageError):
+                    TradeStagingInbox(
+                        path,
+                        quote_callback=self.callback,
+                        clock=self.clock,
+                        must_exist=True,
+                    )
+                self.assertEqual(before, path.read_bytes())
+                self.assertEqual(before_modified, path.stat().st_mtime_ns)
+
+    def test_existing_only_does_not_repair_schema_or_migrations(self) -> None:
+        cases = (
+            (
+                "migration",
+                "DELETE FROM staging_schema_migrations WHERE version = 1",
+                "SELECT count(*) FROM staging_schema_migrations",
+            ),
+            (
+                "index",
+                "DROP INDEX idx_staging_documents_created",
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type = 'index' AND name = 'idx_staging_documents_created'",
+            ),
+            (
+                "trigger",
+                "DROP TRIGGER staging_events_no_delete",
+                "SELECT count(*) FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 'staging_events_no_delete'",
+            ),
+        )
+        for name, mutation, absent_query in cases:
+            with self.subTest(name=name):
+                path = Path(self.temporary.name) / f"missing-{name}.sqlite"
+                TradeStagingInbox(
+                    path,
+                    quote_callback=self.callback,
+                    clock=self.clock,
+                )
+                connection = sqlite3.connect(path)
+                try:
+                    connection.execute(mutation)
+                    connection.commit()
+                finally:
+                    connection.close()
+                before = path.read_bytes()
+
+                with self.assertRaises(StagingStorageError):
+                    TradeStagingInbox(
+                        path,
+                        quote_callback=self.callback,
+                        clock=self.clock,
+                        must_exist=True,
+                    )
+
+                self.assertEqual(before, path.read_bytes())
+                connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                try:
+                    self.assertEqual(0, connection.execute(absent_query).fetchone()[0])
+                finally:
+                    connection.close()
+
+    def test_existing_only_valid_reopen_keeps_later_operations_writable(self) -> None:
+        reopened = TradeStagingInbox(
+            self.path,
+            quote_callback=self.callback,
+            clock=self.clock,
+            must_exist=True,
+        )
+        view = reopened.stage(self.request())
+        self.assertEqual((view,), reopened.list_documents())
+
+    def test_existing_only_verification_includes_a_retained_wal(self) -> None:
+        path = Path(self.temporary.name) / "retained-wal.sqlite"
+        keeper = sqlite3.connect(path)
+        try:
+            self.assertEqual(
+                "wal", keeper.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            )
+            keeper.execute("PRAGMA wal_autocheckpoint = 0")
+            keeper.execute("BEGIN")
+            keeper.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            inbox = TradeStagingInbox(
+                path,
+                quote_callback=self.callback,
+                clock=self.clock,
+            )
+            expected = inbox.stage(self.request(idempotency_key="retained-wal-stage"))
+            wal_path = Path(f"{path}-wal")
+            self.assertTrue(wal_path.is_file())
+            self.assertGreater(wal_path.stat().st_size, 0)
+            main_before = path.read_bytes()
+            wal_before = wal_path.read_bytes()
+
+            reopened = TradeStagingInbox(
+                path,
+                quote_callback=self.callback,
+                clock=self.clock,
+                must_exist=True,
+            )
+
+            self.assertEqual(main_before, path.read_bytes())
+            self.assertEqual(wal_before, wal_path.read_bytes())
+            self.assertEqual((expected,), reopened.list_documents())
+        finally:
+            keeper.close()
+
+    def test_existing_only_rejects_sidecar_symlinks_without_touching_target(self) -> None:
+        for suffix in ("-wal", "-shm"):
+            with self.subTest(suffix=suffix):
+                path = Path(self.temporary.name) / f"symlink{suffix}.sqlite"
+                TradeStagingInbox(
+                    path,
+                    quote_callback=self.callback,
+                    clock=self.clock,
+                )
+                main_before = path.read_bytes()
+                target = Path(self.temporary.name) / f"target{suffix}"
+                target.write_bytes(b"do-not-touch")
+                sidecar = Path(f"{path}{suffix}")
+                sidecar.unlink(missing_ok=True)
+                sidecar.symlink_to(target)
+
+                with self.assertRaisesRegex(StagingStorageError, "regular file"):
+                    TradeStagingInbox(
+                        path,
+                        quote_callback=self.callback,
+                        clock=self.clock,
+                        must_exist=True,
+                    )
+
+                self.assertEqual(b"do-not-touch", target.read_bytes())
+                self.assertEqual(main_before, path.read_bytes())
+
     def test_schema_is_checksummed_restartable_and_owns_only_staging_tables(self) -> None:
         self.inbox.stage(self.request())
         restarted = TradeStagingInbox(
@@ -542,11 +751,14 @@ class IntegrityAndArchitectureTests(StagingInboxTestCase):
         finally:
             connection.close()
         with self.assertRaisesRegex(StagingStorageError, "chain"):
+            before = self.path.read_bytes()
             TradeStagingInbox(
                 self.path,
                 quote_callback=self.callback,
                 clock=self.clock,
+                must_exist=True,
             )
+        self.assertEqual(before, self.path.read_bytes())
 
     def test_static_import_and_callable_capability_boundary(self) -> None:
         tree = ast.parse(MODULE.read_text(encoding="utf-8"), filename=str(MODULE))

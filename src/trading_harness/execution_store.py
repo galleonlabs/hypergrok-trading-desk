@@ -23,11 +23,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from functools import lru_cache
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
+import tempfile
 from typing import Any, Iterator, Mapping, Sequence
 
 from .canonical import canonical_json, domain_hash, semantic_intent_hash
@@ -75,6 +79,113 @@ _RECOVERY_COMMAND_STATES = frozenset(
         "terminal",
     }
 )
+
+
+def _file_signature(file_stat: os.stat_result) -> tuple[int, ...]:
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        stat.S_IMODE(file_stat.st_mode),
+        file_stat.st_uid,
+        file_stat.st_gid,
+        file_stat.st_nlink,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _snapshot_regular_file(
+    path: Path, *, label: str, required_mode: int | None = None
+) -> tuple[tuple[int, ...], str, bytes]:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise StorageError(f"{label} must be a regular single-link file")
+        if required_mode is not None and stat.S_IMODE(before.st_mode) != required_mode:
+            raise StorageError(f"{label} mode must be {required_mode:04o}")
+        digest = hashlib.sha256()
+        header = b""
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            if len(header) < 20:
+                header += chunk[: 20 - len(header)]
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if _file_signature(before) != _file_signature(after):
+            raise StorageError(f"{label} changed while it was read")
+        return _file_signature(after), digest.hexdigest(), header
+    except OSError as error:
+        raise StorageError(f"{label} is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _copy_verification_file(
+    source: Path,
+    destination: Path,
+    *,
+    label: str,
+    expected: tuple[tuple[int, ...], str, bytes],
+) -> None:
+    source_descriptor = -1
+    destination_descriptor = -1
+    try:
+        source_descriptor = os.open(
+            source,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        source_stat = os.fstat(source_descriptor)
+        if _file_signature(source_stat) != expected[0]:
+            raise StorageError(f"{label} changed before verification snapshot")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(destination_descriptor, 0o600)
+        digest = hashlib.sha256()
+        header = b""
+        while True:
+            chunk = os.read(source_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            if len(header) < 20:
+                header += chunk[: 20 - len(header)]
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_descriptor, view)
+                view = view[written:]
+        os.fsync(destination_descriptor)
+        if (
+            _file_signature(os.fstat(source_descriptor)) != expected[0]
+            or digest.hexdigest() != expected[1]
+            or header != expected[2]
+        ):
+            raise StorageError(f"{label} changed during verification snapshot")
+    except OSError as error:
+        raise StorageError(f"{label} could not be snapshotted") from error
+    finally:
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+    copied = _snapshot_regular_file(
+        destination, label=f"temporary {label}", required_mode=0o600
+    )
+    if copied[1:] != expected[1:] or copied[0][6] != expected[0][6]:
+        raise StorageError(f"temporary {label} does not match its source")
+
+
 _LEG_STATES = frozenset(
     {
         "queued",
@@ -1006,6 +1117,51 @@ _MIGRATIONS = (
     _SCHEMA_V10,
 )
 EXECUTION_SCHEMA_VERSION = 10
+
+
+def _execution_schema_objects(
+    connection: sqlite3.Connection,
+) -> tuple[tuple[str, str, str], ...]:
+    rows = connection.execute(
+        """
+        SELECT type, name, sql FROM sqlite_master
+        WHERE sql IS NOT NULL AND (
+            name = 'execution_schema_migrations'
+            OR name LIKE 'execution_%'
+            OR name LIKE 'idx_execution_%'
+            OR tbl_name = 'execution_schema_migrations'
+            OR tbl_name LIKE 'execution_%'
+        )
+        ORDER BY type, name
+        """
+    ).fetchall()
+    return tuple(
+        (str(row["type"]), str(row["name"]), " ".join(str(row["sql"]).split()))
+        for row in rows
+    )
+
+
+@lru_cache(maxsize=1)
+def _expected_execution_schema_objects() -> tuple[tuple[str, str, str], ...]:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute(
+            """
+            CREATE TABLE execution_schema_migrations (
+                version INTEGER PRIMARY KEY CHECK (version > 0),
+                name TEXT NOT NULL UNIQUE,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        for migration in _MIGRATIONS:
+            for statement in migration.statements:
+                connection.execute(statement)
+        return _execution_schema_objects(connection)
+    finally:
+        connection.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2282,6 +2438,7 @@ class ExecutionStore:
         max_reserved_loss: Decimal | str | int,
         max_reserved_notional: Decimal | str | int,
         busy_timeout_ms: int = 5_000,
+        must_exist: bool = False,
     ) -> None:
         if str(path) == ":memory:":
             raise ValidationError("ExecutionStore requires a file-backed database")
@@ -2307,21 +2464,40 @@ class ExecutionStore:
             raise ValidationError("execution-store reservation caps must be positive")
         if type(busy_timeout_ms) is not int or busy_timeout_ms <= 0:
             raise ValidationError("busy_timeout_ms must be a positive integer")
+        if type(must_exist) is not bool:
+            raise TypeError("must_exist must be a boolean")
         self.path = Path(path)
         self.busy_timeout_ms = busy_timeout_ms
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._must_exist = must_exist
+        if not must_exist:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(
+        self,
+        *,
+        read_only: bool = False,
+        verification_path: Path | None = None,
+    ) -> sqlite3.Connection:
+        database_path = self.path if verification_path is None else verification_path
+        database: str | Path = database_path
+        if read_only:
+            immutable = "&immutable=1" if verification_path is None else ""
+            database = f"{database_path.absolute().as_uri()}?mode=ro{immutable}"
+        elif self._must_exist:
+            database = f"{self.path.absolute().as_uri()}?mode=rw"
         connection = sqlite3.connect(
-            self.path,
+            database,
             timeout=self.busy_timeout_ms / 1_000,
             isolation_level=None,
+            uri=read_only or self._must_exist,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms:d}")
         connection.execute("PRAGMA synchronous = FULL")
+        if read_only:
+            connection.execute("PRAGMA query_only = ON")
         return connection
 
     @contextmanager
@@ -2339,6 +2515,9 @@ class ExecutionStore:
             connection.close()
 
     def _initialize(self) -> None:
+        if self._must_exist:
+            self._verify_existing()
+            return
         connection = self._connect()
         try:
             mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
@@ -2489,6 +2668,128 @@ class ExecutionStore:
             raise
         finally:
             connection.close()
+
+    def _verify_existing(self) -> None:
+        database_snapshot = _snapshot_regular_file(
+            self.path, label="execution database"
+        )
+        header = database_snapshot[2]
+        if (
+            len(header) != 20
+            or header[:16] != b"SQLite format 3\x00"
+            or header[18:20] != b"\x02\x02"
+        ):
+            raise StorageError("execution database is not a WAL-mode SQLite file")
+        verification_directory: tempfile.TemporaryDirectory[str] | None = None
+        verification_path: Path | None = None
+        wal_path = Path(f"{self.path}-wal")
+        wal_snapshot = (
+            _snapshot_regular_file(wal_path, label="execution WAL")
+            if os.path.lexists(wal_path)
+            else None
+        )
+        connection: sqlite3.Connection | None = None
+        try:
+            if wal_snapshot is not None and wal_snapshot[0][6] > 0:
+                verification_directory = tempfile.TemporaryDirectory(
+                    prefix=".execution-store-verify-",
+                    dir=self.path.parent,
+                )
+                verification_path = (
+                    Path(verification_directory.name) / self.path.name
+                )
+                _copy_verification_file(
+                    self.path,
+                    verification_path,
+                    label="execution database",
+                    expected=database_snapshot,
+                )
+                _copy_verification_file(
+                    wal_path,
+                    Path(f"{verification_path}-wal"),
+                    label="execution WAL",
+                    expected=wal_snapshot,
+                )
+                if (
+                    _snapshot_regular_file(
+                        self.path, label="execution database"
+                    )
+                    != database_snapshot
+                    or _snapshot_regular_file(
+                        wal_path, label="execution WAL"
+                    )
+                    != wal_snapshot
+                ):
+                    raise StorageError(
+                        "execution database changed during verification snapshot"
+                    )
+            connection = self._connect(
+                read_only=True, verification_path=verification_path
+            )
+            query_only = connection.execute("PRAGMA query_only").fetchone()
+            if query_only is None or int(query_only[0]) != 1:
+                raise StorageError("execution database verification is not query-only")
+            integrity = connection.execute("PRAGMA quick_check").fetchall()
+            if not integrity or any(str(row[0]).lower() != "ok" for row in integrity):
+                raise StorageError("execution database integrity check failed")
+            foreign_key_violations = connection.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+            if foreign_key_violations:
+                raise StorageError("execution database foreign keys are invalid")
+            rows = connection.execute(
+                """
+                SELECT version, name, checksum
+                FROM execution_schema_migrations ORDER BY version
+                """
+            ).fetchall()
+            if len(rows) != len(_MIGRATIONS):
+                raise StorageError("execution migration history is not current")
+            for row, migration in zip(rows, _MIGRATIONS, strict=True):
+                if (
+                    row["version"] != migration.version
+                    or row["name"] != migration.name
+                    or row["checksum"] != migration.checksum
+                ):
+                    raise StorageError(
+                        "execution migration history does not match current schema"
+                    )
+            self._verify_tables_locked(connection)
+            if _execution_schema_objects(
+                connection
+            ) != _expected_execution_schema_objects():
+                raise StorageError("execution database schema does not match")
+            identity = connection.execute(
+                "SELECT * FROM execution_store_identity WHERE singleton = 1"
+            ).fetchone()
+            if identity is None:
+                raise StorageError("execution database identity is missing")
+            self._verify_identity_row(identity)
+            self._read_exposure_locked(connection)
+            current_wal_snapshot = (
+                _snapshot_regular_file(wal_path, label="execution WAL")
+                if os.path.lexists(wal_path)
+                else None
+            )
+            if (
+                _snapshot_regular_file(
+                    self.path, label="execution database"
+                )
+                != database_snapshot
+                or current_wal_snapshot != wal_snapshot
+            ):
+                raise StorageError("execution database changed during verification")
+        except sqlite3.Error as error:
+            raise StorageError(
+                f"execution database verification failed: {type(error).__name__}"
+            ) from error
+        except OSError as error:
+            raise StorageError("execution database snapshot is unavailable") from error
+        finally:
+            if connection is not None:
+                connection.close()
+            if verification_directory is not None:
+                verification_directory.cleanup()
 
     @staticmethod
     def _verify_tables_locked(connection: sqlite3.Connection) -> None:

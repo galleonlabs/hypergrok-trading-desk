@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+import os
 import tempfile
 import unittest
 
@@ -36,10 +37,13 @@ def config_text(root: Path, policy_hash: str) -> str:
         directory = root / name
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory.chmod(0o700)
-    return f'''schema_version = 1
+    return f'''schema_version = 2
 environment = "testnet"
 venue = "hyperliquid"
 node_id = "attended-control"
+executor_uid = {os.geteuid()}
+research_uid = {os.geteuid() + 1}
+control_uid = {os.geteuid() + 2}
 account_id = "learning-account"
 main_account_address = "{ACCOUNT}"
 api_wallet_address = "0x2222222222222222222222222222222222222222"

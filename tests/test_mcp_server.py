@@ -6,13 +6,17 @@ from io import StringIO
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import tomllib
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from trading_harness import mcp_server
+from trading_harness.errors import ValidationError
 from trading_harness.tool_api import ToolService
 from trading_harness.research_api import ResearchService
 from trading_harness.research_store import ResearchStore
@@ -60,6 +64,12 @@ class FakeMCPServer:
 
 
 class MCPAdapterTests(unittest.TestCase):
+    @staticmethod
+    def _current_umask() -> int:
+        current = os.umask(0o777)
+        os.umask(current)
+        return current
+
     @unittest.skipUnless(importlib.util.find_spec("mcp"), "optional mcp runtime")
     def test_registers_exactly_the_bounded_research_service_surface(self) -> None:
         server = mcp_server.build_mcp_server(
@@ -256,6 +266,22 @@ class MCPAdapterTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertIn("install mcp", stderr.getvalue())
 
+    def test_main_sanitizes_sqlite_profile_failure(self) -> None:
+        stderr = StringIO()
+        with (
+            patch.object(
+                mcp_server,
+                "_configured_service",
+                side_effect=sqlite3.OperationalError("sensitive database path"),
+            ),
+            redirect_stderr(stderr),
+        ):
+            result = mcp_server.main([])
+
+        self.assertEqual(2, result)
+        self.assertIn("OperationalError", stderr.getvalue())
+        self.assertNotIn("sensitive database path", stderr.getvalue())
+
     def test_main_defaults_to_stdio(self) -> None:
         server = FakeMCPServer()
         with patch.object(mcp_server, "build_mcp_server", return_value=server):
@@ -264,6 +290,26 @@ class MCPAdapterTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(server.transport, "stdio")
         self.assertEqual(server.run_options, {})
+
+    def test_main_forces_private_umask_for_server_lifetime_and_restores_it(self) -> None:
+        original = os.umask(0o022)
+        self.addCleanup(os.umask, original)
+        observed: list[int] = []
+        server = FakeMCPServer()
+
+        def run(*, transport: str, **options: object) -> None:
+            observed.append(self._current_umask())
+            FakeMCPServer.run(server, transport=transport, **options)
+
+        with (
+            patch.object(server, "run", side_effect=run),
+            patch.object(mcp_server, "build_mcp_server", return_value=server),
+        ):
+            result = mcp_server.main([])
+
+        self.assertEqual(0, result)
+        self.assertEqual([0o077], observed)
+        self.assertEqual(0o022, self._current_umask())
 
     def test_streamable_http_is_loopback_only_on_fixed_mcp_path(self) -> None:
         server = FakeMCPServer()
@@ -342,6 +388,29 @@ class MCPAdapterTests(unittest.TestCase):
                     "/private/grant.json",
                 ]
             )
+
+    def test_configured_learning_profile_requires_research_uid_before_grant_load(self) -> None:
+        arguments = mcp_server.build_parser().parse_args(
+            [
+                "--learning-executor-config",
+                "/private/executor.toml",
+                "--learning-research-db",
+                "/private/research.sqlite3",
+                "--learning-grant",
+                "/private/grant.json",
+            ]
+        )
+        config = SimpleNamespace(research_uid=os.geteuid() + 1)
+        with (
+            patch.object(mcp_server, "load_executor_config", return_value=config),
+            patch.object(
+                mcp_server,
+                "load_signed_infrastructure_grant",
+                side_effect=AssertionError("wrong identity must not read the grant"),
+            ),
+            self.assertRaisesRegex(ValidationError, "research UID"),
+        ):
+            mcp_server._configured_service(arguments)
 
 
 class PluginWiringTests(unittest.TestCase):

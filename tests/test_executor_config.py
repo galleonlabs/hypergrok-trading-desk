@@ -12,10 +12,13 @@ from trading_harness.executor_config import (
 
 
 def config_text(*, root_extra: str = "", path_extra: str = "") -> str:
-    return f'''schema_version = 1
+    return f'''schema_version = 2
 environment = "testnet"
 venue = "hyperliquid"
 node_id = "executor-alpha"
+executor_uid = 451
+research_uid = 450
+control_uid = 452
 account_id = "dedicated-testnet"
 main_account_address = "0x1111111111111111111111111111111111111111"
 api_wallet_address = "0x2222222222222222222222222222222222222222"
@@ -83,6 +86,14 @@ class StrictExecutorConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(first.environment.value, "testnet")
+        self.assertEqual(
+            (451, 450, 452),
+            (
+                first.executor_uid,
+                first.research_uid,
+                first.control_uid,
+            ),
+        )
         self.assertEqual(str(first.daily_loss_limit), "25.50")
         self.assertEqual(str(first.max_reserved_loss), "5")
         self.assertEqual(first.allowed_instruments, ("ETH-PERP",))
@@ -108,6 +119,25 @@ class StrictExecutorConfigTests(unittest.TestCase):
             environ={},
         )
         self.assertNotEqual(first.config_hash, changed.config_hash)
+        changed_uid = parse_executor_config(
+            config_text().replace("control_uid = 452", "control_uid = 453"),
+            environ={},
+        )
+        self.assertNotEqual(first.config_hash, changed_uid.config_hash)
+
+    def test_schema_and_identity_uids_are_strict(self) -> None:
+        cases = (
+            config_text().replace("schema_version = 2", "schema_version = 1"),
+            config_text().replace("schema_version = 2", "schema_version = true"),
+            config_text().replace("executor_uid = 451", "executor_uid = 0"),
+            config_text().replace("research_uid = 450", "research_uid = true"),
+            config_text().replace("control_uid = 452", "control_uid = 451"),
+            config_text().replace("control_uid = 452", "control_uid = 2147483648"),
+        )
+        for text in cases:
+            with self.subTest(text=text[:180]):
+                with self.assertRaises(ExecutorConfigError):
+                    parse_executor_config(text, environ={})
 
     def test_unknown_root_nested_and_private_key_fields_are_rejected(self) -> None:
         cases = (

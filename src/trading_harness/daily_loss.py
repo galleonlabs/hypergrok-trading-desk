@@ -30,7 +30,14 @@ from .canonical import canonical_decimal, domain_hash
 from .domain import Environment
 from .errors import StateConflict, StorageError, ValidationError
 from .executor_config import ExecutorConfigDrift
+from .executor_state_binding import (
+    MAX_PRIVATE_STATE_FILE_BYTES,
+    STATE_BINDING_TABLE,
+    STATE_BINDING_TABLE_SQL_NORMALIZED,
+    normalized_schema_sql,
+)
 from .policy import decimal_add, decimal_subtract, exact_decimal
+from .sqlite_snapshot import sqlite_verification_snapshot
 
 
 DAILY_LOSS_SCHEMA_VERSION = 1
@@ -403,6 +410,12 @@ _EXPECTED_COLUMNS = {
         "record_hash",
     ),
 }
+_EXPECTED_TABLE_OBJECTS = {
+    "daily_loss_schema_migrations": _SCHEMA_STATEMENTS[0],
+    "daily_loss_binding": _SCHEMA_STATEMENTS[1],
+    "daily_loss_events": _SCHEMA_STATEMENTS[2],
+    "daily_loss_coverage": _SCHEMA_STATEMENTS[4],
+}
 _EXPECTED_IMMUTABILITY_OBJECTS = {
     "idx_daily_loss_events_occurred": _SCHEMA_STATEMENTS[3],
     "idx_daily_loss_coverage_window": _SCHEMA_STATEMENTS[5],
@@ -418,7 +431,8 @@ _EXPECTED_IMMUTABILITY_OBJECTS = {
 def _normalized_sql(value: object) -> str:
     if not isinstance(value, str):
         return ""
-    return " ".join(value.rstrip(";").split()).lower()
+    normalized = " ".join(value.rstrip(";").split()).lower()
+    return normalized.replace("create table if not exists ", "create table ", 1)
 
 
 class DailyLossLedger:
@@ -430,6 +444,7 @@ class DailyLossLedger:
         *,
         binding: DailyLossBinding,
         clock: Clock | None = None,
+        must_exist: bool = False,
     ) -> None:
         selected = Path(database)
         if not selected.is_absolute():
@@ -442,7 +457,10 @@ class DailyLossLedger:
             raise TypeError("binding must be DailyLossBinding")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
+        if type(must_exist) is not bool:
+            raise TypeError("must_exist must be a boolean")
         self._database = selected
+        self._must_exist = must_exist
         self._binding = binding
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._initialize()
@@ -452,22 +470,54 @@ class DailyLossLedger:
         return self._binding
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
+    def _connection(
+        self,
+        *,
+        verification_only: bool = False,
+        verification_path: Path | None = None,
+    ) -> Iterator[sqlite3.Connection]:
         try:
+            selected = self._database if verification_path is None else verification_path
+            database: str | Path = selected
+            if verification_only:
+                database = f"{selected.as_uri()}?mode=ro"
+            elif self._must_exist:
+                database = f"{self._database.as_uri()}?mode=rw"
             connection = sqlite3.connect(
-                self._database,
+                database,
                 timeout=5,
                 isolation_level=None,
+                uri=verification_only or self._must_exist,
             )
         except sqlite3.Error as error:
             raise StorageError("daily-loss database is unavailable") from error
         connection.row_factory = sqlite3.Row
         try:
+            if verification_only:
+                connection.execute("PRAGMA query_only = ON")
+                query_only = connection.execute("PRAGMA query_only").fetchone()
+                if query_only is None or query_only[0] != 1:
+                    raise StorageError(
+                        "daily-loss verification connection is not query-only"
+                    )
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA trusted_schema = OFF")
             connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("PRAGMA journal_mode = WAL")
+            if verification_only:
+                journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
+                if journal_mode is None or journal_mode[0].lower() != "wal":
+                    raise StorageError(
+                        "existing daily-loss database is not configured for WAL"
+                    )
+            elif self._must_exist:
+                journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
+                if journal_mode is None or journal_mode[0].lower() != "wal":
+                    raise StorageError(
+                        "existing daily-loss database is not configured for WAL"
+                    )
+            else:
+                connection.execute("PRAGMA journal_mode = WAL")
             yield connection
         except sqlite3.Error as error:
             raise StorageError("daily-loss database operation failed") from error
@@ -489,6 +539,21 @@ class DailyLossLedger:
                 raise
 
     def _initialize(self) -> None:
+        if self._must_exist:
+            with sqlite_verification_snapshot(
+                self._database,
+                label="daily-loss database",
+                max_bytes=MAX_PRIVATE_STATE_FILE_BYTES,
+            ) as snapshot:
+                with self._connection(
+                    verification_only=True,
+                    verification_path=snapshot.database,
+                ) as connection:
+                    self._verify_integrity(connection)
+                    self._verify_schema(connection)
+                    self._bind_or_verify(connection, allow_create=False)
+            return
+
         now = _clock_read(self._clock)
         with self._write() as connection:
             connection.execute(_SCHEMA_STATEMENTS[0])
@@ -518,15 +583,65 @@ class DailyLossLedger:
             ):
                 raise StorageError("daily-loss migration checksum does not match")
             self._verify_schema(connection)
-            self._bind_or_verify(connection, now, allow_create=True)
+            self._bind_or_verify(connection, allow_create=True, now=now)
+
+    @staticmethod
+    def _verify_integrity(connection: sqlite3.Connection) -> None:
+        rows = connection.execute("PRAGMA integrity_check").fetchall()
+        if len(rows) != 1 or rows[0][0] != "ok":
+            raise StorageError("daily-loss database integrity check failed")
 
     @staticmethod
     def _verify_schema(connection: sqlite3.Connection) -> None:
+        object_names = {
+            str(row["name"])
+            for row in connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type IN ('table', 'index', 'trigger')
+                  AND name NOT LIKE 'sqlite_%'
+                """
+            )
+        }
+        expected_names = set(_EXPECTED_TABLE_OBJECTS) | set(
+            _EXPECTED_IMMUTABILITY_OBJECTS
+        )
+        allowed_names = expected_names | {STATE_BINDING_TABLE}
+        if object_names not in (expected_names, allowed_names):
+            raise StorageError("daily-loss database has unexpected schema objects")
+        if STATE_BINDING_TABLE in object_names:
+            binding_rows = connection.execute(
+                "SELECT type, sql FROM sqlite_master WHERE name = ?",
+                (STATE_BINDING_TABLE,),
+            ).fetchall()
+            if len(binding_rows) != 1 or (
+                binding_rows[0]["type"] != "table"
+                or normalized_schema_sql(binding_rows[0]["sql"])
+                != STATE_BINDING_TABLE_SQL_NORMALIZED
+            ):
+                raise StorageError("daily-loss deployment binding schema does not match")
         for table, expected in _EXPECTED_COLUMNS.items():
             rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
             actual = tuple(row["name"] for row in rows)
             if actual != expected:
                 raise StorageError(f"daily-loss table schema does not match: {table}")
+        placeholders = ",".join("?" for _ in _EXPECTED_TABLE_OBJECTS)
+        table_rows = connection.execute(
+            f"""
+            SELECT name, sql FROM sqlite_master
+            WHERE type = 'table' AND name IN ({placeholders})
+            """,
+            tuple(_EXPECTED_TABLE_OBJECTS),
+        ).fetchall()
+        actual_tables = {
+            row["name"]: _normalized_sql(row["sql"]) for row in table_rows
+        }
+        expected_tables = {
+            name: _normalized_sql(sql)
+            for name, sql in _EXPECTED_TABLE_OBJECTS.items()
+        }
+        if actual_tables != expected_tables:
+            raise StorageError("daily-loss table definitions do not match")
         migration_rows = connection.execute(
             "SELECT version, name, checksum FROM daily_loss_schema_migrations ORDER BY version"
         ).fetchall()
@@ -555,7 +670,7 @@ class DailyLossLedger:
     def _bind_or_verify(
         self,
         connection: sqlite3.Connection,
-        now: datetime,
+        now: datetime | None = None,
         *,
         allow_create: bool,
     ) -> None:
@@ -566,6 +681,8 @@ class DailyLossLedger:
         if row is None:
             if not allow_create:
                 raise StorageError("daily-loss binding is missing")
+            if now is None:
+                raise StorageError("daily-loss binding creation requires a timestamp")
             connection.execute(
                 """
                 INSERT INTO daily_loss_binding (

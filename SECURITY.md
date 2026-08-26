@@ -54,6 +54,81 @@ Use this fork's GitHub **Report a vulnerability** flow to open a private securit
   staging/learning state required for exact authorization, but it receives no
   directory capability for nonce, daily-loss or control-socket state.
 
+### Config-bound state ownership
+
+Executor config schema v2 binds three distinct, non-root numeric identities:
+`executor_uid`, `research_uid`, and `control_uid`. They are included in the
+canonical config hash; a v1 config or v1-bound state set is not silently
+migrated, rebound, or recreated.
+
+| SQLite artifact | Allowed owner UID |
+| --- | --- |
+| Every main execution, nonce, daily-loss, staging, or learning database | Executor only |
+| Execution `-wal`, `-shm`, or `-journal` | Executor or attended control |
+| Staging/learning `-wal`, `-shm`, or `-journal` | Executor, attended control, or research |
+| Nonce/daily-loss `-wal`, `-shm`, or `-journal` | Executor only |
+
+The sidecar exceptions are not a general shared-owner rule. An empirical
+macOS WAL probe showed that an executor-created main database remains
+executor-owned while a control-first WAL session creates control-owned WAL and
+SHM files; the executor could read and write those files through the exact
+inherited ACL. Rejecting them solely because their owner differs would turn a
+valid attended write into a restart failure. Main database ownership therefore
+never widens, and no sidecar owned by root, an unknown UID, or research in the
+execution-private directory is accepted.
+
+Mode `0600` alone does not describe named macOS ACL access. Deployment must
+also prove the exact reviewed ACLs and negative access for the research UID.
+Cross-UID SQLite parents remain executor-owned mode `0700` and grant no
+`delete_child`. Before executor `init`, inherited file ACEs deliberately omit
+`delete`, so exclusively reserved mains cannot be swapped during schema
+composition. Only after `init` are the inherit-only directory ACEs extended
+with file-level `delete`; that applies to future sidecars, not existing mains.
+Unlink/rename/replacement denial is tested under every non-owner role. This
+prevents a shared-state writer from swapping a checked main path into an
+executor confused-deputy open.
+
+Strict verification creates a mode-`0700` temporary directory beside the
+source database, not under ambient `TMPDIR`, and removes it on completion.
+Cross-UID parent ACLs therefore allow `list,add_subdirectory` but still no
+`delete_child`; an inherit-only directory ACE grants each permitted role
+`delete` on the verification directory it creates so normal cleanup works.
+Quota headroom includes one bounded snapshot copy. Runtime validation detects a
+crash-left verification directory and stops for root review/removal.
+The attended CLI and MCP entry points set umask `0077` before state composition
+so control-first or research-first SQLite sidecars cannot inherit an ambient
+`0022` mode. The identity policy also fail-closes role drift: non-validation
+executor commands require
+`executor_uid`, attended commands require `control_uid`, and configured MCP
+startup requires `research_uid`. None of this enables mainnet; mainnet remains
+hard-disabled in config, store, signer, and transport.
+
+Existing-state opens are verification-only before use: they require current
+schema, migration history, durable binding and integrity and never create,
+migrate, repair, or bind an existing file. `init` requires every configured
+state directory to be empty and rejects reruns or partial layouts.
+
+Each shared learning/staging main or sidecar has a live 64 MiB application cap.
+The 1 GiB private-file limit is a strict existing-open ceiling; live private
+growth is bounded operationally by the executor volume quota and a lower
+shutdown threshold. Shared verification failure enters a recovery-capable
+degraded composition.
+Learning projection and all entries fail closed, while reconciliation and
+account-safety lanes continue from independently verified execution, nonce and
+daily-loss state. Urgent reconciliation/recovery ticks skip learning scans
+entirely; projection resumes only after the safety lane clears. Entry dispatch
+also requires successful same-tick learning synchronization and bounded append
+headroom, alongside the existing same-tick daily-loss refresh. Once a venue
+write is attempted, post-step learning is skipped until reconciliation clears
+the safety-priority lane.
+
+Application caps do not bound the research-private database, logs, or every
+filesystem write by the research UID. Deployment MUST put all research-writable
+growth on a separately quota-limited volume and retain an executor-private
+capacity reserve that research cannot consume. Until that quota and an
+exhaustion probe pass after reboot, resource isolation is unqualified and
+always-on operation is forbidden.
+
 The normative requirements are in [`docs/trading_harness_spec.md`](docs/trading_harness_spec.md).
 
 ## Forbidden until explicit qualification

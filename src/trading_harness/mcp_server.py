@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 import os
 from pathlib import Path
+import sqlite3
 import sys
 from typing import Any, Protocol
 
@@ -16,7 +17,7 @@ from .tool_api import TOOL_CATALOG, ToolService
 from .executor_config import load_executor_config
 from .grant_artifact import load_signed_infrastructure_grant
 from .learning_tool_service import build_testnet_learning_tool_service
-from .errors import HarnessError
+from .errors import HarnessError, ValidationError
 
 
 _STREAMABLE_HTTP_PATH = "/mcp"
@@ -144,6 +145,8 @@ def _configured_service(arguments: argparse.Namespace) -> ToolService:
             "configured learning profile requires executor config, research DB, and grant"
         )
     config = load_executor_config(arguments.learning_executor_config)
+    if not hasattr(os, "geteuid") or os.geteuid() != config.research_uid:
+        raise ValidationError("configured learning profile requires the research UID")
     signed_grant = load_signed_infrastructure_grant(arguments.learning_grant)
     return build_testnet_learning_tool_service(
         config=config,
@@ -527,28 +530,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the optional adapter over stdio or loopback streamable HTTP."""
 
     arguments = build_parser().parse_args(argv)
+    previous_umask = os.umask(0o077)
     try:
-        server = build_mcp_server(service=_configured_service(arguments))
-    except MCPRuntimeUnavailable as error:
-        print(f"trading-harness MCP: {error}", file=sys.stderr)
-        return 2
-    except (HarnessError, OSError, RuntimeError, TypeError, ValueError) as error:
-        print(
-            f"trading-harness MCP profile failed: {type(error).__name__}",
-            file=sys.stderr,
-        )
-        return 2
-    if arguments.transport == "stdio":
-        server.run(transport="stdio")
-    else:
-        server.run(
-            transport="streamable-http",
-            host=arguments.host,
-            port=arguments.port,
-            streamable_http_path=_STREAMABLE_HTTP_PATH,
-            max_request_body_size=1_000_000,
-        )
-    return 0
+        try:
+            server = build_mcp_server(service=_configured_service(arguments))
+        except MCPRuntimeUnavailable as error:
+            print(f"trading-harness MCP: {error}", file=sys.stderr)
+            return 2
+        except (
+            HarnessError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            sqlite3.Error,
+        ) as error:
+            print(
+                f"trading-harness MCP profile failed: {type(error).__name__}",
+                file=sys.stderr,
+            )
+            return 2
+        if arguments.transport == "stdio":
+            server.run(transport="stdio")
+        else:
+            server.run(
+                transport="streamable-http",
+                host=arguments.host,
+                port=arguments.port,
+                streamable_http_path=_STREAMABLE_HTTP_PATH,
+                max_request_body_size=1_000_000,
+            )
+        return 0
+    finally:
+        os.umask(previous_umask)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by plugin launcher

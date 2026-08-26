@@ -234,14 +234,56 @@ python -m pip install -e '.[execution]'
 
 Start from
 [`deploy/config/testnet-executor.toml.example`](deploy/config/testnet-executor.toml.example),
-render every placeholder, keep the config admin-owned and mode `0400` with
-narrow read ACLs, and create each state-directory parent with mode `0700`.
+render every placeholder, including the three distinct numeric
+`executor_uid`, `research_uid`, and `control_uid` values required by config
+schema v2. Keep the config admin-owned and mode `0400` with narrow read ACLs,
+and create each state-directory parent with mode `0700`.
 Keep execution, nonce, daily-loss and control-socket state in four distinct
 executor-owned parents beneath the executor-private root. This lets the
 attended control identity reach execution SQLite sidecars without gaining
 directory-write access to nonce, daily-loss or socket state. Keep only
-staging/learning in a separately ACL-scoped shared-learning directory. Validate
-and initialize as the executor UID without
+staging/learning in a separately ACL-scoped shared-learning directory.
+Own that shared parent as the executor UID with mode `0700`, just like the
+execution parent. Do not grant `delete_child` on either cross-UID parent.
+Before `init`, inherit only exact file-level read/write/read-attribute rights
+to the permitted SQLite roles, so each exclusively reserved main is
+non-replaceable immediately. After `init`, add `delete` only to the directory's
+inherit-only file ACE for files created in the future; existing mains do not
+inherit it retroactively, while future sidecars do. Prove those roles cannot
+unlink, rename, or replace a main path before any foreground service starts.
+
+Shared staging/learning main and sidecar files have a live 64 MiB application
+cap; 1 GiB is the fail-closed existing-open ceiling for each executor-private
+file, not its live filesystem quota. An invalid or oversized shared-learning
+store disables learning projection and blocks every new entry,
+but it does not prevent the executor from opening core capital state for
+startup reconciliation, protection checks, flattening, cancellation, or noop
+fencing. Those application caps do not replace an OS storage boundary: keep
+all research-writable database, log, and temporary growth on a separately
+quota-limited APFS volume (or equivalent) whose exhaustion cannot consume the
+executor-private reserve. Apply a separate executor-volume quota, monitoring,
+and shutdown threshold below the 1 GiB reopen ceiling. Verification snapshots
+are private temporary directories beside their source database, never ambient
+system temp, so quota headroom must cover one bounded snapshot copy.
+
+Every main SQLite file is created by `init` and must remain owned by the
+configured executor UID. SQLite sidecars are different: the exact
+`-wal`, `-shm`, and `-journal` files for execution may be owned by executor or
+control; those for staging/learning may be owned by executor, control, or
+research; nonce and daily-loss sidecars remain executor-only. This narrow
+exception reflects SQLite's first-sidecar-writer behavior and does not permit
+research to traverse executor-private state. The attended CLI establishes
+umask `0077` before it can create a control-owned sidecar, and the MCP entry
+point does the same before research can create a shared-learning sidecar.
+
+Schema-v1 executor configs are rejected rather than silently reinterpreted.
+The v2 UID policy is part of the canonical config hash and durable database
+binding. Do not point a hand-edited v2 config at v1-bound state or silently
+reinitialize a nonempty deployment. Preserve such state for review; only a
+proved-empty, never-qualified setup may be deliberately initialized anew.
+`init` is an all-empty, one-time transition: it rejects both a complete prior
+state set and any partial mixture instead of repairing or recreating it.
+Validate and initialize as the configured executor UID without
 loading credentials or touching the venue:
 
 ```bash
@@ -250,6 +292,10 @@ trading-harness-executor init --config /absolute/private/testnet-executor.toml
 trading-harness-executor status --config /absolute/private/testnet-executor.toml
 trading-harness-executor dry-run --config /absolute/private/testnet-executor.toml
 ```
+
+Except for read-only config validation, the CLI rejects execution commands
+outside `executor_uid` and attended commands outside `control_uid`. The
+configured learning MCP likewise refuses startup outside `research_uid`.
 
 Grant issuance and trade authorization require direct controlling-terminal
 input. There is intentionally no `--confirmation` argument and piping stdin is

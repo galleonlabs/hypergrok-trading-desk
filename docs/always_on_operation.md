@@ -169,8 +169,11 @@ Install the `execution` extra in a separately reviewed Python 3.11 virtual
 environment. Render
 `deploy/config/testnet-executor.toml.example` to an absolute owner-only file,
 replace every placeholder, and leave the compiled default risk-policy hash
-unchanged unless the code and policy change together. The four Keychain items
-must be distinct:
+unchanged unless the code and policy change together. Executor config schema
+v2 requires distinct, non-root numeric `executor_uid`, `research_uid`, and
+`control_uid` fields. The identities are part of the canonical config hash and
+durable state binding; they are not looked up from an ambient username or
+environment variable. The four Keychain items must be distinct:
 
 - API-wallet secp256k1 private key, readable only by the executor identity;
 - approval HMAC key, readable only by the attended control identity;
@@ -223,8 +226,8 @@ distinct writable parents beneath the executor-private root: `execution/`,
 `daily-loss/` and `socket/`. Own them as the executor UID with mode `0700`.
 Give attended control the inherited SQLite rights it needs only on
 `execution/`; it must have no directory capability on the other three. Create
-the learning-shared parent
-with narrow per-identity ACLs for only research, executor and control. Run
+the learning-shared parent owned by the executor UID with mode `0700` and
+narrow per-identity ACLs for only research, executor and control. Run
 `init` as the executor UID, never as root, so capital-state files have the final
 owner. Do not run Codex/OpenCode as the executor or control UID.
 
@@ -241,26 +244,136 @@ A reviewed macOS layout is, for example:
   attended control only, mode `0700` parent and generation-specific `0600` files;
 - `/var/db/trading-desk/research/`: research SQLite; research only.
 
+The v2 owner policy is exact and distinguishes durable main files from
+transient SQLite sidecars:
+
+| Configured artifact | Main-file owner | Allowed `-wal`/`-shm`/`-journal` owners |
+| --- | --- | --- |
+| Execution database | Executor UID | Executor or attended-control UID |
+| Nonce database | Executor UID | Executor UID only |
+| Daily-loss database | Executor UID | Executor UID only |
+| Staging database | Executor UID | Executor, attended-control, or research UID |
+| Learning database | Executor UID | Executor, attended-control, or research UID |
+
+`init` creates all five main databases as the configured executor UID. A main
+database owned by control, research, root, or an unknown UID is invalid; the
+multi-owner sets apply only to those three exact SQLite sidecar suffixes. The
+configured control-socket path and its parent remain executor-only.
+
+This distinction is required by measured macOS behavior, not convenience. In
+the reviewed sacrificial probe, the main execution database stayed
+executor-owned in both orderings. With an executor-first WAL session its WAL
+and SHM were executor-owned. With a control-first WAL session they were
+control-owned, while the executor still had the exact inherited read/write ACL
+and successfully wrote the database. A process-owned-only sidecar check would
+therefore reject a valid crash/restart state. The v2 policy accepts that exact
+control-owned execution sidecar without admitting control ownership of the
+main database or any control/research ownership in nonce or daily-loss state.
+
 Use inheritable ACLs on the exact shared directories so newly created SQLite
-WAL/SHM sidecars receive the same narrow rights. Prove this across a fresh
-sidecar creation and service restart. Then prove the research UID cannot list,
+WAL/SHM sidecars receive the same narrow rights. Do not grant `delete_child`
+to control or research: that right also permits deletion and replacement of a
+durable main file. Before `init`, grant the permitted roles inherited
+file-level `read,write,readattr` only, while direct directory entries grant only
+`list,search,add_file,add_subdirectory,readattr` (listing supports stale-snapshot
+detection; the subdirectory right is only for
+private colocated verification snapshots), plus an inherit-only directory ACE
+granting each permitted role `delete` on the verification directory it creates.
+Do not grant parent `delete_child`. This makes each
+exclusively reserved main non-deleteable as soon as it appears. Immediately
+after `init`, extend only the directories' inherit-only file ACEs with `delete`.
+Existing mains do not inherit that later right; future sidecars do, so any
+permitted writer can clean up a sidecar created by another permitted writer.
+Prove cross-owner sidecar cleanup,
+then prove every non-executor role is denied unlink, rename and replacement of
+all three durable mains. Also prove the research UID cannot list,
 read, create, unlink or replace anything in `executor-private`, and prove the
 control UID cannot do so in the nonce, daily-loss or socket parents.
+
+Keep every learning/staging main and sidecar below its enforced live 64 MiB cap.
+The 1 GiB private-file check is a reopen ceiling, not a live transaction quota;
+configure an executor-volume quota and alert/shutdown threshold comfortably
+below it. Archive immutable learning evidence before bounds are approached;
+never delete a hot WAL. If shared learning
+is oversized, corrupt, drifted or unavailable, the executor opens only its
+independently verified core state. New entries and learning projection remain
+blocked, but startup reconciliation, protection, reduce-only flatten,
+owned-CLOID cancellation and same-nonce fencing remain available. Treat this as
+a degraded incident and repair/restore shared learning separately—never weaken
+core validation to clear it. `status` and `dry-run` expose
+`shared_learning_available=false` and
+`entry_blocked_by_shared_learning=true` in this lane. Urgent safety ticks skip
+both pre- and post-step learning scans so a large valid ledger cannot delay the
+next reconciliation or recovery action. An entry tick requires both a complete
+same-tick loss refresh and a successful same-tick learning synchronization with
+room for the next bounded projection; prior learning references cannot borrow
+authority after projection becomes unavailable.
+
+These file caps are not an OS quota. Place the research-private database,
+research/MCP logs, shared-learning state and research temporary directory on a
+separately quota-limited APFS volume (or an equivalently enforced storage
+class). Keep executor-private state and its emergency WAL headroom on a reserve
+the research UID cannot consume. Qualify both research and executor quotas,
+private-state shutdown thresholds, log rotation and temporary-file cleanup
+under the real daemon UIDs and after reboot. If the Mac
+cannot enforce this separation, stop; do not claim always-on readiness.
+The verifier never uses ambient `TMPDIR`: it creates a mode-`0700` temporary
+directory next to the source DB and removes it after the read-only check. Budget
+quota headroom for one snapshot copy and fail closed for any crash-left
+`.trading-sqlite-verify-*`, `.execution-store-verify-*`, or
+`.executor-runtime-verify-*` directory; runtime validation detects those names
+and stops until root reviews and removes them.
 
 Validate and initialize without credential or network access:
 
 ```sh
 /opt/trading-desk/executor/.venv/bin/trading-harness-executor validate --config /etc/trading-desk/testnet-executor.toml
 /opt/trading-desk/executor/.venv/bin/trading-harness-executor init --config /etc/trading-desk/testnet-executor.toml
+```
+
+Pause here for the attended root ACL finalization described above: add delete
+to future-file inheritance without modifying existing mains. Record the
+main-file ACLs and the negative unlink/rename/replacement probes; do not open a
+control or research database connection before they pass. Then continue as the
+executor UID:
+
+```sh
 /opt/trading-desk/executor/.venv/bin/trading-harness-executor status --config /etc/trading-desk/testnet-executor.toml
 /opt/trading-desk/executor/.venv/bin/trading-harness-executor dry-run --config /etc/trading-desk/testnet-executor.toml
 ```
 
 `validate`, `init`, `status`, and `dry-run` do not load Keychain items or call
 Hyperliquid. `init` refuses missing/insecure parent directories, binds every
-database to the exact config, and makes state files owner-only. `status` and
-`dry-run` may verify/apply reviewed local SQLite schema migrations when opening
-an older deployment; they make no runtime state transition or venue call.
+database to the exact config, and enforces the v2 main/sidecar owner policy.
+`status` and `dry-run` require complete current schemas, migration histories,
+durable bindings and integrity chains for core execution, nonce and daily-loss
+state. Shared learning is verified separately and is reported as degraded if it
+fails. Existing-state open is verification-only: it never creates, migrates,
+repairs or binds a database. Any migration is a separate reviewed checkpoint.
+These commands make no runtime state transition or venue call.
+
+The executor CLI sets umask `0077` before dispatching every command, including
+attended control commands. Do not replace it with a wrapper that creates or
+pre-opens state under a weaker ambient umask. A control-first WAL/SHM must be
+mode `0600` and carry only the reviewed inherited executor/control ACLs.
+Except for credential-free `validate`, executor commands require the configured
+executor UID, attended commands require the configured control UID, and the
+configured learning MCP requires the configured research UID before it reads
+the signed-grant copy. The MCP entry point also establishes umask `0077` for
+its full server lifetime so foreground qualification has the same sidecar mode
+invariant as launchd.
+
+Config schema v1 is rejected. `init` requires all configured state directories
+to be empty, exclusively reserves all five exact main-file names, and rejects
+reruns and partially populated layouts. An interrupted reservation or schema
+build remains invalid partial state for root review; it is never auto-repaired.
+There is no silent v1-to-v2 state migration and
+no automatic rebinding of an existing database to new UIDs or a new config
+hash. On a new machine, initialize anew only after proving the target state
+directories contain no real harness state (sacrificial ACL probe files are not
+harness state and must be removed by their reviewed probe). If any v1-bound or
+otherwise nonempty state exists, stop, preserve the complete main/WAL/SHM set,
+and require a separately reviewed migration; do not run `init` over it.
 
 Issue a short-lived infrastructure-learning grant in a direct terminal:
 
@@ -381,8 +494,9 @@ An operator check should verify all of the following:
 3. `trading-harness node status` reports `capability: research_only`, venue
    writes disabled, credential loading disabled, an active lease and fresh
    heartbeats for registered assets.
-4. The database and logs remain owned by the research identity and are not
-   group/world writable.
+4. The research-private database and research logs remain owned by the research
+   identity and are not group/world writable; shared learning mains remain
+   executor-owned.
 5. Filesystem usage, log growth, request errors and clock offset remain within
    locally declared limits.
 6. `trading-harness-executor status` shows one current fenced lease, a fresh

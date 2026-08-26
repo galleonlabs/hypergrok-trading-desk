@@ -192,6 +192,7 @@ class ExecutionLearningProjector:
         return inserted
 
     def require_entry_ready(self, command_id: str) -> None:
+        self.recorder.ledger.require_write_headroom()
         command = self.store.get_command(command_id)
         cycle_id = self.cycle_id(command)
         events = self.recorder.ledger.events(cycle_id=cycle_id)

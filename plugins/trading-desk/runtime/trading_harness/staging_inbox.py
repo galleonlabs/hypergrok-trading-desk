@@ -32,6 +32,17 @@ import sqlite3
 from typing import Any
 
 from .canonical import canonical_json, domain_hash
+from .executor_state_binding import (
+    MAX_SHARED_STATE_FILE_BYTES,
+    STATE_BINDING_TABLE,
+    STATE_BINDING_TABLE_SQL,
+)
+from .errors import StorageError
+from .sqlite_snapshot import (
+    enforce_sqlite_write_limit,
+    sqlite_verification_snapshot,
+    validate_sqlite_file_sizes,
+)
 
 
 STAGING_INBOX_SCHEMA_VERSION = 1
@@ -42,6 +53,8 @@ _MAX_TEXT = 128
 _MAX_TICKET_BYTES = 512 * 1024
 _MAX_DOCUMENT_BYTES = 768 * 1024
 _MAX_EVENT_BYTES = 64 * 1024
+_MAX_EXPIRIES_PER_TRANSACTION = 32
+_STAGING_WRITE_HEADROOM_BYTES = 8 * 1024 * 1024
 _MAX_LIST_LIMIT = 1_000
 _MAX_TTL = timedelta(days=1)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -601,6 +614,32 @@ _EXPECTED_TRIGGERS = frozenset(
     }
 )
 
+_EXPECTED_SCHEMA_SQL = {
+    "staging_schema_migrations": """
+        CREATE TABLE staging_schema_migrations (
+            version INTEGER PRIMARY KEY CHECK (version > 0),
+            name TEXT NOT NULL UNIQUE,
+            checksum TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+    """,
+    "staging_documents": _SCHEMA_V1.statements[0],
+    "idx_staging_documents_created": _SCHEMA_V1.statements[1],
+    "idx_staging_documents_expiry": _SCHEMA_V1.statements[2],
+    "staging_events": _SCHEMA_V1.statements[3],
+    "idx_staging_events_document": _SCHEMA_V1.statements[4],
+    "staging_documents_no_update": _SCHEMA_V1.statements[5],
+    "staging_documents_no_delete": _SCHEMA_V1.statements[6],
+    "staging_events_no_update": _SCHEMA_V1.statements[7],
+    "staging_events_no_delete": _SCHEMA_V1.statements[8],
+}
+
+
+def _normalized_schema_sql(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.rstrip("; ").split()).lower()
+
 
 class TradeStagingInbox:
     """Durable immutable inbox whose records never confer trade authority.
@@ -621,6 +660,7 @@ class TradeStagingInbox:
         staged_ttl: timedelta = timedelta(minutes=15),
         blocked_ttl: timedelta = timedelta(minutes=5),
         busy_timeout_ms: int = 5_000,
+        must_exist: bool = False,
     ) -> None:
         if str(path) == ":memory:":
             raise StagingValidationError(
@@ -632,13 +672,17 @@ class TradeStagingInbox:
             raise StagingValidationError("clock must be callable")
         if type(busy_timeout_ms) is not int or busy_timeout_ms <= 0:
             raise StagingValidationError("busy_timeout_ms must be a positive integer")
+        if type(must_exist) is not bool:
+            raise TypeError("must_exist must be a boolean")
         self.path = Path(path)
         self._quote_callback = quote_callback
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._staged_ttl = _positive_ttl(staged_ttl, field_name="staged_ttl")
         self._blocked_ttl = _positive_ttl(blocked_ttl, field_name="blocked_ttl")
         self._busy_timeout_ms = busy_timeout_ms
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._must_exist = must_exist
+        if not must_exist:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
     @property
@@ -648,16 +692,39 @@ class TradeStagingInbox:
     def _now(self) -> datetime:
         return _utc(self._clock(), field_name="clock result")
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(
+        self,
+        *,
+        read_only: bool = False,
+        verification_path: Path | None = None,
+    ) -> sqlite3.Connection:
+        database_path = self.path if verification_path is None else verification_path
+        database: str | Path = database_path
+        if read_only:
+            database = f"{database_path.absolute().as_uri()}?mode=ro"
+        elif self._must_exist:
+            database = f"{self.path.absolute().as_uri()}?mode=rw"
         connection = sqlite3.connect(
-            self.path,
+            database,
             timeout=self._busy_timeout_ms / 1_000,
             isolation_level=None,
+            uri=read_only or self._must_exist,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(f"PRAGMA busy_timeout = {self._busy_timeout_ms:d}")
-        connection.execute("PRAGMA synchronous = FULL")
+        if read_only:
+            connection.execute("PRAGMA query_only = ON")
+        else:
+            connection.execute("PRAGMA synchronous = FULL")
+            try:
+                validate_sqlite_file_sizes(
+                    self.path,
+                    max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+                )
+            except StorageError as error:
+                connection.close()
+                raise StagingStorageError(str(error)) from error
         return connection
 
     @contextmanager
@@ -665,6 +732,15 @@ class TradeStagingInbox:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            try:
+                enforce_sqlite_write_limit(
+                    connection,
+                    self.path,
+                    max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+                    reserve_bytes=_STAGING_WRITE_HEADROOM_BYTES,
+                )
+            except StorageError as error:
+                raise StagingStorageError(str(error)) from error
             yield connection
             connection.commit()
         except sqlite3.Error as error:
@@ -681,12 +757,24 @@ class TradeStagingInbox:
             connection.close()
 
     def _initialize(self) -> None:
+        if self._must_exist:
+            self._verify_existing()
+            return
         connection = self._connect()
         try:
             mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
             if str(mode).lower() != "wal":
                 raise StagingStorageError(f"SQLite refused WAL mode: {mode}")
             connection.execute("BEGIN IMMEDIATE")
+            try:
+                enforce_sqlite_write_limit(
+                    connection,
+                    self.path,
+                    max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+                    reserve_bytes=_STAGING_WRITE_HEADROOM_BYTES,
+                )
+            except StorageError as error:
+                raise StagingStorageError(str(error)) from error
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS staging_schema_migrations (
@@ -759,6 +847,72 @@ class TradeStagingInbox:
         finally:
             connection.close()
 
+    def _verify_existing(self) -> None:
+        try:
+            with sqlite_verification_snapshot(
+                self.path,
+                label="staging database",
+                max_bytes=MAX_SHARED_STATE_FILE_BYTES,
+            ) as snapshot:
+                connection = self._connect(
+                    read_only=True,
+                    verification_path=snapshot.database,
+                )
+                try:
+                    query_only = connection.execute("PRAGMA query_only").fetchone()
+                    if query_only is None or int(query_only[0]) != 1:
+                        raise StagingStorageError(
+                            "staging database verification is not query-only"
+                        )
+                    mode = connection.execute("PRAGMA journal_mode").fetchone()
+                    if mode is None or str(mode[0]).lower() != "wal":
+                        raise StagingStorageError(
+                            "staging database is not in WAL mode"
+                        )
+                    quick_check = connection.execute("PRAGMA quick_check").fetchall()
+                    if not quick_check or any(
+                        str(row[0]).lower() != "ok" for row in quick_check
+                    ):
+                        raise StagingStorageError(
+                            "staging database integrity check failed"
+                        )
+                    self._verify_current_migrations(connection)
+                    self._verify_current_schema(connection)
+                    self._verify_integrity(connection)
+                finally:
+                    connection.close()
+        except StagingStorageError:
+            raise
+        except StorageError as error:
+            raise StagingStorageError(str(error)) from error
+        except sqlite3.Error as error:
+            raise StagingStorageError(
+                f"staging database verification failed: {type(error).__name__}"
+            ) from error
+
+    @staticmethod
+    def _verify_current_migrations(connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT version, name, checksum, applied_at
+            FROM staging_schema_migrations ORDER BY version
+            """
+        ).fetchall()
+        if len(rows) != len(_MIGRATIONS):
+            raise StagingStorageError(
+                "staging migration history is not current"
+            )
+        for row, migration in zip(rows, _MIGRATIONS, strict=True):
+            if (
+                row["version"] != migration.version
+                or row["name"] != migration.name
+                or row["checksum"] != migration.checksum
+            ):
+                raise StagingStorageError(
+                    "staging migration history does not match current schema"
+                )
+            _parse_time(row["applied_at"], field_name="migration applied_at")
+
     @staticmethod
     def _verify_table_columns(connection: sqlite3.Connection, table: str) -> None:
         actual = tuple(
@@ -789,6 +943,32 @@ class TradeStagingInbox:
         }
         if not _EXPECTED_TRIGGERS.issubset(triggers):
             raise StagingStorageError("staging schema is missing immutability triggers")
+
+    def _verify_current_schema(self, connection: sqlite3.Connection) -> None:
+        self._verify_schema(connection)
+        rows = connection.execute(
+            """
+            SELECT name, sql FROM sqlite_master
+            WHERE type IN ('table', 'index', 'trigger', 'view')
+              AND name NOT LIKE 'sqlite_%'
+              AND sql IS NOT NULL
+            """
+        ).fetchall()
+        actual_sql = {
+            str(row["name"]): _normalized_schema_sql(row["sql"]) for row in rows
+        }
+        expected_sql = {
+            name: _normalized_schema_sql(sql)
+            for name, sql in _EXPECTED_SCHEMA_SQL.items()
+        }
+        expected_with_binding = {
+            **expected_sql,
+            STATE_BINDING_TABLE: _normalized_schema_sql(STATE_BINDING_TABLE_SQL),
+        }
+        if actual_sql not in (expected_sql, expected_with_binding):
+            raise StagingStorageError(
+                "staging tables, indexes, or immutability triggers do not match"
+            )
 
     @staticmethod
     def _quote_result(
@@ -1292,8 +1472,12 @@ class TradeStagingInbox:
              AND e.event_type = 'document_expired'
             WHERE d.expires_at <= ? AND e.sequence IS NULL
             ORDER BY d.expires_at, d.document_id
+            LIMIT ?
             """,
-            (_time_text(at, field_name="expiry check"),),
+            (
+                _time_text(at, field_name="expiry check"),
+                _MAX_EXPIRIES_PER_TRANSACTION,
+            ),
         ).fetchall()
         for row in rows:
             document = self._document_from_row(row)
@@ -1304,6 +1488,33 @@ class TradeStagingInbox:
                 occurred_at=at,
             )
         return len(rows)
+
+    def _expire_document_if_due(
+        self,
+        connection: sqlite3.Connection,
+        document: StagingDocument,
+        *,
+        at: datetime,
+    ) -> int:
+        if document.expires_at > at:
+            return 0
+        existing = connection.execute(
+            """
+            SELECT 1 FROM staging_events
+            WHERE document_id = ? AND event_type = 'document_expired'
+            LIMIT 1
+            """,
+            (document.document_id,),
+        ).fetchone()
+        if existing is not None:
+            return 0
+        self._append_event(
+            connection,
+            event_type=StagingEventType.DOCUMENT_EXPIRED,
+            document=document,
+            occurred_at=at,
+        )
+        return 1
 
     @staticmethod
     def _view(connection: sqlite3.Connection, document: StagingDocument) -> StagingView:
@@ -1409,7 +1620,7 @@ class TradeStagingInbox:
             return self._view(connection, document)
 
     def expire_due(self) -> int:
-        """Append at most one expiry event for every due document."""
+        """Append one bounded batch of due expiry events."""
 
         with self._transaction() as connection:
             self._verify_integrity(connection)
@@ -1423,7 +1634,8 @@ class TradeStagingInbox:
         identity = _text(document_id, field_name="document_id", maximum=68)
         with self._transaction() as connection:
             self._verify_integrity(connection)
-            self._expire_due(connection, at=self._now())
+            now = self._now()
+            self._expire_due(connection, at=now)
             row = connection.execute(
                 "SELECT * FROM staging_documents WHERE document_id = ?",
                 (identity,),
@@ -1431,6 +1643,7 @@ class TradeStagingInbox:
             if row is None:
                 raise StagingNotFound("staging document does not exist")
             document = self._document_from_row(row)
+            self._expire_document_if_due(connection, document, at=now)
             self._verify_integrity(connection)
             return self._view(connection, document)
 
@@ -1443,7 +1656,8 @@ class TradeStagingInbox:
         digest = _idempotency_hash(key)
         with self._transaction() as connection:
             self._verify_integrity(connection)
-            self._expire_due(connection, at=self._now())
+            now = self._now()
+            self._expire_due(connection, at=now)
             row = connection.execute(
                 """
                 SELECT * FROM staging_documents WHERE idempotency_key_hash = ?
@@ -1453,6 +1667,7 @@ class TradeStagingInbox:
             if row is None:
                 raise StagingNotFound("staging document does not exist")
             document = self._document_from_row(row)
+            self._expire_document_if_due(connection, document, at=now)
             self._verify_integrity(connection)
             return self._view(connection, document)
 

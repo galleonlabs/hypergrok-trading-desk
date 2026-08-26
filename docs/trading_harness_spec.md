@@ -150,6 +150,99 @@ references. Dynamic plan CLOIDs are trusted only from the exact durable
 three-leg plan; flatten CLOIDs are domain-separated derivatives of the exact
 incident and fresh position snapshot and are rechecked by the live signer.
 
+### 2.5 Config-bound filesystem identities
+
+Executor config schema v2 contains three distinct, positive, non-root numeric
+fields: `executor_uid`, `research_uid`, and `control_uid`. The UID values are
+part of the canonical v2 config hash and therefore the durable deployment
+binding. Runtime ownership decisions are derived from these fixed roles; the
+config cannot supply a wider arbitrary owner list.
+
+The normative SQLite ownership matrix is:
+
+| State class | Main database | Exact `-wal`/`-shm`/`-journal` sidecars |
+| --- | --- | --- |
+| Execution | Executor UID only | Executor or control UID |
+| Nonce | Executor UID only | Executor UID only |
+| Daily loss | Executor UID only | Executor UID only |
+| Staging | Executor UID only | Executor, control, or research UID |
+| Learning | Executor UID only | Executor, control, or research UID |
+
+The control socket and its parent are executor-only. Main files are created by
+credential-free `init` under the executor UID and never acquire the sidecar
+owner exception. Every accepted artifact is a regular, single-link,
+mode-`0600` file; every state parent is a real mode-`0700` directory with its
+separately reviewed owner and ACL. Named ACL verification and negative access
+tests remain required because POSIX mode bits alone do not reveal macOS named
+principals.
+
+Cross-UID SQLite parents MUST remain executor-owned mode `0700` and MUST NOT
+grant `delete_child` to control or research. Pre-init inherit-only file ACEs
+MUST omit delete so exclusive main-file reservations are non-replaceable during
+composition. After `init`, file-level delete MAY be added only to future-file
+inheritance, leaving existing mains unchanged while enabling sidecar lifecycle.
+Qualification MUST prove control/research cannot unlink, rename or replace a
+main path and can still clean up cross-owner sidecars.
+
+Read-only verification snapshots MUST be mode `0700`, colocated with their
+source storage class, bounded by that class's quota and independent of ambient
+temporary-directory environment. `list,add_subdirectory` MAY be granted for this
+single purpose without `delete_child`; an inherit-only directory `delete` ACE
+MAY permit the creating role to remove that exact snapshot normally. Crash-left
+snapshot directories MUST be detected by runtime validation and require
+attended root review before reuse.
+
+The execution-sidecar exception follows an empirical macOS invariant. The
+executor-created main file retained executor ownership in both tested writer
+orders. When executor opened WAL first, WAL/SHM were executor-owned. When the
+attended control process opened WAL first, WAL/SHM were control-owned and the
+executor successfully cross-wrote through the exact inherited ACL. Treating
+all sidecars as process-owned would fail a legitimate restart; permitting the
+control UID for the exact execution sidecars preserves the narrower capital
+boundary. Research remains forbidden from execution state, and control and
+research remain forbidden from nonce, daily-loss, and socket state.
+
+The executor CLI and MCP entry points establish umask `0077` before state
+composition so attended control and research processes cannot create
+group/world-accessible sidecars through an ambient shell umask. Except for
+config-only validation, executor commands MUST run as `executor_uid`, attended
+commands MUST run as `control_uid`, and a configured learning MCP MUST run as
+`research_uid`. Schema v1 is rejected. No implementation may silently rewrite
+a v1 config as v2, rebind nonempty v1 state to the v2 hash, or create a
+replacement empty database when existing state is expected. Empty,
+never-qualified deployments may be deliberately initialized under v2; all
+other transitions require a separately reviewed state migration. None of
+these ownership rules represents or enables mainnet authority. Mainnet remains
+hard-disabled.
+
+`init` MUST be a one-time all-empty transition and MUST reject complete reruns
+and partial layouts. It MUST reserve each exact main-file name with exclusive,
+no-follow creation before schema composition; an interrupted partial result
+MUST remain fail-closed for explicit review. Existing-state open MUST first verify the complete current
+schema, migration history, durable binding and integrity without any CREATE,
+migration, repair or new binding. A zero-byte, schema-less, wrong-role or
+drifted file is invalid state, never a fresh database opportunity.
+
+Each learning/staging main and sidecar MUST enforce a live 64 MiB application
+cap. Each executor-private main and sidecar has a 1 GiB existing-open ceiling;
+live growth MUST additionally be constrained by an executor-only filesystem
+quota and lower monitored shutdown threshold. Shared-state size, schema,
+binding or integrity failure MUST block learning projection and every new entry, but MUST
+NOT prevent an otherwise valid core executor from starting reconciliation,
+protection and deterministic account-safety recovery. Shared evidence repair is
+a separate degraded-state procedure; capital recovery never depends on an
+unbounded research-writable scan. Urgent safety lanes MUST skip learning
+projection until the urgent lane clears. Entry dispatch MUST require successful
+same-tick learning synchronization and verified append headroom in addition to
+the authoritative same-tick daily-loss refresh. After any venue-write attempt,
+learning projection MUST yield to response/unknown-outcome reconciliation.
+
+All research-writable databases, logs and temporary growth MUST additionally
+be confined to a quota-limited storage class whose exhaustion cannot consume
+executor-private commit/recovery headroom. File-size checks alone are not this
+boundary. Qualification MUST fill the research quota and prove private
+execution, nonce and daily-loss commits still succeed.
+
 ## 3. Why HyperGrok Is Unsafe for Mainnet As-Is
 
 ### 3.1 Controls are instructions rather than enforcement

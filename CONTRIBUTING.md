@@ -22,4 +22,8 @@ HyperGrok is instructions and resources for a user's Grok Bot, not software the 
 bash scripts/check.sh
 ```
 
-The check verifies frontmatter, directory/name agreement, description length, internal links and the one-writer rule. CI runs the same script.
+The check runs three passes and CI runs the same script:
+
++ Instruction files: frontmatter, directory/name agreement, description length, internal links and the one-writer rule.
++ `scripts/check_manifests.py` - the plugin distribution contract. Every manifest (`plugin.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.cursor-plugin/plugin.json`, `.grok-plugin/plugin.json`, `.grok-plugin/marketplace.json`) must be valid JSON, name the same plugin at the same version as `plugin.json`, point every declared source, logo, skills, agents and rules path at something that exists inside this repository, and claim the counts the repository actually ships. Adding or removing a skill or role means updating the manifests that state the count in prose.
++ `scripts/test_check_manifests.py` - negative fixtures that prove the manifest check fails on a version mismatch, a missing component path, invalid JSON and inventory drift.

@@ -112,3 +112,7 @@ if errors:
     print("\n".join(errors)); print(f"{len(errors)} problem(s)"); sys.exit(1)
 print(f"ok: {len(skills)} skills, {len(agents)} agents, {len(md_files)} markdown files checked")
 PY
+
+# The plugin distribution contract: manifests, shared identity, component paths.
+python3 scripts/check_manifests.py .
+python3 scripts/test_check_manifests.py

@@ -236,9 +236,12 @@ Start from
 [`deploy/config/testnet-executor.toml.example`](deploy/config/testnet-executor.toml.example),
 render every placeholder, keep the config admin-owned and mode `0400` with
 narrow read ACLs, and create each state-directory parent with mode `0700`.
-Keep execution/nonce/daily-loss/control-socket state in an executor-private
-directory and only staging/learning in a separately ACL-scoped shared-learning
-directory. Validate and initialize as the executor UID without
+Keep execution, nonce, daily-loss and control-socket state in four distinct
+executor-owned parents beneath the executor-private root. This lets the
+attended control identity reach execution SQLite sidecars without gaining
+directory-write access to nonce, daily-loss or socket state. Keep only
+staging/learning in a separately ACL-scoped shared-learning directory. Validate
+and initialize as the executor UID without
 loading credentials or touching the venue:
 
 ```bash

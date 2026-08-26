@@ -204,10 +204,11 @@ lookup under its final UID with the explicit keychain path, and negatively test
 the research UID. Do not proceed if a LaunchDaemon cannot read the intended
 item after reboot without unlocking a login session.
 
-Use three different local directories: executor-private state for execution,
-nonce, daily-loss and the control socket; learning-shared state for only
-`staging.sqlite3` and `learning.sqlite3` (including their WAL/SHM sidecars); and
-research-private state for research data. Never put these files under one
+Use three different local directory classes: executor-private state for
+execution, nonce, daily-loss and the configured control-socket path;
+learning-shared state for only `staging.sqlite3` and `learning.sqlite3`
+(including their WAL/SHM sidecars); and research-private state for research
+data. Never put these files under one
 writable parent: directory write access permits unlink/replacement even when a
 database is mode `0600`. The research/MCP identity must have no read or write
 access to executor-private state. In particular, it must never open the
@@ -216,24 +217,35 @@ the executor performs the mandatory same-cycle refresh before any entry send.
 
 Keep the reviewed config admin/root-owned, mode `0400`, and grant exact read
 ACLs to the executor and attended-control identities. The loader accepts an
-admin-owned file but rejects group/world mode bits. Create executor-private
-parents as the executor UID with mode `0700`; create the learning-shared parent
+admin-owned file but rejects group/world mode bits. Create four
+distinct writable parents beneath the executor-private root: `execution/`,
+`nonce/`,
+`daily-loss/` and `socket/`. Own them as the executor UID with mode `0700`.
+Give attended control the inherited SQLite rights it needs only on
+`execution/`; it must have no directory capability on the other three. Create
+the learning-shared parent
 with narrow per-identity ACLs for only research, executor and control. Run
 `init` as the executor UID, never as root, so capital-state files have the final
 owner. Do not run Codex/OpenCode as the executor or control UID.
 
 A reviewed macOS layout is, for example:
 
-- `/var/db/trading-desk/executor-private/`: execution, nonce, daily-loss and
-  control socket; executor RW, control RW only where authorization requires,
-  research no access;
+- `/var/db/trading-desk/executor-private/execution/`: execution SQLite and
+  sidecars; executor RW, attended control narrowly RW, research no access;
+- `/var/db/trading-desk/executor-private/nonce/`,
+  `/var/db/trading-desk/executor-private/daily-loss/` and
+  `/var/db/trading-desk/executor-private/socket/`: executor only;
 - `/var/db/trading-desk/learning-shared/`: staging and learning SQLite files;
   research, executor and control receive only the required ACL entries;
+- `/var/db/trading-desk/control-private/grants/`: original signed grants;
+  attended control only, mode `0700` parent and generation-specific `0600` files;
 - `/var/db/trading-desk/research/`: research SQLite; research only.
 
-Apply ACLs to the exact directories/files and SQLite sidecars, then prove the
-research UID cannot list, read, create, unlink or replace anything in
-`executor-private`.
+Use inheritable ACLs on the exact shared directories so newly created SQLite
+WAL/SHM sidecars receive the same narrow rights. Prove this across a fresh
+sidecar creation and service restart. Then prove the research UID cannot list,
+read, create, unlink or replace anything in `executor-private`, and prove the
+control UID cannot do so in the nonce, daily-loss or socket parents.
 
 Validate and initialize without credential or network access:
 
@@ -253,7 +265,7 @@ an older deployment; they make no runtime state transition or venue call.
 Issue a short-lived infrastructure-learning grant in a direct terminal:
 
 ```sh
-/opt/trading-desk/executor/.venv/bin/trading-harness-executor issue-grant --config /etc/trading-desk/testnet-executor.toml --output /var/db/trading-desk/control/active-learning-grant.json --grant-id testnet-learning-001 --ttl-seconds 3600
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor issue-grant --config /etc/trading-desk/testnet-executor.toml --output /var/db/trading-desk/control-private/grants/learning-grant-g1.json --grant-id testnet-learning-001 --ttl-seconds 3600
 ```
 
 The command opens `/dev/tty` and requires the exact displayed confirmation. It
@@ -265,13 +277,15 @@ must be tested independently.
 Run the configured agent-facing MCP service under the research identity:
 
 ```sh
-/opt/trading-desk/research/.venv/bin/trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000 --learning-executor-config /etc/trading-desk/research-testnet-profile.toml --learning-research-db /var/db/trading-desk/research/research.sqlite3 --learning-grant /var/db/trading-desk/research/active-learning-grant.json
+/opt/trading-desk/research/.venv/bin/trading-harness-mcp --transport streamable-http --host 127.0.0.1 --port 8000 --learning-executor-config /etc/trading-desk/research-testnet-profile.toml --learning-research-db /var/db/trading-desk/research/research.sqlite3 --learning-grant /var/db/trading-desk/research/learning-grant-g1.json
 ```
 
-Before startup, the research-readable admin-owned config and signed-grant
-copies must have exact bytes/hashes matching the control-plane artifacts;
-never make the control copy writable by research. Research uses the signed grant only as a quote scope and
-does not receive its symmetric HMAC key. Its fifteen tools can analyze and stage, but still
+Before startup, use a research-readable root-owned config and a root-owned
+mode-`0400` signed-grant copy with narrow read ACLs for the research identity.
+The config and grant copies must have exact bytes/hashes matching their
+control-plane artifacts; never make the control copy writable by research.
+Research uses the signed grant only as a quote scope and does not receive its
+symmetric HMAC key. Its fifteen tools can analyze and stage, but still
 cannot approve, reserve, load the API wallet, sign, or write to `/exchange`.
 It also cannot open the executor daily-loss database: staged quotes explicitly
 defer that value, and an entry requires a complete authoritative loss refresh
@@ -297,7 +311,7 @@ terminal:
 
 ```sh
 /opt/trading-desk/executor/.venv/bin/trading-harness-executor show-stage --config /etc/trading-desk/testnet-executor.toml --document-id stg_REVIEWED_ID
-/opt/trading-desk/executor/.venv/bin/trading-harness-executor authorize-stage --config /etc/trading-desk/testnet-executor.toml --grant /var/db/trading-desk/control/active-learning-grant.json --document-id stg_REVIEWED_ID --approver-id local-operator
+/opt/trading-desk/executor/.venv/bin/trading-harness-executor authorize-stage --config /etc/trading-desk/testnet-executor.toml --grant /var/db/trading-desk/control-private/grants/learning-grant-g1.json --document-id stg_REVIEWED_ID --approver-id local-operator
 ```
 
 After the configured MCP passes in the foreground, render the matching
@@ -307,9 +321,10 @@ numeric loopback and is not an authenticated public service.
 
 The grant is loaded once at MCP startup. Renew it by issuing a new,
 non-overwriting artifact with an incremented generation, verifying/copying its
-exact bytes to a new research-owned path, updating the rendered MCP service to
-that path, and restarting only the MCP service. Keep the matching control copy
-for `authorize-stage`; never overwrite or reuse an expired generation.
+exact bytes to a new root-owned mode-`0400` research-readable path, updating
+the rendered MCP service to that path, and restarting only the MCP service.
+Keep the matching control copy for `authorize-stage`; never overwrite or reuse
+an expired generation.
 
 Only then run the worker in the foreground. It synchronizes exact fills and
 funding, refuses stale/incomplete daily-loss coverage, performs startup
@@ -352,8 +367,10 @@ and reason from the attended control terminal:
 ```
 
 The command requires an exact `/dev/tty` phrase, loads no credential, performs
-no venue write and leaves the risk gate HALTED. Restart still has to complete
-startup reconciliation before READY.
+no venue write and leaves the risk gate HALTED. It opens only the execution
+database, so the attended control identity needs no nonce, daily-loss or
+control-socket access. Restart still has to complete startup reconciliation
+before READY.
 
 ## Health, restart and graceful-stop checks
 

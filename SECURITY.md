@@ -50,6 +50,9 @@ Use this fork's GitHub **Report a vulnerability** flow to open a private securit
   daily-loss or control-socket state. Only staging and learning databases live
   in the narrowly ACL-scoped shared-learning directory; agent quotes defer the
   authoritative daily-loss decision to the executor's same-cycle refresh.
+- The attended control identity may write the execution database and shared
+  staging/learning state required for exact authorization, but it receives no
+  directory capability for nonce, daily-loss or control-socket state.
 
 The normative requirements are in [`docs/trading_harness_spec.md`](docs/trading_harness_spec.md).
 

@@ -147,6 +147,12 @@ class HyperliquidDailyLossSynchronizerTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         root = Path(self.temporary.name).absolute()
+        state_parents = {
+            name: root / name
+            for name in ("execution", "nonce", "daily-loss", "learning", "socket")
+        }
+        for parent in state_parents.values():
+            parent.mkdir(mode=0o700)
         self.config = ExecutorConfig(
             schema_version=EXECUTOR_CONFIG_SCHEMA_VERSION,
             environment=Environment.TESTNET,
@@ -191,12 +197,12 @@ class HyperliquidDailyLossSynchronizerTests(unittest.TestCase):
                 timeout_seconds=3,
             ),
             paths=ExecutorPaths(
-                execution_database=root / "execution.sqlite3",
-                nonce_database=root / "nonce.sqlite3",
-                daily_loss_database=root / "daily-loss.sqlite3",
-                learning_database=root / "learning.sqlite3",
-                staging_database=root / "staging.sqlite3",
-                control_socket=root / "executor.sock",
+                execution_database=state_parents["execution"] / "execution.sqlite3",
+                nonce_database=state_parents["nonce"] / "nonce.sqlite3",
+                daily_loss_database=state_parents["daily-loss"] / "daily-loss.sqlite3",
+                learning_database=state_parents["learning"] / "learning.sqlite3",
+                staging_database=state_parents["learning"] / "staging.sqlite3",
+                control_socket=state_parents["socket"] / "executor.sock",
             ),
         )
         self.clock = FixedClock()

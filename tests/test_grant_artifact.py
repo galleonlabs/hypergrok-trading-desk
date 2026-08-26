@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
 from trading_harness.errors import StateConflict, ValidationError
 from trading_harness.execution_grant import (
@@ -53,6 +54,39 @@ def signed():
 
 
 class SignedGrantArtifactTests(unittest.TestCase):
+    def test_root_owned_copy_is_accepted_and_unrelated_owner_is_rejected(self) -> None:
+        selected = MagicMock()
+        selected.is_absolute.return_value = True
+        selected.is_symlink.return_value = False
+        selected.is_file.return_value = True
+        selected.stat.return_value.st_mode = 0o100400
+        selected.stat.return_value.st_uid = 0
+        selected.read_bytes.return_value = json.dumps(
+            signed().as_dict()
+        ).encode("utf-8")
+
+        with patch(
+            "trading_harness.grant_artifact.Path",
+            return_value=selected,
+        ):
+            parsed = load_signed_infrastructure_grant("/root-owned/grant.json")
+
+        self.assertEqual(signed().grant_hash, parsed.grant_hash)
+
+        selected.stat.return_value.st_uid = 502
+        with (
+            patch(
+                "trading_harness.grant_artifact.Path",
+                return_value=selected,
+            ),
+            patch(
+                "trading_harness.grant_artifact.os.geteuid",
+                return_value=501,
+            ),
+            self.assertRaisesRegex(ValidationError, "process user or root"),
+        ):
+            load_signed_infrastructure_grant("/unrelated-owner/grant.json")
+
     def test_owner_only_file_round_trips_and_authenticates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "grant.json"

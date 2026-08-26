@@ -198,7 +198,16 @@ class ExecutorCliTests(unittest.TestCase):
         )
         output = StringIO()
         error = StringIO()
-        with redirect_stdout(output), redirect_stderr(error):
+        with (
+            patch(
+                "trading_harness.executor_cli.open_testnet_executor_state",
+                side_effect=AssertionError(
+                    "halt acknowledgement must not open unrelated executor state"
+                ),
+            ),
+            redirect_stdout(output),
+            redirect_stderr(error),
+        ):
             result = _acknowledge_halt(
                 self.config,
                 halted.revision,

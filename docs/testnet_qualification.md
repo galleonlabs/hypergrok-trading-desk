@@ -18,7 +18,10 @@ Provision outside Codex/chat and outside the repository:
 - a newly registered API wallet used only by the isolated testnet signer;
 - testnet collateral/faucet eligibility;
 - a dedicated non-login OS identity and private credential store;
-- separate file-backed execution, nonce, daily-loss, staging and learning databases;
+- separate file-backed execution, nonce, daily-loss, staging and learning
+  databases, with execution/nonce/daily-loss/socket in distinct writable
+  parents so attended-control SQLite access cannot reach the other
+  executor-private artifacts;
 - explicit account, asset, notional, loss and 2x leverage caps;
 - the standard `default`/`disabled` account mode, not unified or portfolio margin.
 

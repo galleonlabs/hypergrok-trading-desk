@@ -40,7 +40,7 @@ def _reject_constant(_value: str) -> object:
 def load_signed_infrastructure_grant(
     path: str | os.PathLike[str],
 ) -> SignedInfrastructureGrant:
-    """Read one owner-only regular JSON artifact without following symlinks."""
+    """Read one process- or root-owned regular artifact without symlinks."""
 
     selected = Path(path)
     if not selected.is_absolute():
@@ -51,8 +51,10 @@ def load_signed_infrastructure_grant(
         metadata = selected.stat()
         if metadata.st_mode & 0o077:
             raise ValidationError("signed grant must not be group/world accessible")
-        if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
-            raise ValidationError("signed grant must be owned by the process user")
+        if hasattr(os, "geteuid") and metadata.st_uid not in {os.geteuid(), 0}:
+            raise ValidationError(
+                "signed grant must be owned by the process user or root"
+            )
         raw = selected.read_bytes()
     except ValidationError:
         raise

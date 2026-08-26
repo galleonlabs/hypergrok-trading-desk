@@ -34,7 +34,7 @@ from .executor_service import (
     open_testnet_executor_state,
 )
 from .executor_status import RedactedExecutorConfigStatus
-from .executor_runtime_store import ManualHaltReason
+from .executor_runtime_store import ExecutorRuntimeStore, ManualHaltReason
 from .grant_artifact import load_signed_infrastructure_grant
 from .keychain_secret import (
     KeychainSecretConfig,
@@ -210,8 +210,9 @@ def _acknowledge_halt(
 ) -> int:
     try:
         config = _load(config_path)
-        state = open_testnet_executor_state(config)
-        current = state.runtime_store.read()
+        _require_state_file(config.paths.execution_database, label="executor")
+        runtime_store = ExecutorRuntimeStore(config)
+        current = runtime_store.read()
         reason = ManualHaltReason(expected_reason)
         if (
             current.revision != expected_revision
@@ -236,7 +237,7 @@ def _acknowledge_halt(
         )
         if prompt(f'Type exactly: "{phrase}"\n> ') != phrase:
             raise ValidationError("halt acknowledgement confirmation differs")
-        updated = state.runtime_store.acknowledge_stale_manual_halt(
+        updated = runtime_store.acknowledge_stale_manual_halt(
             expected_revision=expected_revision,
             expected_reason=reason,
         )

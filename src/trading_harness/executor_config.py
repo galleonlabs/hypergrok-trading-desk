@@ -307,6 +307,23 @@ class ExecutorPaths:
             for field in _PATH_KEYS
         }
         _reject_overlapping_paths(normalized)
+        learning_parent = normalized["learning_database"].parent
+        if (
+            learning_parent.resolve(strict=False)
+            != normalized["staging_database"].parent.resolve(strict=False)
+        ):
+            raise ExecutorConfigError(
+                "learning and staging databases must share one learning-state parent"
+            )
+        _reject_overlapping_paths(
+            {
+                "execution_state_parent": normalized["execution_database"].parent,
+                "nonce_state_parent": normalized["nonce_database"].parent,
+                "daily_loss_state_parent": normalized["daily_loss_database"].parent,
+                "control_socket_state_parent": normalized["control_socket"].parent,
+                "learning_state_parent": learning_parent,
+            }
+        )
         for field, value in normalized.items():
             object.__setattr__(self, field, value)
 

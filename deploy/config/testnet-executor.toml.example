@@ -46,9 +46,12 @@ keychain_path = "/Library/Keychains/System.keychain"
 timeout_seconds = 5
 
 [paths]
-execution_database = "__REVIEWED_EXECUTOR_STATE_DIR__/execution.sqlite3"
-nonce_database = "__REVIEWED_EXECUTOR_STATE_DIR__/nonce.sqlite3"
-daily_loss_database = "__REVIEWED_EXECUTOR_STATE_DIR__/daily-loss.sqlite3"
+# Keep each executor-private artifact in a distinct mode-0700 parent. The
+# attended control identity may need SQLite write access to execution state,
+# but must have no path to nonce, daily-loss, or control-socket state.
+execution_database = "__REVIEWED_EXECUTION_STATE_DIR__/execution.sqlite3"
+nonce_database = "__REVIEWED_NONCE_STATE_DIR__/nonce.sqlite3"
+daily_loss_database = "__REVIEWED_DAILY_LOSS_STATE_DIR__/daily-loss.sqlite3"
 learning_database = "__REVIEWED_LEARNING_STATE_DIR__/learning.sqlite3"
 staging_database = "__REVIEWED_LEARNING_STATE_DIR__/staging.sqlite3"
-control_socket = "__REVIEWED_EXECUTOR_STATE_DIR__/executor.sock"
+control_socket = "__REVIEWED_CONTROL_SOCKET_STATE_DIR__/executor.sock"

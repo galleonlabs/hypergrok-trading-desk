@@ -56,12 +56,12 @@ account = "grant-hmac"
 timeout_seconds = 5
 
 [paths]
-execution_database = "/var/lib/trading-desk/execution.sqlite3"
-nonce_database = "/var/lib/trading-desk/nonce.sqlite3"
-daily_loss_database = "/var/lib/trading-desk/daily-loss.sqlite3"
-learning_database = "/var/lib/trading-desk/learning.sqlite3"
-staging_database = "/var/lib/trading-desk/staging.sqlite3"
-control_socket = "/var/run/trading-desk/executor.sock"
+execution_database = "/var/lib/trading-desk/execution/execution.sqlite3"
+nonce_database = "/var/lib/trading-desk/nonce/nonce.sqlite3"
+daily_loss_database = "/var/lib/trading-desk/daily-loss/daily-loss.sqlite3"
+learning_database = "/var/lib/trading-desk/learning/learning.sqlite3"
+staging_database = "/var/lib/trading-desk/learning/staging.sqlite3"
+control_socket = "/var/run/trading-desk/socket/executor.sock"
 {path_extra}
 '''
 
@@ -167,23 +167,23 @@ class StrictExecutorConfigTests(unittest.TestCase):
     def test_relative_non_normalized_root_and_overlapping_paths_are_rejected(self) -> None:
         cases = (
             config_text().replace(
-                'execution_database = "/var/lib/trading-desk/execution.sqlite3"',
+                'execution_database = "/var/lib/trading-desk/execution/execution.sqlite3"',
                 'execution_database = "state/execution.sqlite3"',
             ),
             config_text().replace(
-                'execution_database = "/var/lib/trading-desk/execution.sqlite3"',
+                'execution_database = "/var/lib/trading-desk/execution/execution.sqlite3"',
                 'execution_database = "/var/lib/trading-desk/../execution.sqlite3"',
             ),
             config_text().replace(
-                'learning_database = "/var/lib/trading-desk/learning.sqlite3"',
-                'learning_database = "/var/lib/trading-desk/execution.sqlite3"',
+                'learning_database = "/var/lib/trading-desk/learning/learning.sqlite3"',
+                'learning_database = "/var/lib/trading-desk/execution/execution.sqlite3"',
             ),
             config_text().replace(
-                'control_socket = "/var/run/trading-desk/executor.sock"',
-                'control_socket = "/var/lib/trading-desk/execution.sqlite3/socket"',
+                'control_socket = "/var/run/trading-desk/socket/executor.sock"',
+                'control_socket = "/var/lib/trading-desk/execution/execution.sqlite3/socket"',
             ),
             config_text().replace(
-                'control_socket = "/var/run/trading-desk/executor.sock"',
+                'control_socket = "/var/run/trading-desk/socket/executor.sock"',
                 'control_socket = "/"',
             ),
         )
@@ -191,6 +191,31 @@ class StrictExecutorConfigTests(unittest.TestCase):
             with self.subTest(text=text[-120:]):
                 with self.assertRaises(ExecutorConfigError):
                     parse_executor_config(text, environ={})
+
+    def test_state_directory_classes_are_non_overlapping(self) -> None:
+        same_private_parent = config_text().replace(
+            'nonce_database = "/var/lib/trading-desk/nonce/nonce.sqlite3"',
+            'nonce_database = "/var/lib/trading-desk/execution/nonce.sqlite3"',
+        )
+        with self.assertRaisesRegex(ExecutorConfigError, "managed paths overlap"):
+            parse_executor_config(same_private_parent, environ={})
+
+        split_learning_parent = config_text().replace(
+            'staging_database = "/var/lib/trading-desk/learning/staging.sqlite3"',
+            'staging_database = "/var/lib/trading-desk/staging/staging.sqlite3"',
+        )
+        with self.assertRaisesRegex(ExecutorConfigError, "share one learning-state"):
+            parse_executor_config(split_learning_parent, environ={})
+
+        learning_overlaps_execution = config_text().replace(
+            'learning_database = "/var/lib/trading-desk/learning/learning.sqlite3"',
+            'learning_database = "/var/lib/trading-desk/execution/learning.sqlite3"',
+        ).replace(
+            'staging_database = "/var/lib/trading-desk/learning/staging.sqlite3"',
+            'staging_database = "/var/lib/trading-desk/execution/staging.sqlite3"',
+        )
+        with self.assertRaisesRegex(ExecutorConfigError, "managed paths overlap"):
+            parse_executor_config(learning_overlaps_execution, environ={})
 
     def test_addresses_must_be_lowercase_and_api_wallet_must_be_distinct(self) -> None:
         uppercase = config_text().replace("0x111111", "0xAAAAAA", 1)

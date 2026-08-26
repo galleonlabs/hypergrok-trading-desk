@@ -61,6 +61,10 @@ class FakeClock:
 
 
 def config_text(root: Path) -> str:
+    for name in ("execution", "nonce", "daily-loss", "learning", "socket"):
+        directory = root / name
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
     return f'''schema_version = 1
 environment = "testnet"
 venue = "hyperliquid"
@@ -105,12 +109,12 @@ account = "runtime-grant-account"
 timeout_seconds = 5
 
 [paths]
-execution_database = "{root / 'execution.sqlite3'}"
-nonce_database = "{root / 'nonce.sqlite3'}"
-daily_loss_database = "{root / 'daily-loss.sqlite3'}"
-learning_database = "{root / 'learning.sqlite3'}"
-staging_database = "{root / 'staging.sqlite3'}"
-control_socket = "{root / 'control.sock'}"
+execution_database = "{root / 'execution' / 'execution.sqlite3'}"
+nonce_database = "{root / 'nonce' / 'nonce.sqlite3'}"
+daily_loss_database = "{root / 'daily-loss' / 'daily-loss.sqlite3'}"
+learning_database = "{root / 'learning' / 'learning.sqlite3'}"
+staging_database = "{root / 'learning' / 'staging.sqlite3'}"
+control_socket = "{root / 'socket' / 'control.sock'}"
 '''
 
 

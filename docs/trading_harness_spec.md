@@ -134,7 +134,10 @@ The implemented loop is intentionally asymmetric:
 8. The agent process has no filesystem capability for execution, nonce,
    daily-loss or control state. Agent quotes defer daily loss; a one-tick
    executor capability is minted only by a complete authoritative refresh and
-   is required at the actual entry-dispatch decision.
+   is required at the actual entry-dispatch decision. Executor-private
+   execution, nonce, daily-loss and control-socket artifacts use distinct
+   writable parents: attended control may reach execution state for exact
+   authorization, but has no directory capability for the other three.
 9. Parent and recovery reads begin at exact venue-server source snapshot
    watermarks. Venue evidence time and local mutation/lease time are distinct;
    canonical parent/recovery fills are attributed into one continuous position

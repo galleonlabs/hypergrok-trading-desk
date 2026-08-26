@@ -43,7 +43,10 @@ CONFIG_VALUES = {
     "__REVIEWED_RECOVERY_KEYCHAIN_ACCOUNT__": "recovery-hmac",
     "__REVIEWED_GRANT_KEYCHAIN_SERVICE__": "testnet-grant",
     "__REVIEWED_GRANT_KEYCHAIN_ACCOUNT__": "grant-hmac",
-    "__REVIEWED_EXECUTOR_STATE_DIR__": "/var/lib/trading-desk/testnet-executor",
+    "__REVIEWED_EXECUTION_STATE_DIR__": "/var/lib/trading-desk/testnet-executor/execution",
+    "__REVIEWED_NONCE_STATE_DIR__": "/var/lib/trading-desk/testnet-executor/nonce",
+    "__REVIEWED_DAILY_LOSS_STATE_DIR__": "/var/lib/trading-desk/testnet-executor/daily-loss",
+    "__REVIEWED_CONTROL_SOCKET_STATE_DIR__": "/var/lib/trading-desk/testnet-executor/socket",
     "__REVIEWED_LEARNING_STATE_DIR__": "/var/lib/trading-desk/learning",
 }
 LEARNING_VALUES = {
@@ -112,6 +115,21 @@ class ExecutorDeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(("ETH-PERP",), config.allowed_instruments)
         self.assertEqual((1,), config.allowed_asset_ids)
         self.assertEqual(("0x" + "e" * 32,), config.recovery_cloids)
+        private_parents = {
+            config.paths.execution_database.parent,
+            config.paths.nonce_database.parent,
+            config.paths.daily_loss_database.parent,
+            config.paths.control_socket.parent,
+        }
+        self.assertEqual(4, len(private_parents))
+        self.assertEqual(
+            config.paths.learning_database.parent,
+            config.paths.staging_database.parent,
+        )
+        self.assertNotIn(
+            "__REVIEWED_EXECUTOR_STATE_DIR__",
+            CONFIG.read_text(encoding="utf-8"),
+        )
         self.assertTrue(
             all(
                 item.keychain_path == "/Library/Keychains/System.keychain"

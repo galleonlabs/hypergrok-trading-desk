@@ -306,6 +306,7 @@ class ExecutorServiceCompositionTests(unittest.TestCase):
         insecure = parse_executor_config(
             config_text(other_root, self.policy.policy_hash), environ={}
         )
+        insecure.paths.execution_database.parent.chmod(0o755)
         with self.assertRaisesRegex(ValidationError, "0700"):
             initialize_testnet_executor_state(insecure, clock=lambda: AT)
 

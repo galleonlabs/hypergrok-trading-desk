@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Negative fixtures for scripts/check_manifests.py. Stdlib Python only; no network.
+
+Each fixture copies the repository into a temporary directory, breaks the
+distribution contract in exactly one way, and asserts the validator fails with
+an error naming that file. A guard nobody has watched fail is not a guard.
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VALIDATOR = os.path.join(ROOT, "scripts", "check_manifests.py")
+
+
+def run(root):
+    proc = subprocess.run(
+        [sys.executable, VALIDATOR, root], capture_output=True, text=True, check=False
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def edit(root, rel, mutate):
+    path = os.path.join(root, rel)
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    mutate(data)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+
+def version_mismatch(root):
+    edit(root, ".grok-plugin/plugin.json", lambda d: d.update(version="9.9.9"))
+    return ".grok-plugin/plugin.json", "version"
+
+
+def nested_version_mismatch(root):
+    edit(root, ".claude-plugin/marketplace.json",
+         lambda d: d["plugins"][0].update(version="0.1.0"))
+    return ".claude-plugin/marketplace.json", "plugins[0].version"
+
+
+def missing_component_path(root):
+    os.remove(os.path.join(root, "assets", "mascot-320.jpg"))
+    return ".cursor-plugin/plugin.json", "logo"
+
+
+def missing_component_directory(root):
+    shutil.rmtree(os.path.join(root, "rules"))
+    return ".cursor-plugin/plugin.json", "rules"
+
+
+def path_escapes_repository(root):
+    edit(root, ".cursor-plugin/plugin.json", lambda d: d.update(skills="../skills/"))
+    return ".cursor-plugin/plugin.json", "outside the repository"
+
+
+def invalid_json(root):
+    path = os.path.join(root, ".claude-plugin", "marketplace.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"name": "hypergrok",\n')
+    return ".claude-plugin/marketplace.json", "invalid JSON"
+
+
+def inventory_drift(root):
+    added = os.path.join(root, "skills", "desk-new-skill")
+    os.makedirs(added)
+    with open(os.path.join(added, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write("---\nname: desk-new-skill\n---\n")
+    return "plugin.json", "ships 17"
+
+
+def wrong_name(root):
+    edit(root, ".grok-plugin/marketplace.json", lambda d: d["plugins"][0].update(name="hyper-grok"))
+    return ".grok-plugin/marketplace.json", "plugins[0].name"
+
+
+FIXTURES = [
+    version_mismatch,
+    nested_version_mismatch,
+    missing_component_path,
+    missing_component_directory,
+    path_escapes_repository,
+    invalid_json,
+    inventory_drift,
+    wrong_name,
+]
+
+
+def main():
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        baseline = os.path.join(tmp, "baseline")
+        shutil.copytree(ROOT, baseline, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        code, output = run(baseline)
+        if code != 0:
+            failures.append(f"baseline copy should pass but failed:\n{output}")
+
+        for fixture in FIXTURES:
+            case = os.path.join(tmp, fixture.__name__)
+            shutil.copytree(baseline, case)
+            rel, needle = fixture(case)
+            code, output = run(case)
+            if code == 0:
+                failures.append(f"{fixture.__name__}: validator passed but should have failed")
+            elif rel not in output or needle not in output:
+                failures.append(
+                    f"{fixture.__name__}: expected an error naming '{rel}' and '{needle}', got:\n{output}"
+                )
+
+    if failures:
+        print("\n".join(failures))
+        print(f"{len(failures)} problem(s)")
+        return 1
+    print(f"ok: {len(FIXTURES)} manifest fixtures fail the check as expected")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -134,10 +134,12 @@ variable or a small live edit.
 
 ## Attended setup
 
-Before any router or venue credential is created, update the Mac to a currently
-supported security release, reboot and repeat the runtime/test evidence. The
-observed host was macOS 15.3.1; Apple lists later Sequoia security releases at
-<https://support.apple.com/100100>.
+Before any router or venue credential is created, confirm the Mac remains on a
+currently supported security release and retain reboot/runtime/test evidence.
+The current host was updated from macOS 15.3.1 to 26.6.2 build 25G83 on
+2026-08-26; the pinned runtime and all three supported Python test suites were
+requalified. Repeat after any later OS/runtime change. Apple publishes current
+security releases at <https://support.apple.com/100100>.
 
 Inside the Ubuntu VM, from its console:
 

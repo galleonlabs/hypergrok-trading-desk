@@ -31,9 +31,11 @@ Complete and retain evidence for every item before provisioning a venue or
 Keychain secret. Router-only WireGuard keys are generated during item 6 on
 their owning machines because their derived public keys are renderer inputs.
 
-1. **macOS security update.** The observed host is macOS 15.3.1. Update to a
-   currently supported Apple security release, reboot, re-check identities,
-   rebuild or requalify the pinned runtime, and rerun the full test suite.
+1. **macOS security update.** Completed on the current host on 2026-08-26:
+   macOS was updated from 15.3.1 to 26.6.2 build 25G83 and rebooted. The pinned
+   Python 3.11.16/OpenSSL 3.5.8 runtime and all 849 tests were requalified on
+   Python 3.11, 3.12 and 3.13. Retain that evidence and repeat this gate after
+   any later OS/runtime change.
 2. **Root inventory.** Seal the exact-commit deployment pack and retain owner,
    mode, ACL, mount, LaunchDaemon and empty-state evidence from an attended
    root console.

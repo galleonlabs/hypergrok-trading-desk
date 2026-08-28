@@ -38,7 +38,7 @@ Verified against the official docs on 2026-08-16. When in doubt, fetch the page:
 | `recentTrades` | `coin` | `[{coin, side, px, sz, time, hash, tid}]` |
 | `candleSnapshot` | `req:{coin, interval, startTime, endTime}` | `[{t,T,s,i,o,c,h,l,v,n}]`, most recent 5000 only |
 | `fundingHistory` | `coin, startTime, endTime?` | `[{coin, fundingRate (hourly), premium, time}]` |
-| `predictedFundings` | | `[[coin, [[venue, {fundingRate, nextFundingTime}]]]]` (HlPerp hourly; CEX venues 8h) |
+| `predictedFundings` | | `[[coin, [[venue, {fundingRate, nextFundingTime, fundingIntervalHours?}]]]]`; venue is `HlPerp`, `BinPerp` or `BybitPerp`, payload `null` when unlisted there. Normalise by `fundingIntervalHours` (HlPerp 1; CEX venues 4 or 8 per coin), never by a fixed 8 |
 | `perpsAtOpenInterestCap` | `dex?` | `[coin]` |
 | `perpDexs` | | `[null, {name, fullName, deployer, ...}]` |
 | `clearinghouseState` | `user, dex?` | `{assetPositions:[{type, position:{coin, szi, entryPx, leverage{type,value,rawUsd?}, liquidationPx, marginUsed, positionValue, unrealizedPnl, returnOnEquity, cumFunding, maxLeverage}}], marginSummary{accountValue,totalNtlPos,totalRawUsd,totalMarginUsed}, crossMarginSummary, crossMaintenanceMarginUsed, withdrawable, time}` |

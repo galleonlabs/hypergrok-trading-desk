@@ -126,10 +126,15 @@ Record the exact request (coin, interval, start, end, fetched-at, network) next 
 ```bash
 START=$(( $(date +%s000) - 7*86400000 ))
 hl "{\"type\":\"fundingHistory\",\"coin\":\"ETH\",\"startTime\":$START}" | jq -r '.[] | [.time, .fundingRate, .premium] | @tsv'
-hl '{"type":"predictedFundings"}' | jq -r '.[] | select(.[0]=="ETH") | .[1][] | [.[0], .[1].fundingRate, .[1].nextFundingTime] | @tsv'
+# venue, raw rate, its interval in hours, rate per hour, next funding
+hl '{"type":"predictedFundings"}' | jq -r '.[] | select(.[0]=="ETH") | .[1][] | select(.[1]) | [.[0], .[1].fundingRate, (.[1].fundingIntervalHours // "?"), (if .[1].fundingIntervalHours then (.[1].fundingRate|tonumber) / .[1].fundingIntervalHours else "?" end), .[1].nextFundingTime] | @tsv'
 ```
 
-`fundingHistory` returns hourly rates (up to 500 per call; paginate by `startTime`). `predictedFundings` compares venues: the `HlPerp` entry is an hourly rate; the `BinPerp`/`BybitPerp` entries are 8-hour rates, so do not compare them raw. Funding is paid every hour at `size x oracle price x hourly rate`; longs pay shorts when positive. Python: `info.funding_history(coin, start_ms)`.
+`fundingHistory` returns hourly rates (up to 500 per call; paginate by `startTime`).
+
+`predictedFundings` compares venues, and the venue rates are over **different periods**, so never compare them raw. Every coin carries the same three slots in the same order - `BinPerp`, `HlPerp`, `BybitPerp` - but match on the venue name rather than the position, and each slot is either a payload or `null` when the coin is not listed on that venue. Divide `fundingRate` by the payload's own `fundingIntervalHours` to get a per-hour rate. `HlPerp` is always 1; the CEX venues are **4 or 8 depending on the coin**, not a fixed 8: on mainnet on 2026-08-28, BinPerp was 4h for 126 coins and 8h for 63, BybitPerp 4h for 118 and 8h for 69. BTC, ETH and DOGE are all 8h, so an assumed 8 looks right on the majors and is wrong by 2x across most alts. A few BinPerp payloads (19 that day, including `TON`, `MKR` and `IP`) omit `fundingIntervalHours` entirely; treat the interval as unknown and say so rather than defaulting it.
+
+Funding is paid every hour at `size x oracle price x hourly rate`; longs pay shorts when positive. Python: `info.funding_history(coin, start_ms)`.
 
 ## Spot markets
 
@@ -156,7 +161,7 @@ Use the block in `agents/market-analyst.md`: sources and time on the first line,
 
 - Reporting a number without the request type, network and UTC time.
 - Treating `funding` as an 8h or daily rate; it is hourly.
-- Comparing `predictedFundings` venues without converting the 8h CEX rates.
+- Comparing `predictedFundings` venues without dividing each by its own `fundingIntervalHours`, or assuming the CEX venues are 8h when most coins are 4h.
 - Reading a book once and calling it "the depth" ten minutes later.
 - Forgetting spot `@index` naming and base-token `szDecimals`.
 - Expecting deep history at fine intervals; only the latest 5000 candles per interval exist, so pick the interval to fit the lookback.

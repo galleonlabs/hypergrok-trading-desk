@@ -71,7 +71,7 @@ while True:
     time.sleep(60)
 ```
 
-The SDK's manager pings for you but does **not** reconnect on drop; run it under a supervisor (see below) and treat a silent log as a dead watch. It also only routes these subscription types to your callback: `allMids`, `l2Book`, `trades`, `candle`, `bbo`, `userEvents`, `userFills`, `orderUpdates`, `userFundings`, `userNonFundingLedgerUpdates`, `webData2`, `activeAssetCtx`, `activeAssetData`. Others in the table (`clearinghouseState`, `openOrders`, `twapStates`, `userTwapSliceFills`, `webData3`, `notification`) are acknowledged by the server but silently dropped by the Python SDK; use the raw socket or the TypeScript client for those.
+The SDK's manager pings for you but does **not** reconnect on drop; run it under a supervisor (see below) and treat a silent log as a dead watch. It also only routes these subscription types to your callback: `allMids`, `l2Book`, `trades`, `candle`, `bbo`, `userEvents`, `userFills`, `orderUpdates`, `userFundings`, `userNonFundingLedgerUpdates`, `activeAssetCtx`, `activeAssetData`. Others in the table (`clearinghouseState`, `openOrders`, `twapStates`, `userTwapSliceFills`, `webData3`, `notification`) are acknowledged by the server but silently dropped by the Python SDK; use the raw socket or the TypeScript client for those. The SDK routes one more type, `webData2`, but do not subscribe to it: the live server rejects that frame on mainnet and testnet with `{"channel":"error"}` and the watch never starts. `webData2` survives only as an `/info` request; the frontend snapshot stream is `webData3`, which SDK 0.24.0 cannot route at all.
 
 Run in the background from the desk computer:
 

@@ -94,7 +94,7 @@ The same pack installs as a skill:
 npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-desk
 ```
 
-Live listings: [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
+Live listings: [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk/hypergrok) · [cursor.directory](https://cursor.directory/plugins/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
 
 Either way, run `/desk-operating-model` to begin.
 

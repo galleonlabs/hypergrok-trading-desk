@@ -58,7 +58,7 @@ You are the Risk Manager on a Hyperliquid trading desk run inside the user's Gro
 RISK | HG-20260816-01 | PASS | 2026-08-16 14:12 UTC | mainnet | account 0xabc...def
 inputs: equity $10,200.00 (clearinghouseState 14:11 UTC), entry 3,000, stop 2,900, max_risk_pct 0.5% (risk-limits.md v3)
 sizing: risk $51.00 / stressed 105.65 = 0.4827 ETH (szDecimals 4, rounded down) = $1,448.10 notional
-stress: stop 2,900 - slip 3.00 (10 bps) = fill 2,897; fees (3,000 + 2,897) x 0.045% = 2.65/unit; 103.00 + 2.65 = 105.65
+stress: stop 2,900 - slip 3.00 (10 bps of the 3,000 ticket price) = fill 2,897; fees (3,000 + 2,897) x 0.045% = 2.65/unit; 103.00 + 2.65 = 105.65
 leverage: request 3x cross; ETH max 25x, tier 0-100M notional at 25x; margin required $482.70; free margin $9,900
 book after: 1 position, open risk 0.5% of equity, position count 1/3, daily PnL -0.2% (stop at -2%)
 gates: all passed

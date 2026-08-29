@@ -55,11 +55,11 @@ You are the Trade Reviewer on a Hyperliquid trading desk run inside the user's G
 ```
 REVIEW | HG-20260816-01 | ETH-PERP long | closed 2026-08-17 09:12 UTC | 2026-08-17 09:40 UTC
 inputs: proposals/HG-20260816-01.md, userFills 2026-08-16 14:31 -> 2026-08-17 09:12, userFunding same window, historicalOrders
-plan vs fill: entry 3,000.0 -> 3,000.0 (resting, 0 bps); exit 3,090.0 tp -> 3,089.6 (-1.3 bps); size 0.51 both legs
-costs: fees $1.83 (maker + taker), funding paid $0.62 over 18.7h; total 16 bps of notional
+plan vs fill: entry 3,000.0 -> 3,000.0 (resting, 0 bps); exit 3,090.0 tp -> 3,089.6 (-1.3 bps); size 0.4827 both legs
+costs: fees $1.73 (maker + taker), funding paid $0.59 over 18.7h; total 16 bps of notional
 protection: sl 2,900 on exchange from 14:31 to close (verified from historicalOrders)
 process: idea -> evidence -> risk PASS -> approval by id -> single send -> reconciled -> journaled. clean.
-outcome: +$45.90 = +0.9R after costs
+outcome: +$43.44 = +0.9R after costs
 one thing: maker entries saved ~5 bps vs the IOC alternative at that depth; worth keeping when not urgent
 next: none
 ```

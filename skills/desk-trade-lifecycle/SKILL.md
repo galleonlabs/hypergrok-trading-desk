@@ -3,7 +3,7 @@ name: desk-trade-lifecycle
 description: The end-to-end procedure for one trade on the HyperGrok desk - from an idea to a reviewed, journaled result - with the ticket format, who owns each stage, and what "done" looks like. Use whenever the user wants to open, adjust or close a position, or whenever any Bot is about to touch the exchange write path.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -55,12 +55,13 @@ A PASS produces the **ticket**:
 
 ```
 TICKET HG-20260816-01 | mainnet | account 0xabc...def
-market: ETH-PERP (asset 1)      side: buy      size: 0.51 ETH (~$1,530)
+market: ETH-PERP (asset 1)      side: buy      size: 0.4827 ETH (~$1,448)
 entry: limit 3,000.0 Gtc        reduce-only: no
-stop: sell 0.51 trigger 2,900 market (worst 2,755, 5% bound), normalTpsl with the entry
+stop: sell 0.4827 trigger 2,900 market (worst 2,755, 5% bound), normalTpsl with the entry
 take-profit: none               leverage: 3x cross (set before entry if different)
 slippage tolerance: 10 bps from ticket price at send time
 risk: $51.00 = 0.5% of equity $10,200.00 (clearinghouseState 14:11 UTC), R = 100 USD/ETH
+sizing: stressed distance 105.65 USD/ETH (stop 100 + slippage 3.00 + fees 2.65)
 risk sign-off: PASS 14:12 UTC, risk-limits.md v3
 expires: 14:42 UTC
 approve with: "approve HG-20260816-01"

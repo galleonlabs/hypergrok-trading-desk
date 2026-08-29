@@ -3,7 +3,7 @@ name: desk-monitoring
 description: How the desk watches markets and the account between trades using Grok Bot routines and WebSocket or polling watches - the desk brief, book checks, funding and price watches, alert conditions and what a watch may and may not do. Use when the user asks for briefings, alerts, "watch X" or scheduled checks.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -36,7 +36,7 @@ markets (Market Analyst, allMids + metaAndAssetCtxs 06:58 UTC):
   BTC 97,120 (+0.8% 24h) | funding 0.0010%/h | OI $4.1B
   ETH 3,004 (+0.2%) | funding 0.0012%/h | OI $1.2B
   SOL 151.2 (-1.1%) | funding -0.0004%/h | OI $610M
-book (Risk Manager, clearinghouseState 06:59 UTC): 1 position, ETH long 0.51 @ 3,000, uPnL +$2.0, margin ratio 4.9%, stop resting 2,900; open risk 0.5%; day PnL 0.0%
+book (Risk Manager, clearinghouseState 06:59 UTC): 1 position, ETH long 0.4827 @ 3,000, uPnL +$1.9, margin ratio 4.6%, stop resting 2,900; open risk 0.5%; day PnL 0.0%
 research (Research Analyst): ETH client release scheduled 2026-08-19 [link]; nothing breaking on held markets
 open items: HG-20260816-01 live; no pending tickets
 ```

@@ -42,9 +42,10 @@ idea -> evidence -> risk sign-off -> your approval -> one send -> reconciliation
 
 ```
 TICKET HG-20260816-01 | mainnet
-market ETH-PERP  side buy  size 0.51 ETH (~$1,530)
-entry limit 3,000 Gtc     stop sell 0.51 @ 2,900 market (sent with the entry)
+market ETH-PERP  side buy  size 0.4827 ETH (~$1,448)
+entry limit 3,000 Gtc     stop sell 0.4827 @ 2,900 market (sent with the entry)
 risk $51.00 = 0.5% of equity $10,200 (clearinghouseState 14:11 UTC)  R = 100
+sized on a stressed stop: 100 + 3.00 slippage + 2.65 fees = 105.65 per ETH
 approve with: "approve HG-20260816-01"
 ```
 
@@ -64,8 +65,10 @@ Sixteen skills, in the portable `SKILL.md` format, shared by all your Bots.
 
 ## Built for real money
 
-- **You approve every trade**, by ticket id, after seeing the exact order.
+- **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in Grok Bot's own Require Approval rule, because a Bot that can read an approval could also write one.
 - **A trade-only API wallet**, provisioned through Grok Bot's secure secret store, is the only key the desk ever holds. It can trade; it cannot withdraw.
+- **Sized on a stressed stop.** A triggered stop is a market order: it slips and pays taker on both legs. The desk sizes on what the stop will actually cost, not its trigger price, so your risk budget means what it says.
+- **Ceilings you cannot trade through.** Your limits file may only tighten the desk's own caps, never loosen them.
 - **Testnet first.** Every new kind of action is rehearsed with play money before it touches mainnet.
 - **One writer.** Six Bots read; one Bot sends, once per approval, and reconciles by client order id.
 - **A reviewer who keeps you honest.** Process and outcome graded separately, in a journal you can read.

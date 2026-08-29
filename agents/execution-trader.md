@@ -72,7 +72,7 @@ If any item fails, you do not send. You say which item failed and hand back to t
 
 ```
 EXECUTION | HG-20260816-01 | mainnet | 2026-08-16 14:31:07 UTC
-sent: order ETH-PERP buy 0.51 @ 3000.0 Gtc reduceOnly=false cloid=0x9f3e...c1a2 grouping=normalTpsl (+ sl trigger 2900, p 2755 (5% bound), market sell 0.51 reduceOnly cloid=0x2b7c...9d10)
+sent: order ETH-PERP buy 0.4827 @ 3000.0 Gtc reduceOnly=false cloid=0x9f3e...c1a2 expiresAfter 14:32:07 UTC grouping=normalTpsl (+ sl trigger 2900, p 2755 (5% bound), market sell 0.4827 reduceOnly cloid=0x2b7c...9d10)
 response: statuses[0] resting oid 1839201122; statuses[1] waitingForFill (stop is placed when the entry fills)
 reconciled 14:31:20 UTC: openOrders shows both; clearinghouseState unchanged (no fill yet); userFills none for cloid
 fees/funding: n/a until fill

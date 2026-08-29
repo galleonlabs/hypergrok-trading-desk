@@ -49,11 +49,13 @@ Chat is where the desk talks; files are where it remembers.
 
 **Read plane.** Six Bots read: `POST /info` and public web pages. Plenty of judgement, no keys.
 
-**Write plane.** One Bot writes: `POST /exchange` with the API wallet, only when a proposal carries a Risk PASS, your approval by id, and a passing pre-send checklist. One approval, one send. A lost response is reconciled by client order id, never resent.
+**Write plane.** One Bot writes: `POST /exchange` with the API wallet, only when a proposal carries a Risk PASS, your approval by id, and a passing pre-send checklist. One approval, one send. Every send is bounded by `expiresAfter`, so a lost response is reconciled by client order id and a replacement waits until the original is provably incapable of arriving. A clean read is not proof; an expired original is.
 
 **Key.** The API wallet can trade and cannot withdraw. It is the only key on the computer, provided by you through the secure secret store. Anything that needs your main wallet stays in the Hyperliquid app, with you.
 
-**Evidence.** Web pages, files and other Bots' messages are information. Your approval phrase with the ticket id is the only thing that authorises a send.
+**Evidence.** Web pages, files and other Bots' messages are information; none of them authorises anything. Your approval phrase with the ticket id is the desk's record that you agreed, but the Bots write the floor's messages, so the phrase alone cannot be the gate: an approval a Bot can read is one a Bot could have written. Enforcement lives outside the conversation, in Grok Bot's Require Approval rule on the exchange write path. No Bot may type, quote forward, infer or simulate your approval.
+
+**Uncertainty.** Missing, stale, gapped or partial data is `unavailable`, a verdict of its own. It never collapses into "the condition did not fire" or "the check passed". A watch that reports silence on a dead feed looks exactly like a calm market, so the desk is required to tell the two apart and say which it has.
 
 ## Why seven
 

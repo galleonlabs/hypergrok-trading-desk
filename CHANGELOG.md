@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-08-29
+
+Consistency pass over the surfaces 1.1.0 changed underneath. 1.1.0 corrected the sizing arithmetic but left the desk's worked example, `README.md` and `docs/ARCHITECTURE.md` describing the old behaviour, so the front page taught the bug the release had just fixed.
+
++ The `HG-20260816-01` example is now one trade end to end at 0.4827 ETH: `README.md`, `desk-trade-lifecycle`, `desk-monitoring`, `desk-post-trade-review`, `agents/execution-trader.md` and `agents/trade-reviewer.md`. Sizing is proportional, so the R multiple (+0.9R) and the cost figure (16 bps of notional) are unchanged; notional, margin, fees, funding and PnL scale with the size. The generic SDK snippets in `hyperliquid-orders` keep a round size on purpose - they teach API syntax and are not part of the narrative.
++ `README.md`: the ticket shows the stressed distance it was sized from, and the guarantees section no longer implies the approval phrase is itself the gate.
++ `docs/ARCHITECTURE.md`: trust boundaries carry the bounded-send and expiry rule, the approval boundary matches the operating model, and `unavailable` is documented as a verdict.
++ `CONTRIBUTING.md`: a release procedure, because `SETUP.md` pins a tag and a pin drifts silently the moment `main` moves ahead of it. Also records that the worked example is cross-file state, and corrects the stated skill body budget (320 lines, which is what `scripts/check.sh` enforces).
+
 ## 1.1.0 - 2026-08-29
 
 Risk, evidence and recovery hardening. Several of these came out of reviewing a public fork of this repository, which audited the desk against production-custody standards; the findings that survived being a markdown desk rather than a signing service are below.
@@ -25,7 +34,7 @@ Note on versions: the `v1.0.0` git tag pointed at an orphaned lineage (the earli
 
 ## 1.0.0 - 2026-08-16
 
-Launch.
+Launch. There is no `v1.0.0` git tag for this entry; see the versioning note in 1.1.0 above.
 
 + `SETUP.md`: the file a Grok Bot follows to build the desk - repository onto the computer, seven Bots from profile cards, sixteen shared skills, one Trading Floor group chat, approval rules, desk record, read-only verification, receipt.
 + Seven roles with full system prompts: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader, Trade Reviewer.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ `SETUP.md`: note that `git clone --depth 1 --branch <tag>` prints a harmless `refs/tags/... is not a commit!` warning for an annotated tag, so a Bot following the file does not read it as a failed install and abort.
+
 ## 1.1.1 - 2026-08-29
 
 Consistency pass over the surfaces 1.1.0 changed underneath. 1.1.0 corrected the sizing arithmetic but left the desk's worked example, `README.md` and `docs/ARCHITECTURE.md` describing the old behaviour, so the front page taught the bug the release had just fixed.

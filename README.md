@@ -88,6 +88,12 @@ In Claude Code, install it from this repository:
 
 In Grok Build and Cursor, open the repository and enable the plugin.
 
+The same pack installs as a skill:
+
+```
+npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-desk
+```
+
 Either way, run `/desk-operating-model` to begin.
 
 ## Inside the repository

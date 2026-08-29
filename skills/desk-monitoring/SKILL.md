@@ -64,6 +64,10 @@ Common watch conditions:
 
 An alert message carries: what fired, the value and the threshold, the source and UTC time, and the proposal id if related. Alerts do not include instructions to trade.
 
+**Silence is not an all-clear.** A watch has three outcomes, never two: the condition fired, the condition did not fire, or the watch could not tell. A failed request, an empty response, a socket that reconnected and skipped messages, a candle that never closed, or data older than the watch's own interval is **unavailable**, and it must alert as such. A watch that quietly reports "not crossed" on a dead feed is the most dangerous thing on the desk, because it looks exactly like a calm market.
+
+Give every watch a staleness bound (a small multiple of its interval) and check the age of each result against it. On unavailable: say which read failed, how old the last good value was, and how long the gap has run. Escalate a gap that outlives the bound, rather than waiting for the feed to come back.
+
 ## Hygiene
 
 - Every watch script logs to `/workspace/trading-desk/watch/<name>.log` with UTC timestamps.
@@ -75,4 +79,5 @@ An alert message carries: what fired, the value and the threshold, the source an
 
 - Never let a watch place, modify or cancel an order, or change leverage. Even a "protective" one. It alerts; the desk acts through a ticket.
 - Never alert with unsourced numbers.
+- Never report a stale or failed read as a condition that did not fire. That is an `unavailable` alert, not silence.
 - Never poll faster than the desk needs; a rate-limited desk is a blind desk.

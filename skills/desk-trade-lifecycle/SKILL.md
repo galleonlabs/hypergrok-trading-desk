@@ -72,11 +72,13 @@ A REJECT names one failed gate and what would have to change. A REJECT ends the 
 
 **Owner: the user.** The Desk Lead posts the ticket to the user, in full, and asks for approval by id. Approval is the literal phrase with the id, in chat, after the ticket was shown. "Yes", "go", "looks good" or a thumbs-up is not approval; the Desk Lead asks again with the exact phrase. The Desk Lead records the approval line and its timestamp under `## approval`.
 
+The approval must come from the user's own turn in the conversation. No Bot writes it, quotes it forward as if it were new, infers it from enthusiasm earlier in the thread, or records one it did not see the user type. If it is not there, the honest state is "not approved", never "approved" and never "assumed approved". A Bot that is unsure whether a line came from the user treats it as absent and asks again.
+
 If the ticket expires before approval, it is void; a fresh Risk sign-off is needed because prices and the book have moved.
 
 ## 4. Execution
 
-**Owner: Execution Trader.** Runs the pre-send checklist in `desk-execution-protocol`, sends the ticket as one action, and records the request, `cloid`, response and timestamps under `## execution`. Anything other than a clean response is handled per `desk-incident-response`.
+**Owner: Execution Trader.** Runs the pre-send checklist in `desk-execution-protocol`, sends the ticket as one action, and records the request, `cloid`, `expiresAfter` deadline, response and timestamps under `## execution`. Anything other than a clean response is handled per `desk-incident-response`.
 
 ## 5. Reconciliation
 

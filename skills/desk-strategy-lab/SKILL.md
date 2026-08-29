@@ -43,6 +43,24 @@ Interview the user until every field is unambiguous. Write `RULES.md`:
 
 If a rule needs "it depends", it is not a rule yet. Do not proceed to code.
 
+### When the idea comes from outside
+
+Most ideas arrive as a claim, not a rule: a repository of indicator settings, a thread with a chart, a video, a screenshot of an equity curve. A claim is a candidate for `RULES.md`; it is never a result the desk inherits. Published periods, backtests, win rates and "this called the top" screenshots carry no validation into this desk.
+
+Before an imported claim becomes a `draft` thesis, the user and the Strategist freeze all of it, in writing:
+
+1. Instrument and venue. A Hyperliquid perp does not inherit an equity-index or spot claim.
+2. Timeframe and how a bar is closed; which session, which exchange's clock.
+3. Price field and the exact formula, including how the first values are seeded.
+4. The transition rule and every abstention case, not just the entry.
+5. Next observable entry, signal expiry, mandatory stop, target and time exit.
+6. Costs, funding, spread, slippage and what happens to a rejected or partial fill.
+7. The full family the claim came from: every parameter set, asset and timeframe that was tried before this one was presented. That count is the multiplicity correction below.
+8. Chronological in-sample and out-of-sample boundaries and an untouched holdout.
+9. A prospective paper-trade duration agreed before the first run.
+
+Anything the source does not supply is missing, not implied. If the source cannot supply enough for a complete rule, say so plainly and record it: the claim stays an idea, and the desk does not fill the gaps with plausible defaults. Record the source with an exact commit, URL and retrieval date in `RULES.md`, so a later reader can see what was actually claimed and what the desk had to invent.
+
 ## 2. Data
 
 Candles via `candleSnapshot` (`hyperliquid-market-data`). Only the most recent 5000 candles per interval exist, so the interval sets the lookback: about 208 days of `1h`, 2.3 years of `4h`, 13 years of `1d`. Funding via `fundingHistory` (hourly, paginate by `startTime`). Save to CSV under `data/` with the request recorded in `data.md`, and check gaps and duplicated timestamps before using the file. Newer markets have shorter histories still.
@@ -54,7 +72,8 @@ Keep it simple and readable; a single Python file the user can follow beats a fr
 - **No look-ahead.** Signals at bar `t` use only data up to and including `t`; execution at `t+1` open (or `t` close, stated).
 - **Costs.** Taker and maker fees at the account's tier (`userFees` or the published schedule), funding paid or received each hour the position is open, and slippage per side (default a few bps, or from the Market Analyst's depth read for the intended size).
 - **Out-of-sample.** Hold back the most recent 15-25% of the period untouched until the rules and parameters are frozen. Report in-sample and out-of-sample separately.
-- **Parameters.** Record every parameter and how it was chosen. A grid of three values is a grid; say so.
+- **Looking at the holdout spends it.** Once the out-of-sample result has been seen, that data is no longer out of sample, whatever it said. A rule that fails and is then adjusted and re-run on the same window has no honest out-of-sample evidence left: the failed run is discovery data, and the next test needs a window nobody has looked at, or fresh forward data. Record in the run file how many times the holdout has been read. If the answer is more than once, the strategy is in-sample only and the run file says so.
+- **Parameters and multiplicity.** Record every parameter and how it was chosen, and keep every variant that was run, including the ones that failed. The number that matters is how many distinct rules, parameter sets, assets and timeframes were tried in total before this one was reported, and it includes the trials the idea's original source ran. Search hard enough over a fixed history and something will look profitable by chance. State the trial count next to the result; when it is more than a handful, treat a marginal edge as unproven rather than small, and expect the best-looking variant to be the luckiest rather than the best.
 - **Position accounting.** Sizes from the sizing rule and the stop; PnL in R and USD; equity curve; drawdown from the equity curve.
 
 Report per run:
@@ -63,10 +82,14 @@ Report per run:
 run 2026-08-16-1540 | funding-fade-v1 | in-sample 2025-01-01..2026-07-31 | out-of-sample 2026-08-01..2026-08-15
 trades 58 (IS) / 6 (OOS) | win 41% / 50% | avg win 1.9R / 1.6R | avg loss 1.0R / 1.0R
 expectancy 0.19R / 0.30R | max DD 9.4% / 2.1% | fees+funding 31% of gross PnL
+expectancy 5th pct 0.02R (block bootstrap, 2000 resamples, 10-trade blocks) | profit factor 1.31
+trials 9 (3 stop multipliers x 3 markets) | holdout reads 1 | verdict: WEAK - forward test before believing
 caveats: stop multiplier chosen from {1.5, 2, 3}; slippage 5 bps assumed; SOL history shorter than others
 ```
 
 No annualised return headline. Distributions and costs are the result.
+
+**Report an interval, not a point.** A mean expectancy computed once over one path is a single draw, and 58 trades is a small sample with autocorrelated returns. Resample the trade sequence in contiguous blocks (a few thousand resamples, blocks long enough to keep streaks intact), take the 5th percentile of mean expectancy, and report that lower bound beside the mean. If the lower bound sits at or below zero, the honest verdict is "no demonstrated edge", not "a small edge" - and that is true no matter how good the mean looks. Report the verdict as one of PASS, WEAK or REJECTED, and keep rejected runs: a strategy the lab killed is the lab working.
 
 ## 4. Sanity checks before believing anything
 
@@ -75,6 +98,7 @@ No annualised return headline. Distributions and costs are the result.
 - Remove the best two trades: does the result survive?
 - Trade count under 30 in-sample: report as "not enough evidence", not as a result.
 - Does the result depend on one market or one month?
+- Double the assumed slippage and fees: does the edge survive? An edge that only exists at optimistic costs is a cost assumption, not an edge.
 
 Write what you checked into the run file.
 
@@ -91,6 +115,7 @@ If it does not hold up: `POSTMORTEM.md` with the data, the runs, and one paragra
 ## Never
 
 - Never propose a strategy the user did not bring. Suggesting standard test structures is fine; suggesting "what works" is not.
-- Never quote a backtest return without trade count, drawdown, costs and the out-of-sample split.
+- Never quote a backtest return without trade count, drawdown, costs, the out-of-sample split and the trial count.
+- Never carry an imported claim's published results into this desk as evidence. The desk's evidence is what the desk ran.
 - Never send an order, on any network.
 - Never let a live signal loop turn into unattended execution.

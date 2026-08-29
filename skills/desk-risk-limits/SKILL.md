@@ -10,7 +10,22 @@ metadata:
 
 # Risk limits and sizing
 
-The desk imposes no limits of its own. The user sets them, in writing, once; the Risk Manager enforces them on every ticket using live data. Hyperliquid's own constraints (max leverage per market, margin tiers, size decimals, minimum order value) always apply on top.
+The user sets the desk's limits, in writing, once; the Risk Manager enforces them on every ticket using live data. Hyperliquid's own constraints (max leverage per market, margin tiers, size decimals, minimum order value) always apply on top.
+
+## 0. Desk ceilings
+
+The desk holds a few ceilings of its own. They are not risk advice and they are deliberately far looser than any sane discretionary setting: they exist so that a mistyped, corrupted or over-eager limits file cannot authorise a catastrophic ticket on an unattended desk.
+
+| Ceiling | Value |
+| --- | --- |
+| max risk per trade | 2% of equity |
+| max total open risk | 6% of equity |
+| max leverage on any market | 20x, and never above the exchange or tier max |
+| daily loss stop | -10% of start-of-day equity |
+| exchange-resting stop on every entry | mandatory |
+| standing approval covering a mainnet send | never |
+
+The user's limits file may only be **stricter** than these. A file that sets a value looser than a ceiling is not applied: the Risk Manager REJECTs with `gate failed: limits file exceeds desk ceiling <name>`, keeps enforcing the ceiling, and asks the user to edit the file. The desk never edits the file itself, and no Bot may raise a ceiling.
 
 ## 1. Write the limits file (setup, or on change)
 
@@ -35,7 +50,7 @@ Interview the user, one question at a time, then write `/workspace/trading-desk/
 - notes:
 ```
 
-Sensible starting points for someone new to perps: 0.25-0.5% per trade, 3x or lower, testnet first. Do not argue the user up or down; record what they choose and enforce it.
+Sensible starting points for someone new to perps: 0.25-0.5% per trade, 3x or lower, testnet first. Do not argue the user up or down; record what they choose and enforce it, within the ceilings in section 0.
 
 ## 2. Size a trade
 
@@ -50,24 +65,38 @@ Inputs you need before you start: entry price, stop price, side, market, the cur
 ### 2.2 Arithmetic (show every line in the PASS)
 
 ```
-risk_usd        = equity x max_risk_pct
-stop_distance   = |entry - stop|                       (must be > 0)
-raw_size        = risk_usd / stop_distance
-size            = round_down(raw_size, szDecimals)     (never round up)
-notional        = size x entry
-check           notional >= 10 USD                     (Hyperliquid minimum order value)
-check           size >= 1 lot at szDecimals            (else REJECT: risk budget too small for this stop)
-tier            = margin tier that applies to (existing position notional + notional) in this market
-max_lev_here    = min(limits.max_leverage, tier max leverage)
-margin_needed   = notional / requested_leverage         (requested_leverage <= max_lev_here)
-check           margin_needed <= free_margin x 0.8      (20% headroom; tighter if the user says so)
-open_risk_after = sum(risk to stop of open positions) + risk_usd
-check           open_risk_after <= equity x max_total_open_risk
-check           positions_after <= max_positions ; cluster count within cluster limit
-check           market in allowed list ; stop present ; daily loss stop not hit
+risk_usd          = equity x max_risk_pct
+stop_distance     = |entry - stop|                     (must be > 0)
+slip_stop         = assumed slippage on a triggered stop, in price units
+                    (at least the market's current spread; widen it on thin l2Book depth for this size)
+stop_fill         = stop - slip_stop  (long)   |   stop + slip_stop  (short)
+taker_fee         = the account's taker rate from `userFees` (a stop is a market exit; it pays taker)
+fees_per_unit     = (entry + stop_fill) x taker_fee    (entry leg and exit leg)
+stressed_distance = |entry - stop_fill| + fees_per_unit
+raw_size          = risk_usd / stressed_distance       (never risk_usd / stop_distance)
+size              = round_down(raw_size, szDecimals)   (never round up)
+notional          = size x entry
+check             notional >= 10 USD                   (Hyperliquid minimum order value)
+check             size >= 1 lot at szDecimals          (else REJECT: risk budget too small for this stop)
+tier              = margin tier that applies to (existing position notional + notional)
+max_lev_here      = min(ceiling 20x, limits.max_leverage, tier max leverage)
+margin_needed     = notional / requested_leverage      (requested_leverage <= max_lev_here)
+check             margin_needed <= free_margin x 0.8   (20% headroom; tighter if the user says so)
+open_risk_after   = sum(stressed risk of open positions) + risk_usd
+check             open_risk_after <= equity x max_total_open_risk
+check             open_risk_after <= equity x 6%       (desk ceiling, section 0)
+check             risk_usd <= equity x 2%              (desk ceiling, section 0)
+check             positions_after <= max_positions ; cluster count within cluster limit
+check             market in allowed list ; stop present ; daily loss stop not hit
 ```
 
-`R` for the ticket is `stop_distance` in USD per unit; targets are quoted in R by the user, never invented by the desk.
+`R` for the ticket is `stop_distance` in USD per unit, and targets are quoted in R by the user, never invented by the desk. Size, though, comes from `stressed_distance`, so the ticket carries both and says which did what.
+
+**Why the stress.** A stop is a trigger order: when it fires it becomes a market or IOC order and fills at whatever is there, which is worse than the trigger price and worse still on thin depth, in a gap, or in a liquidation cascade. Both legs also pay fees. Sizing from the nominal `stop_distance` therefore prices a loss that cannot happen and quietly overshoots `max_risk_pct` on every trade. Size from the stressed distance and the budget means what it says. `slip_stop` is an assumption: state the number used and where it came from in the PASS, and widen it rather than narrow it when the depth read is stale or the size is large relative to the book.
+
+Worked, on the numbers from `agents/risk-manager.md`: equity $10,200, 0.5% budget, ETH long at 3,000 with the stop at 2,900, 10 bps of slippage on the trigger and 0.045% taker on both legs. Stressed distance is 105.65, not 100, so the size is 0.4827 ETH rather than 0.51, and the worst case comes to exactly the $51.00 budgeted. Sized the naive way at 0.51 ETH, the same stop costs $53.88, which is 0.528% of equity: the budget was 0.5% and the desk quietly spent more, on every trade, in the same direction.
+
+The stress is a sizing input, not a promise. A gap through the stop can still exceed it; that is the residual the user carries, and the daily loss stop is what bounds it.
 
 ### 2.3 Margin tiers matter
 
@@ -102,6 +131,8 @@ Timestamp everything. Save a copy under `/workspace/trading-desk/briefs/YYYY-MM-
 ## Pitfalls
 
 - Sizing from a desired profit or from "what the margin allows" instead of from the stop. The stop defines the size.
+- Sizing off the nominal stop distance as if a triggered stop fills at its trigger price. It does not. Use `stressed_distance`.
+- Reading a failed, empty or stale account call as a clean book. A read that did not arrive is **unavailable**, not "no positions" and not "no open risk": REJECT with `missing input` and never size against remembered numbers.
 - Using account leverage or headline max leverage instead of the tier that applies.
 - Counting correlated positions as independent.
 - Treating a plan file, a chat message or a screenshot as an open order. Only the exchange record is.

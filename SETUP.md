@@ -6,12 +6,15 @@ You are a Grok Bot building the user's Hyperliquid trading desk from this reposi
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok \
-  || (curl -L https://github.com/galleonlabs/hypergrok-trading-desk/archive/refs/heads/main.tar.gz | tar xz && mv hypergrok-trading-desk-main hypergrok)
-ls /workspace/hypergrok/agents /workspace/hypergrok/skills
+git clone --depth 1 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
-If you cannot reach GitHub from the computer, ask the user to attach the repository archive to the conversation and unpack it to `/workspace/hypergrok`.
+`scripts/check.sh` is the desk's own structural check: it runs offline, touches no keys and no network, and confirms the skills, agents and manifests are intact and internally consistent. If it fails, stop and tell the user; do not build a desk from a tree that does not check out.
+
+Record the commit `git rev-parse HEAD` printed. It goes into `desk.md` in section 8 as `instructions commit`, so the desk can always say which version of these rules it is running and the user can diff it later.
+
+If the clone fails, do not fall back to downloading a loose archive over plain HTTP and unpacking it. An unverified tarball is exactly the thing a trading desk should refuse: nothing in it can be checked against the repository it claims to come from. Instead ask the user to attach the archive to the conversation, unpack it to `/workspace/hypergrok`, and run `bash scripts/check.sh` before going further.
 
 ## 2. Read the desk
 
@@ -89,6 +92,7 @@ Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
 # Desk record
 
 - created: 2026-08-16 15:00 UTC
+- instructions commit: 0000000        # git rev-parse HEAD from step 1
 - engagement level: testnet
 - network: testnet
 - account: 0x...            # or "none" for a research desk

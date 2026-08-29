@@ -6,11 +6,11 @@ You are a Grok Bot building the user's Hyperliquid trading desk from this reposi
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.1.1 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.2.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
-`v1.1.1` is a release tag, not a moving branch: the desk you build is the desk that was reviewed. Check the repository's releases for a newer tag before setting up, and do not swap the tag for `main` to pick up unreleased work.
+`v1.2.0` is a release tag, not a moving branch: the desk you build is the desk that was reviewed. Check the repository's releases for a newer tag before setting up, and do not swap the tag for `main` to pick up unreleased work.
 
 `git clone` prints `warning: refs/tags/... is not a commit!` when it shallow-clones an annotated tag. That warning is expected and harmless: the clone still resolves to the tagged commit, which is why the command prints it. Judge the step by `scripts/check.sh`, not by that line.
 
@@ -85,6 +85,10 @@ Post this as the first message in the group:
 
 Ask the user to open **Settings, General, Auto-review** and add a **Require Approval** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. If the rule syntax cannot express that exactly, say so; the desk's own protocol still holds: the Execution Trader sends only after the user writes "approve <ticket id>" in chat. Exchange writes always stay behind approval.
 
+That rule is the gate. The approval phrase in chat is the desk's record that the user agreed, but the Bots write the floor's messages, so it cannot be the only thing standing in the way of a send. Set the rule up here, not later.
+
+Then ask the user one question: **may the desk place a protective stop for a position that has none, without waiting for approval?** It is reduce-only, so it can only reduce exposure, and the alternative is a naked position waiting on someone to read a message. If yes, record it in `desk.md` under `standing approvals` with the date. If no, record that too, along with how long the desk should chase them before telling them to fix it in the Hyperliquid app themselves.
+
 ## 8. Write the desk record
 
 Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
@@ -103,7 +107,8 @@ Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
 - bots: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader, Trade Reviewer
 - group chats: Trading Floor (6)
 - risk limits: not yet written  (Risk Manager runs the interview: skills/desk-risk-limits)
-- standing approvals: none
+- standing approvals: none          # recommended: protective stops (reduce-only), any network
+- unprotected position deadline: 15m  # chase this long, then tell the user to fix it in the app
 - status: research-only until an API wallet is provisioned
 ```
 

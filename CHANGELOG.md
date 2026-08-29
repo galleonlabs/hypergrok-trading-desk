@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-08-29
+
+Correctness pass across the Hyperliquid skills and the incident playbooks, closing the last findings from the fork audit that genuinely apply to a markdown desk. Three of these could strand a real position.
+
+**A partial close stripped the remainder's protection.** `hyperliquid-positions` said to cancel orphaned TP/SL "after any close". After a *partial* close the position still exists and still needs its stop, so the sweep removed the protection from what was left. Clean-up is now conditional on reading `clearinghouseState`: cancel orphans only on a confirmed full close; on a partial close, replace a fixed-size stop before cancelling the old one, and leave a position-tied stop alone. Same fix in the `desk-execution-protocol` close procedure, which had the same reflex.
+
+**The TypeScript bracket carried no client order ids.** The grouped entry/tp/sl example omitted `c:` on all three legs, while `desk-execution-protocol` requires a cloid on every send and the whole unknown-result recovery path is a lookup by cloid. A send built from that example could not be reconciled. Every leg now carries its own.
+
+**The dead-man's switch is not position-aware.** `scheduleCancel` cancels protective stops along with everything else, so arming it with a position open leaves that position naked when it fires, and nothing re-arms it. It is now scoped to a desk with resting orders and no position, and firing with a position open is an unprotected-position incident rather than clean-up.
+
++ `desk-incident-response`: playbook A matches the recovery rule from 1.1.0 - a clean check is not proof, and a replacement waits for the original to expire. Playbook D no longer lets an unprotected position wait forever on a human: the first alert carries exposure and distance to liquidation, escalation runs on a deadline recorded in `desk.md`, and when it passes the desk tells the user to fix it in the Hyperliquid app rather than pinging a channel nobody is reading.
++ Standing approvals are scoped by what they can do rather than by network. The ceiling is now "no standing approval for a mainnet send that can open or increase exposure", with reduce-only protection as the explicit carve-out on any network - it can only reduce risk, and the alternative is a naked position waiting on a message. `SETUP.md` asks the user that question during setup and records the answer, with a deadline, in `desk.md`.
++ `docs/FAQ.md`, `SECURITY.md` and `agents/execution-trader.md` described the pre-1.1.0 approval and unknown-result rules. They now match the skills.
 + `SETUP.md`: note that `git clone --depth 1 --branch <tag>` prints a harmless `refs/tags/... is not a commit!` warning for an annotated tag, so a Bot following the file does not read it as a failed install and abort.
 
 ## 1.1.1 - 2026-08-29

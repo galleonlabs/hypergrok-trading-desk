@@ -1,6 +1,6 @@
 {
   "name": "hypergrok",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Hyperliquid trading desk roles and skills for Grok Bot and Grok Build.",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
   "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",

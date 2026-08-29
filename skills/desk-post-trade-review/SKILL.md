@@ -3,7 +3,7 @@ name: desk-post-trade-review
 description: The Trade Reviewer's procedure for journaling desk activity and reviewing trades from the exchange record - process graded separately from outcome, execution costs measured, one repeatable finding per review, plus the weekly desk review. Use after any send, when a trade closes, on the weekly routine, or when the user asks "how did that go".
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
   author: Galleon Labs
   category: desk
 ---
@@ -24,7 +24,7 @@ The journal is the desk's memory; the review is how the desk learns. Both come f
 16:05 UTC  HG-20260816-01 fill     0.4827 @ 3,000.0 maker, fee $0.29
 09:12 UTC  HG-20260816-01 closed   tp 3,089.6, fee $1.44; position flat; sl 2,900 cancelled 09:13
 10:00 UTC  limits                  risk-limits v3 -> v4: max positions 3 -> 4 (user, reason: adding HYPE)
-11:40 UTC  incident INC-20260817-01 send timeout on HG-20260817-02, reconciled not-on-exchange, re-approved and sent 11:47
+11:40 UTC  incident INC-20260817-01 send timeout on HG-20260817-02; not on exchange, waited out expiresAfter 11:41, re-checked clean, re-approved and sent 11:47
 18:00 UTC  note                    maker entries at 10 bps depth filled within 2h on both attempts this week
 ```
 

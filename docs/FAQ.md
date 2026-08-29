@@ -10,7 +10,7 @@ Grok Bot and the paste-in prompt from the README. The desk starts in research mo
 Through a Hyperliquid API (agent) wallet you create in the Hyperliquid app and hand over through Grok Bot's secure secret card. It can place, modify and cancel orders. Withdrawals, transfers and bridging stay in the app with your main wallet.
 
 **How do I approve a trade?**
-The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `approve HG-20260816-01`. That exact phrase, after seeing that exact ticket, is what lets the Execution Trader send it, once, within thirty minutes.
+The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `approve HG-20260816-01`. That exact phrase, after seeing that exact ticket, is the desk's record that you agreed, and without it nothing is sent. It is deliberately not the only thing standing in the way: the Bots write the floor's messages, so the enforcing gate is Grok Bot's own Require Approval rule on the exchange write path, outside the conversation. Set it up during setup. No Bot may type, quote forward or infer your approval.
 
 **Where do the ideas come from?**
 From you. The Strategist turns your idea into rules and tests it on Hyperliquid history with fees, funding and an out-of-sample split; the desk then paper-trades it on testnet if you like. The Market and Research Analysts give you the picture; you decide.
@@ -31,7 +31,7 @@ Routines can brief you, watch prices and funding, check the book and alert you. 
 Mainnet, even when you trade on testnet, because testnet books are thin. Every number says which network it came from.
 
 **What if a send times out?**
-The Execution Trader checks the exchange by client order id, tells you whether the order exists, and asks for a fresh approval only if it does not.
+It never resends. It checks the exchange by client order id, and if the order is not there it still does not assume it failed, because a delayed send can land minutes later. Every send carries an expiry, so the desk waits for that deadline to pass, checks once more, and only then tells you the send is dead and asks for a fresh approval. You will be told which of those two happened.
 
 **How do I set Grok Bot's own approvals?**
 Settings, General, Auto-review: add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Require Approval wins over Always Allow.

@@ -3,7 +3,7 @@ name: hyperliquid-advanced
 description: Less common Hyperliquid actions and their rules - dead-man's switch (scheduleCancel), TWAP orders, spot orders, expiresAfter and nonces, API wallet approval from code, sub-account and vault addressing, HIP-3 dexs, and what the desk deliberately does not do (transfers, withdrawals, builder fees, staking). Write actions are Execution Trader only, on an approved ticket. Use when a ticket asks for one of these or when a user asks whether the desk can.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -23,7 +23,9 @@ res = exchange.schedule_cancel(get_timestamp_ms() + 10 * 60 * 1000)   # 10 minut
 res = exchange.schedule_cancel(None)                                    # clear it
 ```
 
-TypeScript: `await exchange.scheduleCancel({ time: Date.now() + 600_000 })`; omit `time` to clear. Limits: at most 10 triggers per day per account (resets 00:00 UTC). It cancels stops too, so re-arm protection if it fires.
+TypeScript: `await exchange.scheduleCancel({ time: Date.now() + 600_000 })`; omit `time` to clear. Limits: at most 10 triggers per day per account (resets 00:00 UTC).
+
+**It cancels protective stops too, and it is not position-aware.** If it fires while a position is open, that position is left naked on the exchange and nothing re-arms it automatically. So: it is for a desk with resting orders and no position, or for a user who has explicitly accepted that outcome for this account. Do not arm it as routine hygiene while a position is open. If it does fire with a position open, that is an unprotected position the moment it lands - declare it and run playbook D in `desk-incident-response` at priority, rather than treating re-arming as clean-up.
 
 ## TWAP
 

@@ -3,7 +3,7 @@ name: desk-execution-protocol
 description: The Execution Trader's procedure for turning an approved ticket into one Hyperliquid action and reconciling it - the pre-send checklist, order construction rules, single-send discipline, unknown-result handling and the execution report. Use before and after every send, cancel, modify, leverage change or close.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -66,7 +66,7 @@ Each is its own ticket (suffix `-B`, `-C`...) with its own PASS and approval by 
 - **Cancel:** by cloid where you have it, else by oid from `openOrders`. Confirm removal from `openOrders`.
 - **Modify:** Hyperliquid's `modify`/`batchModify` cancels a resting limit order and places the replacement in one action (new oid, fresh cloid); the replacement must itself rest (`Alo`, or a non-executable `Gtc`). Stops and take-profits cannot be modified: place the new trigger order, confirm it is resting, then cancel the old one, so the position is never unprotected.
 - **Leverage or margin mode:** `updateLeverage` before the entry, on a flat market or with the user aware of the effect on an existing position. Confirm from `clearinghouseState`.
-- **Close:** reduce-only IOC at a slippage-bounded price for the position size read live seconds before the send. Then cancel orphaned protective orders and report both.
+- **Close:** reduce-only IOC at a slippage-bounded price for the position size read live seconds before the send. Then read `clearinghouseState` again: if the position is gone, cancel the orphaned protective orders; if it only shrank (a partial fill on the close), the remainder is still open and still needs its stop, so resize protection before cancelling anything. Report which case it was.
 - **Dead-man's switch:** `scheduleCancel` only when the user asks for it, with the time written in the report; remember it cancels all of the account's open orders when it fires.
 
 ## Rehearsal rule

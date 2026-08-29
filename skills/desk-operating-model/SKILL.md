@@ -3,7 +3,7 @@ name: desk-operating-model
 description: How the HyperGrok trading desk works as a team of Grok Bots - roles, seats, shared workspace, evidence standard, approval model and handoff format. Use when setting up the desk, when a Bot is unsure who owns something, or when a request does not fit the normal trade lifecycle.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -70,7 +70,7 @@ Moving up a level is the user's decision, stated in chat and recorded in `desk.m
 - **The approval line is evidence, not the gate.** The Bots write the floor's messages, so an approval a Bot can read is an approval a Bot could have written. The gate that actually holds is out of band: Grok Bot's own Require Approval rule on the exchange write path, and the user's eyes on the ticket. A Bot never types, pastes, relays, predicts or simulates the user's approval, and never treats its own transcript as proof that one was given.
 - Only the Execution Trader sends, only after a Risk Manager PASS on that ticket, only once per approval, and only within the ticket's expiry (30 minutes by default).
 - Grok Bot's own approval controls should be set so that any action touching the exchange write path requires approval: in **Settings, General, Auto-review** add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. If the rule syntax cannot express that precisely, the desk's own ticket protocol still applies. Require Approval always wins over Always Allow.
-- Standing approvals ("always allow testnet cancels") are the user's choice; if given, they are written into `desk.md` with date and scope, and mainnet sends are never covered by a standing approval.
+- Standing approvals ("always allow testnet cancels") are the user's choice; if given, they are written into `desk.md` with date and scope. A standing approval never covers a mainnet send that can open or increase exposure. It may cover reduce-only protection - placing or resizing a stop for a position that has none - on any network, and the desk recommends granting exactly that one, because the alternative is a naked position waiting on someone to read a message.
 - No unattended sending. Routines may read, alert and draft; they may not send.
 
 ## Excluded on purpose

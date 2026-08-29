@@ -3,7 +3,7 @@ name: hyperliquid-orders
 description: Place, cancel and modify Hyperliquid orders correctly from the desk computer - limit and IOC (market-style) orders, take-profit and stop-loss trigger orders with grouping, client order ids, reduce-only, batch actions, price and size rounding, and how to read every response status. Write path - Execution Trader only, on an approved ticket. Use for any order action and for reconciling by cloid.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -203,11 +203,15 @@ const res = await exchange.order({
 console.log(res.response.data.statuses[0]);       // { resting: { oid } } | { filled: {...} } | "waitingForFill" | "waitingForTrigger"
 
 // entry + tp + sl grouped (p on the triggers = worst acceptable price after trigger: 1% for tp, 5% for sl)
+// every leg carries its own fresh cloid: it is how a lost response is reconciled leg by leg
+const [cEntry, cTp, cSl] = [0, 1, 2].map(
+  () => ("0x" + randomBytes(16).toString("hex")) as `0x${string}`,
+);
 await exchange.order({
   orders: [
-    { a, b: true,  p: "3000", s: "0.51", r: false, t: { limit: { tif: "Gtc" } } },
-    { a, b: false, p: "3059", s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "3090", tpsl: "tp" } } },
-    { a, b: false, p: "2755", s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "2900", tpsl: "sl" } } },
+    { a, b: true,  p: "3000", s: "0.51", r: false, t: { limit: { tif: "Gtc" } }, c: cEntry },
+    { a, b: false, p: "3059", s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "3090", tpsl: "tp" } }, c: cTp },
+    { a, b: false, p: "2755", s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "2900", tpsl: "sl" } }, c: cSl },
   ],
   grouping: "normalTpsl",
 });

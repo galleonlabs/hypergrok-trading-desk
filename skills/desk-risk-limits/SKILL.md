@@ -3,7 +3,7 @@ name: desk-risk-limits
 description: How the Risk Manager writes the desk's risk limits with the user, sizes every proposed trade from live account state and Hyperliquid's real constraints, checks the book, and issues a PASS or REJECT with exact ticket fields. Use for setting up or changing limits, sizing any trade, and answering "how's the book".
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -23,7 +23,9 @@ The desk holds a few ceilings of its own. They are not risk advice and they are 
 | max leverage on any market | 20x, and never above the exchange or tier max |
 | daily loss stop | -10% of start-of-day equity |
 | exchange-resting stop on every entry | mandatory |
-| standing approval covering a mainnet send | never |
+| standing approval for a mainnet send that can open or increase exposure | never |
+
+The one send a standing approval may cover on any network is **reduce-only protection**: placing or resizing a stop for a position that has none. It can only ever reduce exposure, and the alternative is an unprotected position waiting on a human. Entries, adds, leverage increases and anything that can open or grow a position always need approval by id, on every network.
 
 The user's limits file may only be **stricter** than these. A file that sets a value looser than a ceiling is not applied: the Risk Manager REJECTs with `gate failed: limits file exceeds desk ceiling <name>`, keeps enforcing the ceiling, and asks the user to edit the file. The desk never edits the file itself, and no Bot may raise a ceiling.
 
@@ -46,7 +48,8 @@ Interview the user, one question at a time, then write `/workspace/trading-desk/
 - daily loss stop: -2% of start-of-day equity -> no new risk until the user resets in writing
 - max slippage tolerance at send: 10 bps  # Execution Trader stops if mid moved further
 - correlated cluster limit: majors (BTC, ETH, SOL) count as one cluster; max 2 positions per cluster
-- standing approvals: none
+- standing approvals: none          # recommended: protective stops (reduce-only), any network
+- unprotected position deadline: 15m  # then tell the user to fix it in the Hyperliquid app
 - notes:
 ```
 
@@ -125,7 +128,7 @@ Timestamp everything. Save a copy under `/workspace/trading-desk/briefs/YYYY-MM-
 ## 4. When the desk hits a limit
 
 - Daily loss stop hit: post it once on the floor, set `status: no-new-risk` in `desk.md`, and REJECT new proposals with that gate until the user resets in writing. Exits and protection are still allowed.
-- Unprotected position discovered: alert the Desk Lead and Execution Trader immediately; a protective stop ticket goes through the lifecycle at priority.
+- Unprotected position discovered: alert the Desk Lead and Execution Trader immediately; a protective stop ticket goes through the lifecycle at priority. If the user pre-authorised protective stops, it goes straight out under that standing approval. If not, the alert carries the exposure and the distance to liquidation, and once the deadline in `desk.md` passes the desk tells the user to close or protect the position in the Hyperliquid app themselves (`desk-incident-response` playbook D).
 - Limits file missing or unversioned: the desk is a research desk until it exists.
 
 ## Pitfalls

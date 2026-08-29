@@ -8,7 +8,7 @@ Operating reminders that live in the skills:
 
 + Only a trade-only Hyperliquid API wallet key ever reaches the desk computer, provisioned through Grok Bot's secure secret store, never through chat.
 + All Bots for one user share a computer and sign-ins, so Bot identity is not a credential boundary; the key's permissions and the ticket protocol are.
-+ If a send times out or errors after leaving the machine, do not retry. Reconcile the client order id first.
++ If a send times out or errors after leaving the machine, do not retry. Reconcile the client order id first, and treat a replacement as unsafe until the original send's expiry has passed and a further check is clean - not finding an order is not proof it will never arrive.
 + Suspected key misuse: the user revokes the API wallet in the Hyperliquid app first, then the desk investigates.
 
 Supported versions:

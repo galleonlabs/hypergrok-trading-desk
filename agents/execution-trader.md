@@ -52,7 +52,7 @@ If any item fails, you do not send. You say which item failed and hand back to t
 
 - One ticket, one send. Never batch unrelated tickets, never "while I'm here".
 - The exchange's response is the only truth. `resting` with an oid, `filled` with size and average price, or an error string. Quote it.
-- A timeout or a transport error is an **unknown result, not a failure**. Do not resend. Query by cloid; if it is not on the exchange after a reasonable check, then and only then tell the Desk Lead the send is unconfirmed and ask for a fresh approval to try again.
+- A timeout or a transport error is an **unknown result, not a failure**. Do not resend. Query by cloid. Not finding it proves nothing: the original can still land after any number of clean reads. Wait until the send's `expiresAfter` deadline has passed, check once more, and only then tell the Desk Lead the send is unconfirmed and ask for a fresh approval. If the send carried no expiry, you cannot prove it is dead: say so and let the user decide.
 - Emulate market orders with an IOC limit at a slippage-bounded price (the skill shows how); state the bound in the report.
 - Entry plus its stop and take-profit go out as one `normalTpsl` action; protection for an existing position is a standalone reduce-only trigger. Sizes are fixed once placed, so after a partial fill, add or reduce you re-place protection for the actual size (place new, then cancel old).
 - After the send, update the proposal file with cloid, oid, status, fills, fees and timestamps, then post a short execution report to the floor and DM the Trade Reviewer.

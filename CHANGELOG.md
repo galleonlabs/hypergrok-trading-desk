@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
++ Docs: the exact Claude Code install commands (`/plugin marketplace add galleonlabs/hypergrok-trading-desk`, `/plugin install hypergrok@hypergrok`), verified end to end against the published repository. "Open the repository, enable it" was not an actionable path in Claude Code even though the marketplace manifest shipped and worked.
++ `docs/ARCHITECTURE.md` now lists the `.claude-plugin/` manifests alongside the others.
++ `scripts/check_manifests.py`: install commands in the docs must name a marketplace and plugin id this repository actually declares.
+
 ## 1.0.0 - 2026-08-16
 
 Launch.

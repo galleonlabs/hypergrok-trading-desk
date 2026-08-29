@@ -74,7 +74,18 @@ Perpetual futures can liquidate an account. HyperGrok is documentation and instr
 
 ## Also runs in Grok Build, Cursor and Claude Code
 
-The same `agents/`, `skills/` and `rules/` load as a plugin. Open the repository, enable it, run `/desk-operating-model`.
+The same `agents/`, `skills/` and `rules/` load as a plugin: sixteen skills, and the seven roles as subagents.
+
+In Claude Code, install it from this repository:
+
+```
+/plugin marketplace add galleonlabs/hypergrok-trading-desk
+/plugin install hypergrok@hypergrok
+```
+
+In Grok Build and Cursor, open the repository and enable the plugin.
+
+Either way, run `/desk-operating-model` to begin.
 
 ## Inside the repository
 

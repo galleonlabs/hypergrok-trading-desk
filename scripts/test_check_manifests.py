@@ -78,6 +78,34 @@ def wrong_name(root):
     return ".grok-plugin/marketplace.json", "plugins[0].name"
 
 
+def replace(root, rel, old, new):
+    path = os.path.join(root, rel)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    assert old in text, f"{rel}: fixture anchor '{old}' not found"
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text.replace(old, new))
+
+
+def documented_marketplace_typo(root):
+    replace(root, "README.md",
+            "/plugin marketplace add galleonlabs/hypergrok-trading-desk",
+            "/plugin marketplace add galleonlabs/hypergrok")
+    return "README.md", "/plugin marketplace add"
+
+
+def documented_install_id_typo(root):
+    replace(root, "SETUP.md", "/plugin install hypergrok@hypergrok",
+            "/plugin install hypergrok@galleonlabs")
+    return "SETUP.md", "/plugin install"
+
+
+def marketplace_drops_documented_plugin(root):
+    """Drift the other way: the docs still install a plugin the marketplace stopped declaring."""
+    edit(root, ".claude-plugin/marketplace.json", lambda d: d.update(plugins=[]))
+    return "README.md", "/plugin install"
+
+
 FIXTURES = [
     version_mismatch,
     nested_version_mismatch,
@@ -87,6 +115,9 @@ FIXTURES = [
     invalid_json,
     inventory_drift,
     wrong_name,
+    documented_marketplace_typo,
+    documented_install_id_typo,
+    marketplace_drops_documented_plugin,
 ]
 
 

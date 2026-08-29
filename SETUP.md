@@ -126,4 +126,15 @@ Then say: "The desk is ready. Ask the Desk Lead for a market brief to see it wor
 
 ## If you are not Grok Bot
 
-Grok Build, Cursor and Claude Code load `agents/`, `skills/` and `rules/` from this repository as a plugin. Open the repository, enable the plugin, and run `/desk-operating-model` to begin. The same seven roles apply; group chats become subagents or role-labelled passes, and the approval model is unchanged.
+Grok Build, Cursor and Claude Code load `agents/`, `skills/` and `rules/` from this repository as a plugin. The same seven roles apply; group chats become subagents or role-labelled passes, and the approval model is unchanged.
+
+In Claude Code, add this repository as a marketplace and install the plugin:
+
+```
+/plugin marketplace add galleonlabs/hypergrok-trading-desk
+/plugin install hypergrok@hypergrok
+```
+
+In Grok Build and Cursor, open the repository and enable the plugin.
+
+Either way, run `/desk-operating-model` to begin.

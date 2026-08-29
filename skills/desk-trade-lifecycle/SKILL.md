@@ -3,7 +3,7 @@ name: desk-trade-lifecycle
 description: The end-to-end procedure for one trade on the HyperGrok desk - from an idea to a reviewed, journaled result - with the ticket format, who owns each stage, and what "done" looks like. Use whenever the user wants to open, adjust or close a position, or whenever any Bot is about to touch the exchange write path.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: desk
 ---

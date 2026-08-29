@@ -3,7 +3,7 @@ name: desk-strategy-lab
 description: How the Strategist works with the user to turn their own trading idea into explicit rules, backtest it honestly on Hyperliquid candle and funding history, and paper-trade it on testnet through the desk lifecycle. Method only - the desk ships no strategies and makes no return claims. Use when the user wants to design, test, compare or paper-trade an idea.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: desk
 ---

@@ -3,7 +3,7 @@ name: desk-execution-protocol
 description: The Execution Trader's procedure for turning an approved ticket into one Hyperliquid action and reconciling it - the pre-send checklist, order construction rules, single-send discipline, unknown-result handling and the execution report. Use before and after every send, cancel, modify, leverage change or close.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: desk
 ---

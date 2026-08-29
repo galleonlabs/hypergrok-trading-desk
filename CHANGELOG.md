@@ -2,9 +2,26 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-08-29
+
+Risk, evidence and recovery hardening. Several of these came out of reviewing a public fork of this repository, which audited the desk against production-custody standards; the findings that survived being a markdown desk rather than a signing service are below.
+
+**Sizing now stresses the stop.** `desk-risk-limits` sized from the nominal stop distance, which assumes a triggered stop fills at its trigger price. It does not: a stop is a trigger order that becomes a market order, slips, and pays taker on both legs. Every trade therefore risked more than the budget said. Size now comes from `stressed_distance` (slippage plus both fee legs). On the desk's own worked example the old arithmetic spent 0.528% of equity against a 0.5% budget; the new arithmetic lands on the budget exactly. `agents/risk-manager.md` carries the recomputed example.
+
++ `desk-risk-limits` section 0: desk ceilings the user's limits file may only tighten, never loosen - 2% per trade, 6% total open risk, 20x, -10% daily, mandatory exchange-resting stop, and no standing approval covering a mainnet send. They are deliberately far looser than any sane setting; they exist so a mistyped or corrupted file cannot authorise a catastrophic ticket. Enforced in the sizing arithmetic, not only asserted.
++ `unavailable` is a verdict, not silence. `desk-operating-model` makes missing, stale, gapped, partial or cross-network data a first-class outcome that never collapses into "the condition did not fire". `desk-monitoring` applies it to watches: a dead feed reporting "not crossed" looks exactly like a calm market, so every watch carries a staleness bound and alerts when it cannot tell.
++ The approval line is evidence, not the gate. The Bots write the floor's messages, so an approval a Bot can read is one a Bot could have written. `desk-operating-model` and `desk-trade-lifecycle` now put enforcement out of band and forbid a Bot writing, quoting forward, inferring or simulating the user's approval.
++ Unknown results: a clean read was never proof. A send that timed out can still land after any number of quiet checks. `desk-execution-protocol` now requires `expiresAfter` on every send in the pre-send checklist and treats a ticket as dead only when the original is provably incapable of arriving, with `noop` as the fallback when no expiry was set.
++ `desk-strategy-lab`: a freeze checklist for claims imported from outside (a repository of settings, a thread, a screenshot), multiplicity across every variant tried including the source's, a block-bootstrap lower bound beside the mean expectancy, a cost-doubling sanity check, and the rule that looking at the holdout spends it.
++ `desk-execution-protocol`: repaired a rule that was truncated mid-sentence ("Never let a routine send.").
++ `SETUP.md`: the install no longer falls back to piping an unverified archive from a mutable branch into `tar`. It clones a pinned tag, runs `scripts/check.sh` before a desk is built from the tree, and records the installed commit in `desk.md` so the desk can say which rules it is running.
 + Docs: the exact Claude Code install commands (`/plugin marketplace add galleonlabs/hypergrok-trading-desk`, `/plugin install hypergrok@hypergrok`), verified end to end against the published repository. "Open the repository, enable it" was not an actionable path in Claude Code even though the marketplace manifest shipped and worked.
 + `docs/ARCHITECTURE.md` now lists the `.claude-plugin/` manifests alongside the others.
 + `scripts/check_manifests.py`: install commands in the docs must name a marketplace and plugin id this repository actually declares.
++ Fixed: `predictedFundings` is normalised by each venue's own funding interval.
++ Fixed: the WebSocket watch no longer points at the rejected `webData2` subscription.
+
+Note on versions: the `v1.0.0` git tag pointed at an orphaned lineage (the earlier Python CLI, with `src/` and `pyproject.toml`) that is not an ancestor of `main`, while the 1.0.0 entry below describes this markdown desk. The stale tag has been removed; `v1.1.0` is the first tag that matches what this repository actually ships.
 
 ## 1.0.0 - 2026-08-16
 

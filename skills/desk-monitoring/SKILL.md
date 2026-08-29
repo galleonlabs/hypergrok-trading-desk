@@ -3,7 +3,7 @@ name: desk-monitoring
 description: How the desk watches markets and the account between trades using Grok Bot routines and WebSocket or polling watches - the desk brief, book checks, funding and price watches, alert conditions and what a watch may and may not do. Use when the user asks for briefings, alerts, "watch X" or scheduled checks.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: desk
 ---

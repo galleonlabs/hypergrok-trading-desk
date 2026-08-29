@@ -3,7 +3,7 @@ name: desk-operating-model
 description: How the HyperGrok trading desk works as a team of Grok Bots - roles, seats, shared workspace, evidence standard, approval model and handoff format. Use when setting up the desk, when a Bot is unsure who owns something, or when a request does not fit the normal trade lifecycle.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: Galleon Labs
   category: desk
 ---

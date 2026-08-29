@@ -3,8 +3,9 @@
 
 Every marketplace and plugin manifest in this repository describes the same
 distributable: one plugin named `hypergrok` at one version, pointing at the
-skills, agents and rules checked in here. This script fails the build when a
-manifest stops matching what the repository actually ships.
+skills, agents and rules checked in here, and the install commands the docs
+tell a user to type must name that same distributable. This script fails the
+build when a manifest stops matching what the repository actually ships.
 
 Usage: python3 scripts/check_manifests.py [repo-root]
 """
@@ -27,6 +28,11 @@ MANIFESTS = [
 
 # Manifest keys whose value is a path into this repository.
 PATH_KEYS = ("source", "logo", "skills", "agents", "rules")
+
+# The marketplace manifest Claude Code resolves `/plugin marketplace add` against.
+MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json"
+MARKETPLACE_ADD_RE = re.compile(r"/plugin marketplace add\s+([^\s`]+)")
+PLUGIN_INSTALL_RE = re.compile(r"/plugin install\s+([^\s`]+)")
 
 NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -103,6 +109,47 @@ def declared_counts(value, found):
                 found.append((count, "skills" if noun.startswith("skill") else "roles"))
 
 
+def markdown_files(root):
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__", "node_modules")]
+        for name in sorted(filenames):
+            if name.endswith(".md"):
+                found.append(os.path.relpath(os.path.join(dirpath, name), root))
+    return sorted(found)
+
+
+def check_documented_install(root, marketplace, errors):
+    """Install commands in the docs must name ids this repository actually declares.
+
+    A wrong marketplace or plugin id is the one defect a reader cannot work
+    around: the command simply fails for them.
+    """
+    if not isinstance(marketplace, dict):
+        return
+    shorthand = REPOSITORY.removeprefix("https://github.com/")
+    market_name = marketplace.get("name")
+    install_ids = {
+        f"{p.get('name')}@{market_name}"
+        for p in (marketplace.get("plugins") or [])
+        if isinstance(p, dict)
+    }
+    for rel in markdown_files(root):
+        with open(os.path.join(root, rel), encoding="utf-8") as fh:
+            text = fh.read()
+        for arg in MARKETPLACE_ADD_RE.findall(text):
+            if arg != shorthand:
+                errors.append(
+                    f"{rel}: '/plugin marketplace add {arg}' should add '{shorthand}'"
+                )
+        for arg in PLUGIN_INSTALL_RE.findall(text):
+            if arg not in install_ids:
+                errors.append(
+                    f"{rel}: '/plugin install {arg}' is not declared by "
+                    f"{MARKETPLACE_MANIFEST} (expected one of {sorted(install_ids)})"
+                )
+
+
 def main(root):
     errors = []
     skills = sorted(
@@ -122,10 +169,13 @@ def main(root):
         errors.append(f"{MANIFESTS[0]}: version '{version}' is not a semantic version")
         version = None
 
+    marketplace = None
     for rel in MANIFESTS:
         data = root_manifest if rel == MANIFESTS[0] else load(root, rel, errors)
         if data is None:
             continue
+        if rel == MARKETPLACE_MANIFEST:
+            marketplace = data
         for prefix, entry in entries(data):
             name = entry.get("name")
             if name != CANONICAL_NAME:
@@ -148,6 +198,8 @@ def main(root):
                 errors.append(
                     f"{rel}: claims {count} {noun} but the repository ships {inventory[noun]}"
                 )
+
+    check_documented_install(root, marketplace, errors)
 
     if errors:
         print("\n".join(errors))

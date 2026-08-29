@@ -61,4 +61,4 @@ Separating the person who wants the trade from the one who sizes it, the one who
 
 ## Other runtimes
 
-Grok Build, Cursor and Claude Code load `agents/`, `skills/` and `rules/` as a plugin (`.grok-plugin/plugin.json`, `.cursor-plugin/plugin.json`, `plugin.json`). Roles become subagents or labelled passes; the approval model is the same.
+Grok Build, Cursor and Claude Code load `agents/`, `skills/` and `rules/` as a plugin (`plugin.json`, `.grok-plugin/plugin.json`, `.cursor-plugin/plugin.json`, `.claude-plugin/plugin.json`). Claude Code resolves the repository through `.claude-plugin/marketplace.json`, so it installs with `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. Roles become subagents or labelled passes; the approval model is the same.

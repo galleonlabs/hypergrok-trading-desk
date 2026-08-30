@@ -33,6 +33,14 @@ PATH_KEYS = ("source", "logo", "skills", "agents", "rules")
 MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json"
 MARKETPLACE_ADD_RE = re.compile(r"/plugin marketplace add\s+([^\s`]+)")
 PLUGIN_INSTALL_RE = re.compile(r"/plugin install\s+([^\s`]+)")
+# skills.sh indexes skill directories, not the plugin id. A trailing /hypergrok
+# is therefore a listing that does not exist.
+SKILLS_SH_RE = re.compile(
+    r"https://(?:www\.)?skills\.sh/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)"
+)
+SKILLS_ADD_RE = re.compile(
+    r"\bskills add\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)"
+)
 
 NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -119,11 +127,33 @@ def markdown_files(root):
     return sorted(found)
 
 
-def check_documented_install(root, marketplace, errors):
+def check_skills_pack_target(rel, kind, target, shorthand, skill_names, errors):
+    """A skills.sh path or `skills add` argument must name this pack or a skill it ships.
+
+    The plugin id is not a skill. skills.sh renders `/hypergrok` as a missing
+    skill even though the pack page for this repository is live.
+    """
+    parts = target.split("/")
+    if len(parts) not in (2, 3):
+        errors.append(f"{rel}: {kind} '{target}' should name '{shorthand}'")
+        return
+    repo = f"{parts[0]}/{parts[1]}"
+    if repo != shorthand:
+        errors.append(f"{rel}: {kind} '{target}' should name '{shorthand}'")
+        return
+    if len(parts) == 3 and parts[2] not in skill_names:
+        errors.append(
+            f"{rel}: {kind} '{target}' names '{parts[2]}', which is not a skill "
+            "this repository ships"
+        )
+
+
+def check_documented_install(root, marketplace, skill_names, errors):
     """Install commands in the docs must name ids this repository actually declares.
 
     A wrong marketplace or plugin id is the one defect a reader cannot work
-    around: the command simply fails for them.
+    around: the command simply fails for them. The same is true of a skills.sh
+    listing or `skills add` argument that names a slug the pack does not ship.
     """
     if not isinstance(marketplace, dict):
         return
@@ -148,6 +178,14 @@ def check_documented_install(root, marketplace, errors):
                     f"{rel}: '/plugin install {arg}' is not declared by "
                     f"{MARKETPLACE_MANIFEST} (expected one of {sorted(install_ids)})"
                 )
+        for arg in SKILLS_SH_RE.findall(text):
+            check_skills_pack_target(
+                rel, "skills.sh listing", arg, shorthand, skill_names, errors
+            )
+        for arg in SKILLS_ADD_RE.findall(text):
+            check_skills_pack_target(
+                rel, "'skills add'", arg, shorthand, skill_names, errors
+            )
 
 
 def main(root):
@@ -199,7 +237,7 @@ def main(root):
                     f"{rel}: claims {count} {noun} but the repository ships {inventory[noun]}"
                 )
 
-    check_documented_install(root, marketplace, errors)
+    check_documented_install(root, marketplace, set(skills), errors)
 
     if errors:
         print("\n".join(errors))

@@ -106,6 +106,27 @@ def marketplace_drops_documented_plugin(root):
     return "README.md", "/plugin install"
 
 
+def documented_skills_sh_plugin_slug(root):
+    """skills.sh indexes skill directories; the plugin id is not one of them."""
+    replace(
+        root,
+        "README.md",
+        "https://www.skills.sh/galleonlabs/hypergrok-trading-desk)",
+        "https://www.skills.sh/galleonlabs/hypergrok-trading-desk/hypergrok)",
+    )
+    return "README.md", "is not a skill"
+
+
+def documented_skills_add_typo(root):
+    replace(
+        root,
+        "README.md",
+        "skills add galleonlabs/hypergrok-trading-desk",
+        "skills add galleonlabs/hypergrok",
+    )
+    return "README.md", "'skills add'"
+
+
 FIXTURES = [
     version_mismatch,
     nested_version_mismatch,
@@ -118,6 +139,8 @@ FIXTURES = [
     documented_marketplace_typo,
     documented_install_id_typo,
     marketplace_drops_documented_plugin,
+    documented_skills_sh_plugin_slug,
+    documented_skills_add_typo,
 ]
 
 

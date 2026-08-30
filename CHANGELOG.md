@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ README linked the live skills.sh listing at `/galleonlabs/hypergrok-trading-desk/hypergrok`. skills.sh indexes skill directories, not the plugin id, so that page reports `hypergrok` is not in the repository even though the pack page (16 skills) is live. The link now points at the pack. `check_manifests.py` fails if a documented skills.sh URL or `skills add` argument names a slug this repository does not ship.
 + `desk-risk-limits` and `agents/risk-manager.md` quoted the worked example's `slip_stop` of 3.00 as "10 bps" *on the trigger*, but 10 bps of the 2,900 trigger is 2.90, which gives a stressed distance of 105.55 and a size of 0.4831 ETH - not the 105.65 and 0.4827 ETH those files, `README.md` and `desk-trade-lifecycle` all carry. 3.00 is 10 bps of the 3,000 ticket price, which is how `desk-trade-lifecycle` already quotes slippage. Both glosses now name that reference price, so a Risk Manager showing every line of the arithmetic reproduces the desk's own numbers instead of contradicting them. `slip_stop` stays defined in price units; no figure in the worked example moves.
 
 ## 1.2.0 - 2026-08-29

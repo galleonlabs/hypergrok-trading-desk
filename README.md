@@ -17,10 +17,8 @@ Paste this repo into [Grok Bot](https://x.ai/bot). Fifteen minutes later you hav
 <p align="center">
   <strong>Supported by the pump.fun community</strong><br>
   <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">View HYPERGROK on pump.fun</a> ·
-  <a href="https://www.geckoterminal.com/solana/pools/2KCa9gS5F6emUAXCt11tPSYojoRMZGEAjqcpebCrzg7r">Track the market on GeckoTerminal</a>
+  <a href="https://www.geckoterminal.com/solana/pools/4ia8dx7usysB89iGbNN1hBinHritL5dEjtiThTu7qJrN">Track the market on GeckoTerminal</a>
 </p>
-
-<p align="center"><sub>Community-created. Not affiliated with or endorsed by pump.fun.</sub></p>
 
 ## Start
 

@@ -8,6 +8,8 @@
 
 Paste this repo into [Grok Bot](https://x.ai/bot). Fifteen minutes later you have research, risk, execution and review as separate agents, sitting in one group chat, wired straight into Hyperliquid. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
 
+**Supported by the Pump.fun community.** [Follow the community-created HYPERGROK/SOL pool on GeckoTerminal](https://www.geckoterminal.com/solana/pools/2KCa9gS5F6emUAXCt11tPSYojoRMZGEAjqcpebCrzg7r).
+
 ## Start
 
 Open Grok Bot and paste this to any Bot:

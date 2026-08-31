@@ -1,10 +1,13 @@
 # FAQ
 
 **What do I actually get?**
-Seven Bots in your Grok Bot workspace, one Trading Floor group chat, sixteen shared skills, and a written way of working. Ask for a market brief, a sized trade, a backtest or a review, and the right Bot answers with live data and sources.
+Seven Bots in your Grok Bot workspace, one Trading Floor group chat, seventeen shared skills, a live zero-key Opening Bell and a written way of working. Ask for a market brief, a sized trade, a backtest or a review, and the right Bot answers with live data and sources.
 
 **What do I need to start?**
-Grok Bot and the paste-in prompt from the README. The desk starts in research mode. Add a testnet API wallet when you want to practise (the testnet faucet funds any address that has ever deposited on mainnet); add a mainnet one when you decide to trade real money.
+Grok Bot and the fast-start prompt from the README. The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise (the testnet faucet funds any address that has ever deposited on mainnet); add a mainnet one when you decide to trade real money.
+
+**What does the desk doctor inspect?**
+The release version and tag pin, all agent and skill files, the desk folders and record, and a public Hyperliquid `allMids` response. It never reads environment variables, keys or account state, and never calls the exchange write endpoint.
 
 **How does the desk trade?**
 Through a Hyperliquid API (agent) wallet you create in the Hyperliquid app and hand over through Grok Bot's secure secret card. It can place, modify and cancel orders. Withdrawals, transfers and bridging stay in the app with your main wallet.

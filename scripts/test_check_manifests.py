@@ -70,7 +70,11 @@ def inventory_drift(root):
     os.makedirs(added)
     with open(os.path.join(added, "SKILL.md"), "w", encoding="utf-8") as fh:
         fh.write("---\nname: desk-new-skill\n---\n")
-    return "plugin.json", "ships 17"
+    shipped = sum(
+        os.path.isfile(os.path.join(root, "skills", name, "SKILL.md"))
+        for name in os.listdir(os.path.join(root, "skills"))
+    )
+    return "plugin.json", f"ships {shipped}"
 
 
 def wrong_name(root):

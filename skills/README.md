@@ -1,6 +1,12 @@
 # Skills
 
-Sixteen skills in the portable `SKILL.md` format (`name` and `description` frontmatter, body under 300 lines). Grok Bot reads them from `/workspace/hypergrok/skills/<name>/SKILL.md` and saves each as a shared skill; Grok Build, Cursor and Claude Code load the directory as a plugin.
+Seventeen skills in the portable `SKILL.md` format (`name` and `description` frontmatter, body under 320 lines). Grok Bot reads them from `/workspace/hypergrok/skills/<name>/SKILL.md` and saves each as a shared skill; Grok Build, Cursor and Claude Code load the directory as a plugin.
+
+## Bootstrap
+
+| Skill | What it teaches | Primary users |
+| --- | --- | --- |
+| [hypergrok-bootstrap](hypergrok-bootstrap/SKILL.md) | Pinned install, zero-key Opening Bell, team creation, desk doctor and evidence receipt | Desk Lead |
 
 ## Hyperliquid skills (how to work with the exchange)
 

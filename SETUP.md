@@ -1,16 +1,18 @@
 # Set up the HyperGrok trading desk
 
-You are a Grok Bot building the user's Hyperliquid trading desk from this repository. Follow this file top to bottom. When you finish, the user has seven specialist Bots (six on a **Trading Floor** group chat, one reviewer by DM), sixteen shared skills, a prepared desk computer and a written desk record. About fifteen minutes. Setup is read-only: no keys, no orders.
+You are a Grok Bot building the user's Hyperliquid trading desk from this repository. Follow this file top to bottom. When you finish, the user has seven specialist Bots (six on a **Trading Floor** group chat, one reviewer by DM), seventeen shared skills, a prepared desk computer and a written desk record. Setup is read-only: no keys, no orders.
+
+If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`: it performs this runbook, rings a live zero-key Opening Bell first, and returns the same receipt. This file remains the complete manual path and source of truth.
 
 ## 1. Get the repository onto the desk computer
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.2.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.3.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
-`v1.2.0` is a release tag, not a moving branch: the desk you build is the desk that was reviewed. Check the repository's releases for a newer tag before setting up, and do not swap the tag for `main` to pick up unreleased work.
+`v1.3.0` is a release tag, not a moving branch: the desk you build is the desk that was reviewed. Check the repository's releases for a newer tag before setting up, and do not swap the tag for `main` to pick up unreleased work.
 
 `git clone` prints `warning: refs/tags/... is not a commit!` when it shallow-clones an annotated tag. That warning is expected and harmless: the clone still resolves to the tagged commit, which is why the command prints it. Judge the step by `scripts/check.sh`, not by that line.
 
@@ -25,7 +27,7 @@ If the clone fails, do not fall back to downloading a loose archive over plain H
 Read these before creating anything:
 
 1. `docs/ARCHITECTURE.md` - how the team fits together.
-2. `skills/desk-operating-model/SKILL.md` - the rules every Bot follows.
+2. `skills/hypergrok-bootstrap/SKILL.md` and `skills/desk-operating-model/SKILL.md` - setup and the rules every Bot follows.
 3. All seven files in `agents/` - each has a **Bot profile** (Name, Job, Description) and a full **System prompt**.
 4. `skills/README.md` - the index of skills and which Bot uses which.
 
@@ -35,9 +37,12 @@ Follow `skills/hyperliquid-setup/SKILL.md` sections 1-3 only: install the Python
 
 ```bash
 mkdir -p /workspace/trading-desk/{proposals,briefs,research,strategies,data,journal/incidents,watch}
+cd /workspace/hypergrok
+python3 scripts/opening_bell.py --coin ETH
+python3 scripts/desk_doctor.py --desk-root /workspace/trading-desk
 ```
 
-The API wallet steps come later, when the user asks to trade. Research, briefs and the strategy lab need no key.
+Show the Opening Bell output to the user. It is a timestamped public market snapshot and must say that it is not a trading signal. A `desk.md` warning from the doctor is expected until section 8; a repository or public API failure is not. The API wallet steps come later, when the user asks to trade. Research, briefs and the strategy lab need no key.
 
 ## 4. Create the Bots
 
@@ -66,8 +71,9 @@ Grok Bot lets existing Bots create focused Bots. If you can create them, do so n
 
 Skills in Grok Bot are shared across all of the user's Bots. For each directory under `skills/`, read `SKILL.md` and save it as a skill using the `name` in its frontmatter (for example: "Save these instructions as a skill called `hyperliquid-market-data`"). Keep the content unchanged. If the app cannot save a skill of that length, save a short pointer skill instead: "When this skill is used, read `/workspace/hypergrok/skills/<name>/SKILL.md` and follow it."
 
-Skills to install (16):
+Skills to install (17):
 
+- Bootstrap: `hypergrok-bootstrap`
 - Hyperliquid: `hyperliquid-setup`, `hyperliquid-market-data`, `hyperliquid-account`, `hyperliquid-orders`, `hyperliquid-positions`, `hyperliquid-websocket`, `hyperliquid-advanced`, `hyperliquid-api-reference`
 - Desk: `desk-operating-model`, `desk-trade-lifecycle`, `desk-risk-limits`, `desk-execution-protocol`, `desk-monitoring`, `desk-post-trade-review`, `desk-incident-response`, `desk-strategy-lab`
 
@@ -116,7 +122,15 @@ Then hand the Risk Manager the `desk-risk-limits` interview to write `risk-limit
 
 ## 9. Verify the desk (read-only)
 
-Run these and record the results:
+Run the desk-wide checks first:
+
+```bash
+cd /workspace/hypergrok
+python3 scripts/desk_doctor.py --desk-root /workspace/trading-desk
+python3 scripts/opening_bell.py --coin BTC
+```
+
+Then run these and record the results:
 
 1. In the Trading Floor, ask: "@Market Analyst brief us on BTC." Expect a timestamped brief with sources.
 2. Ask: "@Risk Manager assuming equity of 10,000 USD and the current limits, size a hypothetical long BTC with a 1% stop." Expect a PASS or REJECT with the arithmetic and a ticket, and a note that nothing will be sent.
@@ -132,6 +146,7 @@ Finish by giving the user:
 - the skills installed and how (saved in full, or as pointers to files)
 - the Trading Floor group and its members
 - the desk record and its engagement level
+- the desk doctor and Opening Bell results
 - the results of the five verification checks
 - confirmation that setup stayed read-only: no key requested, no order placed
 

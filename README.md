@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Turn your Grok Bot into a 7-agent Hyperliquid trading desk.</strong></p>
 
-Paste this repo into [Grok Bot](https://x.ai/bot). Fifteen minutes later you have research, risk, execution and review as separate agents, sitting in one group chat, wired straight into Hyperliquid. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
+Give the fast-start prompt to [Grok Bot](https://x.ai/bot). It opens with a live, zero-key Hyperliquid market snapshot, builds research, risk, execution and review as separate agents, then proves the floor is ready. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
 
 <p align="center">
   <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">
@@ -24,9 +24,19 @@ Paste this repo into [Grok Bot](https://x.ai/bot). Fifteen minutes later you hav
 
 Open Grok Bot and paste this to any Bot:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/main/SETUP.md. Follow that file from top to bottom, create the seven Bots and the Trading Floor group chat, install the skills, and finish with the receipt it asks for.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/main/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use SETUP.md for the complete runbook, and finish with its evidence receipt.
 
-That is the whole install. The desk starts in research mode; add a testnet API wallet when you want to practise with play money, and a mainnet one when you are ready.
+The desk starts in research mode. The first demo uses only Hyperliquid's public `/info` endpoint: no wallet, account read or order. Add a testnet API wallet when you want to practise with play money, and a mainnet one when you are ready.
+
+### Opening Bell
+
+The first thing the Desk Lead shows is useful, live output—not a configuration form:
+
+```bash
+python3 scripts/opening_bell.py --coin ETH
+```
+
+It reports source and UTC time, mid/mark/oracle, 24-hour change and volume, hourly funding, open interest, spread and visible depth at 5/10/25 bps. `scripts/desk_doctor.py` then checks the release, team files, desk folders and public connectivity. Both are read-only and standard-library Python.
 
 ## Meet the desk
 
@@ -69,7 +79,9 @@ You type `approve HG-20260816-01`. The Execution Trader sends entry and stop in 
 
 ## What the desk knows
 
-Sixteen skills, in the portable `SKILL.md` format, shared by all your Bots.
+Seventeen skills, in the portable `SKILL.md` format, shared by all your Bots.
+
+**Bootstrap** - pinned release install, Opening Bell, team construction, desk doctor and a receipt that distinguishes what happened from what still needs a manual step.
 
 **Hyperliquid** - setup and API wallets, market data, account state, orders (limit, IOC, take-profit and stop-loss with grouping, client order ids), positions and margin, WebSocket feeds, advanced actions (dead-man's switch, TWAP, spot), and a compact API reference. Copy-pasteable `curl` for reads; the official Python SDK and `@nktkas/hyperliquid` for anything that signs.
 
@@ -89,7 +101,7 @@ Perpetual futures can liquidate an account. HyperGrok is documentation and instr
 
 ## Also runs in Grok Build, Cursor and Claude Code
 
-The same `agents/`, `skills/` and `rules/` load as a plugin: sixteen skills, and the seven roles as subagents.
+The same `agents/`, `skills/` and `rules/` load as a plugin: seventeen skills, and the seven roles as subagents.
 
 In Claude Code, install it from this repository:
 
@@ -115,7 +127,8 @@ Either way, run `/desk-operating-model` to begin.
 ```
 SETUP.md     what your Grok Bot follows to build the desk
 agents/      seven roles: Bot profile card + full system prompt
-skills/      sixteen skills (hyperliquid-*, desk-*)
+skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
+scripts/     zero-key Opening Bell, desk doctor and release checks
 docs/        how it works, FAQ, provenance
 assets/      the mascot - use it as your Bots' avatar
 ```

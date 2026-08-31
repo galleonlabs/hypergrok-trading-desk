@@ -41,6 +41,10 @@ SKILLS_SH_RE = re.compile(
 SKILLS_ADD_RE = re.compile(
     r"\bskills add\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)"
 )
+# `SETUP.md` section 1 clones a pinned tag, so a `git clone` of this repository
+# in the docs must name the tag of the version the manifests declare.
+CLONE_RE = re.compile(r"git clone[^\n]*")
+CLONE_BRANCH_RE = re.compile(r"--branch(?:=|\s+)([^\s`]+)")
 
 NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -148,6 +152,40 @@ def check_skills_pack_target(rel, kind, target, shorthand, skill_names, errors):
         )
 
 
+def check_documented_pin(root, version, errors):
+    """A documented `git clone` of this repository must pin the released tag.
+
+    `CONTRIBUTING.md`: the tag must contain a `SETUP.md` that pins to that same
+    tag. Bumping the manifests and forgetting the pin ships a release whose
+    install instructions build the *previous* one, and nothing about that fails
+    loudly - the user reads one set of instructions and installs another. The
+    manifest version is the release being cut, so `v<version>` is the only tag
+    a clone command in these docs may name.
+    """
+    if version is None:
+        return
+    expected = f"v{version}"
+    for rel in markdown_files(root):
+        if rel == "CHANGELOG.md":
+            continue  # a historical record, pinned to the release it describes
+        with open(os.path.join(root, rel), encoding="utf-8") as fh:
+            text = fh.read()
+        for command in CLONE_RE.findall(text):
+            if REPOSITORY not in command:
+                continue  # cloning something else, or prose about `git clone`
+            found = CLONE_BRANCH_RE.search(command)
+            if not found:
+                errors.append(
+                    f"{rel}: 'git clone' of this repository is not pinned; "
+                    f"it needs --branch {expected}"
+                )
+            elif found.group(1) != expected:
+                errors.append(
+                    f"{rel}: 'git clone --branch {found.group(1)}' does not pin "
+                    f"the version the manifests declare (expected {expected})"
+                )
+
+
 def check_documented_install(root, marketplace, skill_names, errors):
     """Install commands in the docs must name ids this repository actually declares.
 
@@ -238,6 +276,7 @@ def main(root):
                 )
 
     check_documented_install(root, marketplace, set(skills), errors)
+    check_documented_pin(root, version, errors)
 
     if errors:
         print("\n".join(errors))

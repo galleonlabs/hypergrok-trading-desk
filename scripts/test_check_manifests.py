@@ -127,6 +127,39 @@ def documented_skills_add_typo(root):
     return "README.md", "'skills add'"
 
 
+def documented_pin_lags_the_release(root):
+    """Bump the manifests, forget SETUP.md: the release installs the previous one."""
+    edit(root, "plugin.json", lambda d: d.update(version="9.9.9"))
+    for rel in (
+        ".claude-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
+        ".grok-plugin/plugin.json",
+    ):
+        edit(root, rel, lambda d: d.update(version="9.9.9"))
+    edit(root, ".claude-plugin/marketplace.json",
+         lambda d: (d["metadata"].update(version="9.9.9"),
+                    d["plugins"][0].update(version="9.9.9")))
+    edit(root, ".grok-plugin/marketplace.json",
+         lambda d: d["plugins"][0].update(version="9.9.9"))
+    return "SETUP.md", "expected v9.9.9"
+
+
+def current_pin(root):
+    """The tag `SETUP.md` pins today. Derived, so a release does not break these."""
+    with open(os.path.join(root, "plugin.json"), encoding="utf-8") as fh:
+        return "v" + json.load(fh)["version"]
+
+
+def documented_pin_is_a_moving_branch(root):
+    replace(root, "SETUP.md", f"--branch {current_pin(root)}", "--branch main")
+    return "SETUP.md", "--branch main"
+
+
+def documented_clone_is_unpinned(root):
+    replace(root, "SETUP.md", f"--branch {current_pin(root)} ", "")
+    return "SETUP.md", "is not pinned"
+
+
 FIXTURES = [
     version_mismatch,
     nested_version_mismatch,
@@ -141,6 +174,9 @@ FIXTURES = [
     marketplace_drops_documented_plugin,
     documented_skills_sh_plugin_slug,
     documented_skills_add_typo,
+    documented_pin_lags_the_release,
+    documented_pin_is_a_moving_branch,
+    documented_clone_is_unpinned,
 ]
 
 

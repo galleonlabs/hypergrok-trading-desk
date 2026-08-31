@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Turn your Grok Bot into a 7-agent Hyperliquid trading desk.</strong></p>
 
-Give the fast-start prompt to [Grok Bot](https://x.ai/bot). It opens with a live, zero-key Hyperliquid market snapshot, builds research, risk, execution and review as separate agents, then proves the floor is ready. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
+Add the public Desk Lead to [Grok Bot](https://x.ai/bot/PReCwAHq8Vgeex50r883H). It opens with a live, zero-key Hyperliquid market snapshot, builds research, risk, execution and review as separate agents, then proves the floor is ready. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
 
 <p align="center">
   <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">
@@ -22,9 +22,23 @@ Give the fast-start prompt to [Grok Bot](https://x.ai/bot). It opens with a live
 
 ## Start
 
-Open Grok Bot and paste this to any Bot:
+<p align="center">
+  <a href="https://x.ai/bot/PReCwAHq8Vgeex50r883H">
+    <img src="https://img.shields.io/badge/Add%20to-Grok%20Bot-000000?style=for-the-badge" alt="Add HyperGrok to Grok Bot">
+  </a>
+</p>
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/main/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use SETUP.md for the complete runbook, and finish with its evidence receipt.
+Click **Add to Grok Bot**, then send **HyperGrok Desk Lead** one message:
+
+> Start the desk.
+
+That is the supported one-click, one-message install. The public template carries all seventeen reviewed skills as version-pinned pointers, with no memories, routines or plugins.
+
+### Manual fallback
+
+If the public template is unavailable, open Grok Bot and paste this to any Bot:
+
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 The desk starts in research mode. The first demo uses only Hyperliquid's public `/info` endpoint: no wallet, account read or order. Add a testnet API wallet when you want to practise with play money, and a mainnet one when you are ready.
 

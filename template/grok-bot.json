@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
-  "status": "ready-to-publish",
+  "status": "published",
+  "publicShareUrl": "https://x.ai/bot/PReCwAHq8Vgeex50r883H",
   "name": "HyperGrok Desk Lead",
   "title": "Seven-agent Hyperliquid trading desk",
   "description": "Builds and verifies a seven-agent Hyperliquid trading desk from the reviewed HyperGrok release. Starts research-only with live public market data: no wallet, secret or order.",

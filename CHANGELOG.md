@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+## 1.4.0 - 2026-08-31
+
 + Added a versioned Grok Bot template contract for **HyperGrok Desk Lead**: exact public profile, pinned source URLs, mascot, seventeen skill paths and SHA-256 hashes, with plugins, memories and routines explicitly empty.
 + `hypergrok-bootstrap` and `SETUP.md` now recognise skills imported with the public template, install only what is missing and fail readiness on same-name content drift instead of creating duplicates or trusting a name alone.
 + `scripts/check_grok_template.py` verifies the release pin, public safety copy, avatar, exact skill inventory and hashes, empty optional capabilities and published-link wiring. Five negative fixtures prove the gate rejects release drift, missing skills, stale hashes, bundled plugins and invalid share URLs.
 + `docs/GROK_BOT_TEMPLATE.md` defines authoring, logged-out preview and clean-install acceptance. The supported path is one click and one message: **Add to Grok Bot**, then **Start the desk.**
++ Published the public template at https://x.ai/bot/PReCwAHq8Vgeex50r883H and verified its logged-out page returns the exact profile, safety copy and **Add to Grok Bot** deep link.
 
 ## 1.3.0 - 2026-08-31
 

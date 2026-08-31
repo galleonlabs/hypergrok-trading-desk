@@ -8,7 +8,19 @@
 
 Paste this repo into [Grok Bot](https://x.ai/bot). Fifteen minutes later you have research, risk, execution and review as separate agents, sitting in one group chat, wired straight into Hyperliquid. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
 
-**Supported by the Pump.fun community.** [Follow the community-created HYPERGROK/SOL pool on GeckoTerminal](https://www.geckoterminal.com/solana/pools/2KCa9gS5F6emUAXCt11tPSYojoRMZGEAjqcpebCrzg7r).
+<p align="center">
+  <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">
+    <img src="https://pump.fun/pump-logomark.svg" width="52" alt="pump.fun">
+  </a>
+</p>
+
+<p align="center">
+  <strong>Supported by the pump.fun community</strong><br>
+  <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">View HYPERGROK on pump.fun</a> ·
+  <a href="https://www.geckoterminal.com/solana/pools/2KCa9gS5F6emUAXCt11tPSYojoRMZGEAjqcpebCrzg7r">Track the market on GeckoTerminal</a>
+</p>
+
+<p align="center"><sub>Community-created. Not affiliated with or endorsed by pump.fun.</sub></p>
 
 ## Start
 

@@ -128,6 +128,7 @@ Either way, run `/desk-operating-model` to begin.
 SETUP.md     what your Grok Bot follows to build the desk
 agents/      seven roles: Bot profile card + full system prompt
 skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
+template/    exact public Grok Bot profile and skill hashes
 scripts/     zero-key Opening Bell, desk doctor and release checks
 docs/        how it works, FAQ, provenance
 assets/      the mascot - use it as your Bots' avatar
@@ -138,6 +139,7 @@ assets/      the mascot - use it as your Bots' avatar
 | [How the desk works](docs/ARCHITECTURE.md) | roles, files, trust boundaries |
 | [FAQ](docs/FAQ.md) | keys, approvals, testnet, customising the team |
 | [Skills index](skills/README.md) | every skill and who uses it |
+| [Grok Bot template](docs/GROK_BOT_TEMPLATE.md) | public profile, publish contract and clean-install evaluation |
 | [Provenance](docs/PROVENANCE.md) | sources and licences |
 | [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) | |
 

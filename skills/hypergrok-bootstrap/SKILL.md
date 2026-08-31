@@ -29,7 +29,7 @@ If `/workspace/hypergrok` is already a Git checkout, read its `plugin.json` and 
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.3.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok
 git rev-parse HEAD
 bash scripts/check.sh
@@ -74,7 +74,16 @@ Create one Bot from each agent file's **Bot profile** and **System prompt**:
 
 Use `assets/mascot.jpg` as the avatar when the product supports it. Do not add unrelated memories, conversation history or private files. If Bot creation is unavailable, return seven clearly labelled copy-and-paste cards and wait for the user to create them.
 
-Install all seventeen `skills/*/SKILL.md` files as shared skills without changing their text. If a full skill is too long for the product, install a pointer skill that reads that exact file at use time. Report full versus pointer installs.
+Inspect the shared skills before installing anything. A Desk Lead added from the public HyperGrok template already carries the reviewed skill set; do not create duplicate skills.
+
+For each of the seventeen `skills/*/SKILL.md` files:
+
+1. If a shared skill with the exact `name` already exists and its instructions match this release, enable it for the Desk Lead and record `template`.
+2. If it is missing, save the file unchanged and record `installed`.
+3. If the product cannot save the full file, save a pointer skill that reads `/workspace/hypergrok/skills/<name>/SKILL.md` and record `pointer`.
+4. If the name exists but the instructions differ and cannot be replaced with this release's reviewed file, record `mismatch` and fail readiness. Never claim a skill is current from its name alone.
+
+The final receipt must contain exactly seventeen unique skill names and one status for each: `template`, `installed`, `pointer` or `mismatch`.
 
 Create a private group chat named **Trading Floor** with Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager and Execution Trader. The Trade Reviewer stays in DM. Post the floor welcome message from `SETUP.md` section 6.
 

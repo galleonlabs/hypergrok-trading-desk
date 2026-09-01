@@ -12,8 +12,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 
-EXPECTED_VERSION = "1.3.0"
-EXPECTED_TAG = f"v{EXPECTED_VERSION}"
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 EXPECTED_SKILLS = 17
 EXPECTED_AGENTS = 7
 REQUIRED_DESK_DIRS = (
@@ -40,11 +39,17 @@ def result(condition: bool, name: str, pass_detail: str, fail_detail: str) -> Ch
 
 def check_repository(root: str) -> list[Check]:
     checks = []
+    # `plugin.json` is the release this checkout claims to be. Every other
+    # release fact is read against it rather than against a constant here: a
+    # constant would have to be bumped at every release, and a doctor that
+    # lags the tag it ships in tells a correctly installed desk it is broken.
+    version = None
     try:
         with open(os.path.join(root, "plugin.json"), encoding="utf-8") as handle:
             manifest = json.load(handle)
         version = manifest.get("version")
-        checks.append(result(version == EXPECTED_VERSION, "release", f"manifest version {version}", f"expected {EXPECTED_VERSION}, found {version}"))
+        valid = isinstance(version, str) and bool(SEMVER_RE.match(version))
+        checks.append(result(valid, "release", f"manifest version {version}", f"plugin.json version {version!r} is not a release version"))
     except (OSError, json.JSONDecodeError) as exc:
         checks.append(Check("FAIL", "release", f"cannot read plugin.json: {exc}"))
 
@@ -56,15 +61,19 @@ def check_repository(root: str) -> list[Check]:
     checks.append(result(len(agents) == EXPECTED_AGENTS, "agents", f"{len(agents)} agent profiles present", f"expected {EXPECTED_AGENTS}, found {len(agents)}"))
 
     setup_path = os.path.join(root, "SETUP.md")
+    expected_tag = f"v{version}" if version else None
     try:
         with open(setup_path, encoding="utf-8") as handle:
             setup = handle.read()
-        pinned = f"--branch {EXPECTED_TAG}" in setup
-        checks.append(result(pinned, "setup pin", EXPECTED_TAG, f"SETUP.md does not pin {EXPECTED_TAG}"))
+        if expected_tag is None:
+            checks.append(Check("FAIL", "setup pin", "no manifest version to check the pin against"))
+        else:
+            pinned = f"--branch {expected_tag}" in setup
+            checks.append(result(pinned, "setup pin", expected_tag, f"SETUP.md does not pin {expected_tag}; this checkout is a half-updated release"))
     except OSError as exc:
         checks.append(Check("FAIL", "setup pin", f"cannot read SETUP.md: {exc}"))
 
-    required = ("scripts/check.sh", "scripts/opening_bell.py", "skills/hypergrok-bootstrap/SKILL.md")
+    required = ("scripts/check.sh", "scripts/desk_doctor.py", "scripts/opening_bell.py", "skills/hypergrok-bootstrap/SKILL.md")
     missing = [path for path in required if not os.path.isfile(os.path.join(root, path))]
     checks.append(result(not missing, "release files", "bootstrap, doctor and demo present", f"missing: {', '.join(missing)}"))
     return checks

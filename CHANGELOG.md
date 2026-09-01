@@ -2,6 +2,9 @@
 
 ## Unreleased
 
++ `scripts/desk_doctor.py` compared `plugin.json` against a hardcoded `EXPECTED_VERSION = "1.3.0"`, so shipping 1.4.0 turned the doctor against its own release: a correct, freshly pinned clone was told `expected 1.3.0, found 1.4.0` and `SETUP.md does not pin v1.3.0`, and the check the runbook and bootstrap skill both run in section 3 exited 1 on every new desk. The doctor now reads the release from `plugin.json` and checks the `SETUP.md` pin against that, so it cannot lag the tag it ships in, and it verifies its own file is present as the "release files" detail already claimed. A test runs `check_repository` against the real repository, so this can only fail in CI.
++ `SETUP.md` section 1 pinned the clone to `v1.4.0` while the sentence directly below it still explained `v1.3.0`, telling the reader two different releases were the reviewed one. `check_manifests.py` guarded the `git clone` command but nothing else, so the prose, and the `blob/<tag>` links in the manual fallback, could drift a release behind unnoticed. The sentence no longer repeats the version, and the check now fails when any instruction file names a release tag other than the one the manifests declare. `CHANGELOG.md` and `CONTRIBUTING.md` are exempt: they describe past releases by design. Two negative fixtures cover stale prose and a stale documented URL.
+
 ## 1.4.0 - 2026-08-31
 
 + Added a versioned Grok Bot template contract for **HyperGrok Desk Lead**: exact public profile, pinned source URLs, mascot, seventeen skill paths and SHA-256 hashes, with plugins, memories and routines explicitly empty.

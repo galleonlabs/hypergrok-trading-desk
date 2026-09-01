@@ -45,6 +45,12 @@ SKILLS_ADD_RE = re.compile(
 # in the docs must name the tag of the version the manifests declare.
 CLONE_RE = re.compile(r"git clone[^\n]*")
 CLONE_BRANCH_RE = re.compile(r"--branch(?:=|\s+)([^\s`]+)")
+# Any other way the docs name a release tag: a `blob`/`tree`/`raw` URL into this
+# repository, or prose that quotes the tag the reader is told to install.
+VERSION_TAG_RE = re.compile(r"\bv\d+\.\d+\.\d+\b")
+# `CHANGELOG.md` records every past release and `CONTRIBUTING.md` documents the
+# release procedure against historical tags; both name old versions by design.
+RELEASE_HISTORY_DOCS = ("CHANGELOG.md", "CONTRIBUTING.md")
 
 NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -153,7 +159,7 @@ def check_skills_pack_target(rel, kind, target, shorthand, skill_names, errors):
 
 
 def check_documented_pin(root, version, errors):
-    """A documented `git clone` of this repository must pin the released tag.
+    """An instruction file may only name the release it ships in.
 
     `CONTRIBUTING.md`: the tag must contain a `SETUP.md` that pins to that same
     tag. Bumping the manifests and forgetting the pin ships a release whose
@@ -161,15 +167,29 @@ def check_documented_pin(root, version, errors):
     loudly - the user reads one set of instructions and installs another. The
     manifest version is the release being cut, so `v<version>` is the only tag
     a clone command in these docs may name.
+
+    The clone command is not the only place a tag is written down. `SETUP.md`
+    explains the pin in prose beneath it and `README.md` links `blob/<tag>`
+    instructions for the manual fallback; both have drifted a release behind a
+    correct `--branch` pin, which tells the reader two different releases are
+    the reviewed one. So every `v<x.y.z>` in these files is held to the same
+    rule, and only the release history is allowed to name older tags.
     """
     if version is None:
         return
     expected = f"v{version}"
     for rel in markdown_files(root):
-        if rel == "CHANGELOG.md":
-            continue  # a historical record, pinned to the release it describes
+        if rel in RELEASE_HISTORY_DOCS:
+            continue  # historical records, pinned to the releases they describe
         with open(os.path.join(root, rel), encoding="utf-8") as fh:
             text = fh.read()
+        for tag in sorted(set(VERSION_TAG_RE.findall(text))):
+            if tag != expected:
+                errors.append(
+                    f"{rel}: names release tag {tag}, but the manifests declare "
+                    f"{expected}; an instruction file may only name the release "
+                    "it ships in"
+                )
         for command in CLONE_RE.findall(text):
             if REPOSITORY not in command:
                 continue  # cloning something else, or prose about `git clone`

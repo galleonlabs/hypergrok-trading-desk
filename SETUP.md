@@ -12,7 +12,7 @@ git clone --depth 1 --branch v1.4.0 https://github.com/galleonlabs/hypergrok-tra
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
-`v1.3.0` is a release tag, not a moving branch: the desk you build is the desk that was reviewed. Check the repository's releases for a newer tag before setting up, and do not swap the tag for `main` to pick up unreleased work.
+That pin is a release tag, not a moving branch: the desk you build is the desk that was reviewed. Check the repository's releases for a newer tag before setting up, and do not swap the tag for `main` to pick up unreleased work.
 
 `git clone` prints `warning: refs/tags/... is not a commit!` when it shallow-clones an annotated tag. That warning is expected and harmless: the clone still resolves to the tagged commit, which is why the command prints it. Judge the step by `scripts/check.sh`, not by that line.
 

@@ -36,7 +36,7 @@ The check runs three passes and CI runs the same script:
 1. Move everything in `## Unreleased` in `CHANGELOG.md` under a new version heading with today's date. Say what changed and why, not just what moved.
 2. Bump `version` in all six manifests to the new version. `check_manifests.py` fails if they disagree.
 3. Bump `metadata.version` in the frontmatter of each skill whose body actually changed. Skills version independently; leave the untouched ones alone.
-4. Update the `--branch` pin in `SETUP.md` section 1 to the new tag. `check_manifests.py` fails if it does not match the version from step 2.
+4. Update the `--branch` pin in `SETUP.md` section 1 to the new tag, and every other release tag the instruction files name. `check_manifests.py` fails if any of them disagree with the version from step 2; only `CHANGELOG.md` and this file may name older tags.
 5. Run `bash scripts/check.sh`, then commit, then tag: `git tag -a vX.Y.Z -m "..." && git push origin main vX.Y.Z`.
 6. Publish a GitHub release for the tag, and verify the published instructions actually work by running section 1 verbatim in an empty directory: clone the tag, then `bash scripts/check.sh` inside it.
 

@@ -32,7 +32,7 @@ class DeskDoctorTest(unittest.TestCase):
             os.makedirs(path, exist_ok=True)
             open(os.path.join(path, f"agent-{index}.md"), "w", encoding="utf-8").close()
         os.makedirs(os.path.join(root, "scripts"))
-        for name in ("check.sh", "opening_bell.py"):
+        for name in ("check.sh", "desk_doctor.py", "opening_bell.py"):
             open(os.path.join(root, "scripts", name), "w", encoding="utf-8").close()
 
     def test_repository_fixture_passes(self):
@@ -40,6 +40,25 @@ class DeskDoctorTest(unittest.TestCase):
             self.make_repo(root)
             checks = desk_doctor.check_repository(root)
             self.assertTrue(all(check.status == "PASS" for check in checks), checks)
+
+    def test_this_release_passes_its_own_doctor(self):
+        """The doctor must pass the release it ships in.
+
+        It read its expected version from a constant once, and a release that
+        bumped the manifests left every correctly installed desk being told
+        `expected 1.3.0, found 1.4.0`. Checking the real tree here means that
+        can only ever fail in CI, never in a user's first five minutes.
+        """
+        checks = desk_doctor.check_repository(ROOT)
+        self.assertEqual([check for check in checks if check.status != "PASS"], [])
+
+    def test_setup_pin_lagging_the_manifest_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.make_repo(root)
+            with open(os.path.join(root, "plugin.json"), "w", encoding="utf-8") as handle:
+                json.dump({"version": "1.4.0"}, handle)
+            checks = desk_doctor.check_repository(root)
+            self.assertTrue(any(check.status == "FAIL" and check.name == "setup pin" for check in checks), checks)
 
     def test_workspace_warns_without_record_but_does_not_fail(self):
         with tempfile.TemporaryDirectory() as root:

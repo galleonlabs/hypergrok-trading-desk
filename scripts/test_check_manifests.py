@@ -164,6 +164,18 @@ def documented_clone_is_unpinned(root):
     return "SETUP.md", "is not pinned"
 
 
+def stale_tag_in_runbook_prose(root):
+    """The pin was bumped; the sentence explaining it still names the old tag."""
+    replace(root, "SETUP.md", "That pin is a release tag", "`v0.9.0` is a release tag")
+    return "SETUP.md", "names release tag v0.9.0"
+
+
+def stale_tag_in_documented_url(root):
+    """The manual fallback still links the previous release's instructions."""
+    replace(root, "README.md", f"blob/{current_pin(root)}/SETUP.md", "blob/v0.9.0/SETUP.md")
+    return "README.md", "names release tag v0.9.0"
+
+
 FIXTURES = [
     version_mismatch,
     nested_version_mismatch,
@@ -181,6 +193,8 @@ FIXTURES = [
     documented_pin_lags_the_release,
     documented_pin_is_a_moving_branch,
     documented_clone_is_unpinned,
+    stale_tag_in_runbook_prose,
+    stale_tag_in_documented_url,
 ]
 
 

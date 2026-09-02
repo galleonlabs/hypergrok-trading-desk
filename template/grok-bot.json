@@ -27,7 +27,7 @@
     {"name": "hyperliquid-account", "path": "skills/hyperliquid-account/SKILL.md", "sha256": "e4070219485068eb8f3b536a55a6ee802f38a90b1a37e5b17b4ece95a9ec1317"},
     {"name": "hyperliquid-advanced", "path": "skills/hyperliquid-advanced/SKILL.md", "sha256": "bd417f10d01b1011d84b41169754905087996114c26a74a276f521036a0749c6"},
     {"name": "hyperliquid-api-reference", "path": "skills/hyperliquid-api-reference/SKILL.md", "sha256": "cfda9ae4f9df47a438b6870edafac863241b4232995c4f51afe3e843f14d2714"},
-    {"name": "hyperliquid-market-data", "path": "skills/hyperliquid-market-data/SKILL.md", "sha256": "0c36f5f4323188f790705bc810ee0800e31c2130e15ef6e943fe151f7532b1b2"},
+    {"name": "hyperliquid-market-data", "path": "skills/hyperliquid-market-data/SKILL.md", "sha256": "07529d07f3144aaf056aa3af74376cd2cbd4501261ec5fd753be9fddef8ebb7d"},
     {"name": "hyperliquid-orders", "path": "skills/hyperliquid-orders/SKILL.md", "sha256": "e2f621c254071e187373e6e6ae8bd57031630e85e93800784e84f0fb601d92fa"},
     {"name": "hyperliquid-positions", "path": "skills/hyperliquid-positions/SKILL.md", "sha256": "f73b6772f676a62dd85a480e62dcc5ef66f7636627548ba4c765baf4b355f5f4"},
     {"name": "hyperliquid-setup", "path": "skills/hyperliquid-setup/SKILL.md", "sha256": "889359cf1598830408c609696c60abc0db7f8f9d2c7ce9e9d7d2e89557ed4869"},

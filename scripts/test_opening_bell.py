@@ -31,6 +31,15 @@ BOOK = {
 }
 
 
+def capped_book():
+    """A full 20-level page whose furthest level sits inside the widest band."""
+    mid = Decimal("2000.5")
+    bids = [{"px": str(Decimal("2000") - Decimal(i) * Decimal("0.01")), "sz": "1", "n": 1} for i in range(opening_bell.LEVEL_CAP)]
+    asks = [{"px": str(Decimal("2001") + Decimal(i) * Decimal("0.01")), "sz": "1", "n": 1} for i in range(opening_bell.LEVEL_CAP)]
+    assert abs(Decimal(bids[-1]["px"]) - mid) / mid * 10000 < 25
+    return {"coin": "ETH", "time": 1704067200000, "levels": [bids, asks]}
+
+
 class OpeningBellTest(unittest.TestCase):
     def test_snapshot_is_read_only_and_computes_depth(self):
         snapshot = opening_bell.build_snapshot(META, BOOK, "ETH", "fixture")
@@ -53,6 +62,28 @@ class OpeningBellTest(unittest.TestCase):
                     json.dump(payload, handle)
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(opening_bell.main(["--fixture-dir", directory, "--coin", "ETH", "--json"]), 0)
+
+    def test_short_book_reports_every_band_as_measured(self):
+        book = opening_bell.build_snapshot(META, BOOK, "ETH", "fixture")["book"]
+        self.assertLess(book["levels_returned"]["bid"], opening_bell.LEVEL_CAP)
+        for band in ("5", "10", "25"):
+            self.assertTrue(book["depth"][band]["bid_complete"], band)
+            self.assertTrue(book["depth"][band]["ask_complete"], band)
+        self.assertNotIn(">=", opening_bell.render(opening_bell.build_snapshot(META, BOOK, "ETH", "fixture")))
+
+    def test_capped_book_marks_bands_beyond_its_reach_as_floors(self):
+        snapshot = opening_bell.build_snapshot(META, capped_book(), "ETH", "fixture")
+        book = snapshot["book"]
+        self.assertEqual(book["levels_returned"], {"bid": opening_bell.LEVEL_CAP, "ask": opening_bell.LEVEL_CAP})
+        self.assertLess(Decimal(book["visible_reach_bps"]["bid"]), 25)
+        self.assertFalse(book["depth"]["25"]["bid_complete"])
+        self.assertFalse(book["depth"]["25"]["ask_complete"])
+        # The cut-off bands repeat the same total; without the marker that reads as a flat book.
+        self.assertEqual(book["depth"]["25"]["bid_base"], book["depth"]["10"]["bid_base"])
+        text = opening_bell.render(snapshot)
+        self.assertIn(">= $", text)
+        self.assertIn("floors, not totals", text)
+        self.assertIn(f"returned {opening_bell.LEVEL_CAP}/{opening_bell.LEVEL_CAP} levels", text)
 
     def test_rejects_crossed_book(self):
         crossed = json.loads(json.dumps(BOOK))

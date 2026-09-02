@@ -50,7 +50,7 @@ The first thing the Desk Lead shows is useful, live output—not a configuration
 python3 scripts/opening_bell.py --coin ETH
 ```
 
-It reports source and UTC time, mid/mark/oracle, 24-hour change and volume, hourly funding, open interest, spread and visible depth at 5/10/25 bps. `scripts/desk_doctor.py` then checks the release, team files, desk folders and public connectivity. Both are read-only and standard-library Python.
+It reports source and UTC time, mid/mark/oracle, 24-hour change and volume, hourly funding, open interest, spread and visible depth at 5/10/25 bps, marking any band the returned book does not reach as a floor rather than a total. `scripts/desk_doctor.py` then checks the release, team files, desk folders and public connectivity. Both are read-only and standard-library Python.
 
 ## Meet the desk
 

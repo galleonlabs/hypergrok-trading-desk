@@ -19,6 +19,11 @@ from decimal import Decimal, InvalidOperation
 
 DEFAULT_BASE_URL = "https://api.hyperliquid.xyz"
 BANDS_BPS = (5, 10, 25)
+# `l2Book` returns at most this many price levels per side. A side that comes
+# back full is a page, not a book: it stops wherever the twentieth level sits,
+# which on a liquid perp is a few bps from the mid. Depth asked for beyond that
+# point is a floor, and printing it as a total makes a deep book look flat.
+LEVEL_CAP = 20
 
 
 def post_info(base_url: str, payload: dict, timeout: float = 15.0):
@@ -60,6 +65,16 @@ def depth_within(levels: list[dict], mid: Decimal, band_bps: int) -> Decimal:
     return total
 
 
+def reach_bps(levels: list[dict], mid: Decimal) -> Decimal:
+    """How far from the mid the furthest returned level on this side sits."""
+    return max(abs(decimal(level.get("px"), "book price") - mid) for level in levels) / mid * Decimal(10_000)
+
+
+def covers(levels: list[dict], reach: Decimal, band_bps: int) -> bool:
+    """True when the band is measured, rather than cut off by the level cap."""
+    return len(levels) < LEVEL_CAP or Decimal(band_bps) <= reach
+
+
 def build_snapshot(meta_and_contexts, book: dict, coin: str, network: str) -> dict:
     if not isinstance(meta_and_contexts, list) or len(meta_and_contexts) != 2:
         raise ValueError("metaAndAssetCtxs returned an unexpected shape")
@@ -89,6 +104,8 @@ def build_snapshot(meta_and_contexts, book: dict, coin: str, network: str) -> di
         raise ValueError("l2Book time is missing")
     observed_at = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
 
+    bid_reach = reach_bps(levels[0], book_mid)
+    ask_reach = reach_bps(levels[1], book_mid)
     depth = {}
     for band in BANDS_BPS:
         bids = depth_within(levels[0], book_mid, band)
@@ -98,6 +115,8 @@ def build_snapshot(meta_and_contexts, book: dict, coin: str, network: str) -> di
             "ask_base": str(asks),
             "bid_usd": str(bids * book_mid),
             "ask_usd": str(asks * book_mid),
+            "bid_complete": covers(levels[0], bid_reach, band),
+            "ask_complete": covers(levels[1], ask_reach, band),
         }
 
     return {
@@ -130,6 +149,8 @@ def build_snapshot(meta_and_contexts, book: dict, coin: str, network: str) -> di
             "best_bid": str(best_bid),
             "best_ask": str(best_ask),
             "spread_bps": str((best_ask - best_bid) / book_mid * Decimal(10_000)),
+            "levels_returned": {"bid": len(levels[0]), "ask": len(levels[1])},
+            "visible_reach_bps": {"bid": str(bid_reach), "ask": str(ask_reach)},
             "depth": depth,
         },
         "safety": "No key requested. No account read. No order created or sent.",
@@ -156,6 +177,11 @@ def compact(number: Decimal, prefix: str = "") -> str:
     return f"{prefix}{number:,.2f}"
 
 
+def amount(number: Decimal, complete: bool) -> str:
+    """A band the level cap cut off is a floor; say so rather than implying a total."""
+    return compact(number, "$") if complete else f">= {compact(number, '$')}"
+
+
 def render(snapshot: dict) -> str:
     price = snapshot["prices"]
     funding = snapshot["funding"]
@@ -177,9 +203,16 @@ def render(snapshot: dict) -> str:
     ]
     for band in BANDS_BPS:
         row = book["depth"][str(band)]
+        bid = amount(Decimal(row["bid_usd"]), row["bid_complete"])
+        ask = amount(Decimal(row["ask_usd"]), row["ask_complete"])
+        lines.append(f"  {band:>2} bps     bid {bid:>13} · ask {ask:>13}")
+    reach = book["visible_reach_bps"]
+    if any(not row[side] for row in book["depth"].values() for side in ("bid_complete", "ask_complete")):
         lines.append(
-            f"  {band:>2} bps     bid {compact(Decimal(row['bid_usd']), '$'):>10} · ask {compact(Decimal(row['ask_usd']), '$'):>10}"
+            f"  The book returned {book['levels_returned']['bid']}/{book['levels_returned']['ask']} levels, reaching"
+            f" {Decimal(reach['bid']):,.1f} bps bid and {Decimal(reach['ask']):,.1f} bps ask."
         )
+        lines.append("  Wider bands are floors, not totals: depth beyond that point is not in this response.")
     lines.extend(["", snapshot["safety"], "Facts only. This snapshot is not a trading signal."])
     return "\n".join(lines)
 

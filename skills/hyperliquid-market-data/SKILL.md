@@ -68,17 +68,23 @@ hl '{"type":"l2Book","coin":"ETH"}' | jq '{time, bids: .levels[0][:5], asks: .le
 
 Up to 20 levels per side; each level is `{px, sz, n}` (`n` = number of orders). Optional `nSigFigs` (2-5) aggregates price levels; `mantissa` (1, 2 or 5) only with `nSigFigs: 5`.
 
+**Twenty levels is a page, not the book.** On a liquid perp those levels stop a few bps from the mid - around 8 bps on ETH and under 3 bps on BTC at normal spreads - so a 25 bps band summed from the default response is whatever the page happened to contain, not the depth within 25 bps. Read the reach before quoting a band: when the side came back with 20 levels and the furthest one is nearer than the band, the number is a floor. To reach further, re-request with `nSigFigs: 4`, which buckets prices coarsely enough to push 20 levels out past 20-25 bps on most perps; say which response a figure came from, because the bucketing moves the band edges.
+
 Depth within a band, the way the Risk Manager and Execution Trader want it:
 
 ```bash
 hl '{"type":"l2Book","coin":"ETH"}' | jq '
   (.levels[0][0].px|tonumber) as $bb | (.levels[1][0].px|tonumber) as $ba | (($bb+$ba)/2) as $mid
   | def within(side; bps): [side[] | select((((.px|tonumber) - $mid) | fabs) / $mid * 10000 <= bps) | .sz|tonumber] | add // 0;
+    def reach(side): (((side[-1].px|tonumber) - $mid) | fabs) / $mid * 10000;
   {mid: $mid, spread_bps: (($ba-$bb)/$mid*10000),
+   levels: [(.levels[0]|length), (.levels[1]|length)], reach_bps: [reach(.levels[0]), reach(.levels[1])],
    bid_5bps: within(.levels[0]; 5), ask_5bps: within(.levels[1]; 5),
    bid_10bps: within(.levels[0]; 10), ask_10bps: within(.levels[1]; 10),
    bid_25bps: within(.levels[0]; 25), ask_25bps: within(.levels[1]; 25)}'
 ```
+
+`reach_bps` is the answer's own scope: any band wider than it, on a side that returned 20 levels, is a floor and is quoted as `>= size`. Two bands reporting the same total is that cut-off, not a flat book.
 
 Expected slippage for a size: walk the relevant side accumulating `sz` until the target size is reached; report the volume-weighted price versus mid in bps. If the size exceeds the visible 20 levels, say "beyond visible depth". Python: `info.l2_snapshot("ETH")`.
 

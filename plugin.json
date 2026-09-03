@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hypergrok",
   "description": "Turn your Grok Bot into a Hyperliquid trading desk: seven specialist roles with full system prompts and seventeen skills for working with Hyperliquid. Includes a zero-key Opening Bell and desk doctor.",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "author": {"name": "Galleon Labs", "url": "https://galleonlabs.io"},
   "license": "MIT",
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",

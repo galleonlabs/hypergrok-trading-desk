@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.4.2 - 2026-09-04
+
++ The public Grok Bot contract now exposes its exact release in the visible description. A stdlib checker compares the logged-out profile, description, action and deep-link id with `template/grok-bot.json`, with positive and drift fixtures in the local gate and a daily GitHub Actions check against the live preview. The release runbook now makes re-authoring and that external proof part of every release instead of leaving the public template to drift silently.
++ Audited all seven public forks. Six have no commits absent from upstream; the only diverged fork is a 526-file replacement with an unreleased Python execution runtime whose own support policy disables capital-bearing use, so it is a different product rather than a safe patch source. Its useful repository-review ideas were brought back as required redacted verification evidence on bug reports and required verification and rollback plans on improvements.
++ Re-authored the public **HyperGrok Desk Lead** template with all seventeen version-pinned `v1.4.2` skills and no plugins, memories or routines, and corrected its botdirectory listing from sixteen skills to seventeen.
+
 ## 1.4.1 - 2026-09-04
 
 + The Opening Bell marked bands the book did not reach as floors, but never went and got the depth. `l2Book` caps a page at 20 levels per side, and at full price resolution those levels stop 8.2 bps from the mid on ETH and 2.7 on BTC, so on BTC all three of the 5, 10 and 25 bps rows printed the same `>=` floor - 53 BTC where the depth within 25 bps was 467, understating the real book roughly ninefold. `hyperliquid-market-data` already documented the fix, re-requesting with `nSigFigs: 4`; the demo the desk runs first ignored its own skill. `scripts/opening_bell.py` now pages the book coarser (`nSigFigs` 4, then 3) until the widest band is measured, reads every band off the finest page that reaches it, keeps top of book and spread on the full-precision page, and names the page each figure came from because bucketing moves the band edges. A band no page reaches is still a floor. Verified live: ETH, BTC, SOL, HYPE and kPEPE now measure all three bands, SOL and HYPE escalating to 3 sig figs. Two robustness fixes came with it: a `null` `l2Book` body raised an uncaught `AttributeError` traceback instead of the script's own "unavailable" line, and an unusable coarser page no longer discards a snapshot the full page can serve. The market-data skill records the measured reach of each resolution and the ladder.

@@ -38,7 +38,8 @@ The check runs three passes and CI runs the same script:
 3. Bump `metadata.version` in the frontmatter of each skill whose body actually changed. Skills version independently; leave the untouched ones alone.
 4. Update the `--branch` pin in `SETUP.md` section 1 to the new tag, and every other release tag the instruction files name. `check_manifests.py` fails if any of them disagree with the version from step 2; only `CHANGELOG.md` and this file may name older tags.
 5. Run `bash scripts/check.sh`, then commit, then tag: `git tag -a vX.Y.Z -m "..." && git push origin main vX.Y.Z`.
-6. Publish a GitHub release for the tag, and verify the published instructions actually work by running section 1 verbatim in an empty directory: clone the tag, then `bash scripts/check.sh` inside it.
+6. Publish a GitHub release for the tag, re-author the public Grok Bot template from `template/grok-bot.json`, and run `python3 scripts/check_public_template.py --live` so its logged-out profile and deep link are proved against the same release contract.
+7. Verify the published instructions actually work by running section 1 verbatim in an empty directory: clone the tag, then `bash scripts/check.sh` inside it.
 
 The tag must contain a `SETUP.md` that pins to that same tag. If step 4 is skipped, the release ships instructions pointing at the previous one, so the check enforces it rather than leaving it to whoever cuts the release: step 2 without step 4 fails the build, and so does a pin that names a moving branch or no ref at all.
 

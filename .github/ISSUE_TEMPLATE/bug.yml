@@ -33,3 +33,10 @@ body:
       label: What it should say
     validations:
       required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Verification evidence
+      description: Paste the smallest redacted reproduction, test output or state snapshot that proves the mismatch and can verify a fix.
+    validations:
+      required: true

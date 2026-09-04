@@ -38,7 +38,7 @@ That is the supported one-click, one-message install. The public template carrie
 
 If the public template is unavailable, open Grok Bot and paste this to any Bot:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.1/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.1/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.2/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.2/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 The desk starts in research mode. The first demo uses only Hyperliquid's public `/info` endpoint: no wallet, account read or order. Add a testnet API wallet when you want to practise with play money, and a mainnet one when you are ready.
 

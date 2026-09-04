@@ -6,7 +6,7 @@ The template deliberately carries no plugins, memories or routines. The Opening 
 
 ## Author the template
 
-Use a fresh Grok Bot named **HyperGrok Desk Lead**. Copy the `name`, `title`, `description` and avatar from `template/grok-bot.json`, then add every listed skill from its pinned `path`. Do not paraphrase the skill files. The manifest's SHA-256 values identify the reviewed bytes.
+Use a fresh Grok Bot named **HyperGrok Desk Lead**. Copy the `name`, `title`, `description` and avatar from `template/grok-bot.json`, then add every listed skill from its pinned `path`. Do not paraphrase the skill files. The manifest's SHA-256 values identify the reviewed bytes. The public description must include the exact `source.release`; that visible marker lets automation detect a stale public template without depending on Grok Bot's private template format.
 
 Do not add conversation history, private files, account details, plugins, memories, secrets or routines. Before sharing, confirm the template inventory is:
 
@@ -34,6 +34,14 @@ The public preview must show:
 - no private conversation, file, account or secret
 
 Check the preview while logged out. Importing it should create a new Bot; it must not merge into an existing one or import the author's computer, chats or tokens.
+
+Verify the published preview directly:
+
+```bash
+python3 scripts/check_public_template.py --live
+```
+
+The scheduled **Public Grok Bot template** workflow repeats that check daily. A failure is a release incident: re-author the public template from the manifest and rerun the workflow. Do not weaken the manifest to match stale public content.
 
 ## Evaluate a clean install
 

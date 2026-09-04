@@ -23,3 +23,10 @@ body:
       label: Proposed change
     validations:
       required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification and rollback
+      description: How will the improvement be proved, and how can it be backed out safely if the evidence disagrees?
+    validations:
+      required: true

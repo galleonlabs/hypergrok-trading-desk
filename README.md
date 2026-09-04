@@ -8,18 +8,6 @@
 
 Add the public Desk Lead to [Grok Bot](https://x.ai/bot/PReCwAHq8Vgeex50r883H). It opens with a live, zero-key Hyperliquid market snapshot, builds research, risk, execution and review as separate agents, then proves the floor is ready. They brief you on markets, size your trades, send what you approve and tell you honestly how it went. You bring the ideas. Let them cook.
 
-<p align="center">
-  <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">
-    <img src="https://pump.fun/pump-logomark.svg" width="52" alt="pump.fun">
-  </a>
-</p>
-
-<p align="center">
-  <strong>Supported by the pump.fun community</strong><br>
-  <a href="https://pump.fun/coin/9EmtjLFXwWSz828eyLunxmoWZNdoEjpw1nbxsEwGpump">View HYPERGROK on pump.fun</a> ·
-  <a href="https://www.geckoterminal.com/solana/pools/4ia8dx7usysB89iGbNN1hBinHritL5dEjtiThTu7qJrN">Track the market on GeckoTerminal</a>
-</p>
-
 ## Start
 
 <p align="center">
@@ -158,3 +146,8 @@ assets/      the mascot - use it as your Bots' avatar
 | [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) | |
 
 MIT. Built by [Galleon Labs](https://github.com/galleonlabs).
+
+<p align="center">
+  <img src="https://pump.fun/pump-logomark.svg" width="52" alt="pump.fun"><br>
+  <strong>Supported by the pump.fun community</strong>
+</p>

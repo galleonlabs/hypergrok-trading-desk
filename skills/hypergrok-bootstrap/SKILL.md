@@ -21,7 +21,7 @@ Bootstrap is research-only.
 - Public `POST /info` market reads are allowed. State mainnet, request type and UTC time.
 - Local writes are limited to `/workspace/hypergrok` and `/workspace/trading-desk`.
 - Creating the seven named Bots and the private Trading Floor group is in scope. Sharing anything publicly is not.
-- If a capability is unavailable, return the exact manual card or step. Do not pretend it happened.
+- If a capability is unavailable, return the exact manual card or step and continue independent supported work. Do not pretend it happened or mark dependent checks complete.
 
 ## 1. Install the reviewed release
 
@@ -72,7 +72,7 @@ Create one Bot from each agent file's **Bot profile** and **System prompt**:
 6. Execution Trader
 7. Trade Reviewer
 
-Use `assets/mascot.jpg` as the avatar when the product supports it. Do not add unrelated memories, conversation history or private files. If Bot creation is unavailable, return seven clearly labelled copy-and-paste cards and wait for the user to create them.
+Use `assets/mascot.jpg` as the avatar when the product supports it. Do not add unrelated memories, conversation history or private files. If Bot creation is unavailable, return seven clearly labelled copy-and-paste cards and ask the user to create them. Continue independent local preparation and checks; keep Bot and group readiness pending until their existence is verified.
 
 Inspect the shared skills before installing anything. A Desk Lead added from the public HyperGrok template already carries the reviewed skill set; do not create duplicate skills.
 

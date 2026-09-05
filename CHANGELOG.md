@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Audit agent and skill instructions against [OpenAI's GPT-6 Astra guidance](https://developers.openai.com/api/docs/guides/latest-model): clarify task continuity, material questions, blocker explanations, and proportionate verification while preserving financial authorization and evidence gates.
+- Add a contributor AGENTS.md and allow independent bootstrap preparation while manual Bot setup is pending. The published Grok template and pinned release are unchanged; these source edits await the next release.
+
 ## 1.4.2 - 2026-09-04
 
 + The public Grok Bot contract now exposes its exact release in the visible description. A stdlib checker compares the logged-out profile, description, action and deep-link id with `template/grok-bot.json`, with positive and drift fixtures in the local gate and a daily GitHub Actions check against the live preview. The release runbook now makes re-authoring and that external proof part of every release instead of leaving the public template to drift silently.

@@ -73,6 +73,9 @@ Skills in Grok Bot are shared across all of the user's Bots. Inspect the shared 
 
 For each directory under `skills/`, read `SKILL.md` and compare its `name` and instructions with the shared skill when one exists. A matching skill is enabled and recorded as `template`. A missing skill is saved unchanged and recorded as `installed`. If the app cannot save a skill of that length, save a short pointer skill instead: "When this skill is used, read `/workspace/hypergrok/skills/<name>/SKILL.md` and follow it," and record `pointer`. A same-name skill with different instructions that cannot be replaced by the reviewed file is a `mismatch` and fails readiness. The receipt must list exactly seventeen unique names and one status for each; a name alone is not proof that its content is current.
 
+When copying a skill into another workspace or distributing the desk, retain its `LICENSE` and `ATTRIBUTION.md` beside the instructions. If the destination only accepts a single instruction field, keep the complete license notice in its accompanying project documentation or third-party notices. See [reuse and attribution](ATTRIBUTION.md); stars and public credit links are optional.
+
+
 Skills to install (17):
 
 - Bootstrap: `hypergrok-bootstrap`

@@ -44,3 +44,7 @@ The check runs three passes and CI runs the same script:
 The tag must contain a `SETUP.md` that pins to that same tag. If step 4 is skipped, the release ships instructions pointing at the previous one, so the check enforces it rather than leaving it to whoever cuts the release: step 2 without step 4 fails the build, and so does a pin that names a moving branch or no ref at all.
 
 Version numbers are for this repository's instruction set, not for anything it installs. There is no `v1.0.0` tag: the 1.0.0 entry in the changelog is this markdown desk, while the tag of that name pointed at an earlier, unrelated Python CLI on a lineage that is not an ancestor of `main` (`53aae9f`). It was removed in 1.1.0. `v1.1.0` is the first tag that matches what this repository ships.
+
+## Credit and reuse
+
+Retain existing authorship and license notices in contributions and derived work. [ATTRIBUTION.md](ATTRIBUTION.md) explains MIT notice requirements and offers an optional visible credit line.

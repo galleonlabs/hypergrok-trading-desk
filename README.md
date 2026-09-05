@@ -145,9 +145,13 @@ assets/      the mascot - use it as your Bots' avatar
 | [Provenance](docs/PROVENANCE.md) | sources and licences |
 | [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) | |
 
-MIT. Built by [Galleon Labs](https://github.com/galleonlabs).
-
 <p align="center">
   <img src="https://pump.fun/pump-logomark.svg" width="52" alt="pump.fun"><br>
   <strong>Supported by the pump.fun community</strong>
 </p>
+
+## License and credit
+
+[MIT licensed](LICENSE), with the copyright and permission notice retained when reusing copies or substantial portions. Created by [Andrew Wilkinson](https://andrewwilkinson.io) and [Galleon Labs](https://github.com/galleonlabs).
+
+See [reuse and attribution](ATTRIBUTION.md) for a ready-to-copy credit line. If HyperGrok Trading Desk helps your work, [a star on the original repository](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and entirely optional.

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 
@@ -28,6 +29,85 @@ def sha256(path):
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def run_git(root, args):
+    try:
+        return subprocess.run(
+            ["git", "-C", root, *args],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+
+def claimed_paths(template):
+    paths = []
+    avatar = template.get("avatar")
+    if isinstance(avatar, str) and avatar:
+        paths.append(avatar)
+    for entry in template.get("skills") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            paths.append(entry["path"])
+    return paths
+
+
+def compare_to_release_tag(root, template, errors, skips):
+    """Fail when claimed bytes are not the bytes at source.release.
+
+    The working-tree sha256 check cannot catch a pin that names an older tag
+    while the hashes describe current files. When the tag is here, every
+    claimed path must match `git show <tag>:<path>`. When it is not - a
+    release being prepared, an unpacked archive, or git missing - skip
+    out loud rather than reporting ok for a comparison that did not run.
+    """
+    release = (template.get("source") or {}).get("release")
+    if not isinstance(release, str) or not release:
+        return
+    result = run_git(root, ["rev-parse", "--is-inside-work-tree"])
+    if result is None:
+        skips.append(
+            f"skip: git is unavailable; cannot compare {TEMPLATE} to {release}"
+        )
+        return
+    if result.returncode != 0 or result.stdout.strip() != b"true":
+        skips.append(
+            f"skip: not a git checkout; cannot compare {TEMPLATE} to {release}"
+        )
+        return
+    tagged = run_git(root, ["rev-parse", "--verify", "--quiet", f"refs/tags/{release}"])
+    if tagged is None:
+        skips.append(
+            f"skip: git is unavailable; cannot compare {TEMPLATE} to {release}"
+        )
+        return
+    if tagged.returncode != 0:
+        skips.append(
+            f"skip: {TEMPLATE} source.release tag {release} is not in this checkout"
+        )
+        return
+    for rel in claimed_paths(template):
+        shown = run_git(root, ["show", f"{release}:{rel}"])
+        if shown is None:
+            skips.append(
+                f"skip: git is unavailable; cannot compare {TEMPLATE} to {release}"
+            )
+            return
+        if shown.returncode != 0:
+            errors.append(
+                f"{TEMPLATE}: {rel} is missing from source.release tag {release}"
+            )
+            continue
+        path = os.path.join(root, rel)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as handle:
+            working = handle.read()
+        if working != shown.stdout:
+            errors.append(
+                f"{TEMPLATE}: {rel} does not match source.release tag {release}"
+            )
 
 
 def main(root):
@@ -129,10 +209,15 @@ def main(root):
         if phrase not in bootstrap:
             errors.append(f"skills/hypergrok-bootstrap/SKILL.md: missing template idempotency rule '{phrase}'")
 
+    skips = []
+    compare_to_release_tag(root, template, errors, skips)
+
     if errors:
         print("\n".join(errors))
         print(f"{len(errors)} problem(s)")
         return 1
+    for line in skips:
+        print(line)
     print(f"ok: Grok Bot template is {status}, pinned to {expected_release}, with {len(entries)} verified skills")
     return 0
 

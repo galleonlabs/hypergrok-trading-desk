@@ -1,7 +1,7 @@
 {
   "name": "hypergrok",
   "description": "Turn your agent into a Hyperliquid trading desk: seven specialist roles with full system prompts and seventeen skills for research, risk, execution and review.",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "author": {
     "name": "Galleon Labs",
     "url": "https://galleonlabs.io"

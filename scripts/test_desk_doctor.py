@@ -14,26 +14,31 @@ SPEC.loader.exec_module(desk_doctor)
 
 
 class DeskDoctorTest(unittest.TestCase):
+    SKILLS = [f"skill-{index}" for index in range(16)] + ["hypergrok-bootstrap"]
+    AGENTS = [f"agent-{index}" for index in range(7)]
+
     def make_repo(self, root):
+        """A checkout that publishes an inventory and then satisfies it."""
         with open(os.path.join(root, "plugin.json"), "w", encoding="utf-8") as handle:
             json.dump({"version": "1.3.0"}, handle)
         with open(os.path.join(root, "SETUP.md"), "w", encoding="utf-8") as handle:
             handle.write("git clone --branch v1.3.0 repo\n")
-        for index in range(17):
-            path = os.path.join(root, "skills", f"skill-{index}")
-            os.makedirs(path)
-            open(os.path.join(path, "SKILL.md"), "w", encoding="utf-8").close()
-        os.makedirs(os.path.join(root, "skills", "hypergrok-bootstrap"), exist_ok=True)
-        open(os.path.join(root, "skills", "hypergrok-bootstrap", "SKILL.md"), "a", encoding="utf-8").close()
-        # Replace one generic skill so the total remains 17.
-        os.remove(os.path.join(root, "skills", "skill-16", "SKILL.md"))
-        for index in range(7):
-            path = os.path.join(root, "agents")
-            os.makedirs(path, exist_ok=True)
-            open(os.path.join(path, f"agent-{index}.md"), "w", encoding="utf-8").close()
+            handle.writelines(f"| `agents/{name}.md` | role |\n" for name in self.AGENTS)
+        os.makedirs(os.path.join(root, "skills"))
+        with open(os.path.join(root, "skills", "README.md"), "w", encoding="utf-8") as handle:
+            handle.writelines(f"| [{name}]({name}/SKILL.md) | what it teaches |\n" for name in self.SKILLS)
+        for name in self.SKILLS:
+            os.makedirs(os.path.join(root, "skills", name))
+            open(os.path.join(root, "skills", name, "SKILL.md"), "w", encoding="utf-8").close()
+        os.makedirs(os.path.join(root, "agents"))
+        for name in self.AGENTS:
+            open(os.path.join(root, "agents", f"{name}.md"), "w", encoding="utf-8").close()
         os.makedirs(os.path.join(root, "scripts"))
         for name in ("check.sh", "desk_doctor.py", "opening_bell.py"):
             open(os.path.join(root, "scripts", name), "w", encoding="utf-8").close()
+
+    def named(self, checks, name):
+        return next(check for check in checks if check.name == name)
 
     def test_repository_fixture_passes(self):
         with tempfile.TemporaryDirectory() as root:
@@ -51,6 +56,50 @@ class DeskDoctorTest(unittest.TestCase):
         """
         checks = desk_doctor.check_repository(ROOT)
         self.assertEqual([check for check in checks if check.status != "PASS"], [])
+
+    def test_missing_skill_is_named(self):
+        """`expected 17, found 16` left the user diffing the runbook by hand."""
+        with tempfile.TemporaryDirectory() as root:
+            self.make_repo(root)
+            os.remove(os.path.join(root, "skills", "skill-3", "SKILL.md"))
+            check = self.named(desk_doctor.check_repository(root), "skills")
+            self.assertEqual(check.status, "FAIL", check)
+            self.assertIn("skill-3", check.detail)
+
+    def test_right_count_of_the_wrong_skills_fails(self):
+        """The count check passed this: an unpacked archive that dropped one
+        skill and left a stray directory behind reported a healthy desk."""
+        with tempfile.TemporaryDirectory() as root:
+            self.make_repo(root)
+            skills = os.path.join(root, "skills")
+            os.rename(os.path.join(skills, "skill-3"), os.path.join(skills, "skill-3.bak"))
+            check = self.named(desk_doctor.check_repository(root), "skills")
+            self.assertEqual(check.status, "FAIL", check)
+            self.assertIn("skill-3", check.detail)
+
+    def test_undeclared_skill_warns_without_failing(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.make_repo(root)
+            os.makedirs(os.path.join(root, "skills", "my-own-skill"))
+            open(os.path.join(root, "skills", "my-own-skill", "SKILL.md"), "w", encoding="utf-8").close()
+            checks = desk_doctor.check_repository(root)
+            self.assertEqual(self.named(checks, "skills").status, "WARN")
+            self.assertIn("my-own-skill", self.named(checks, "skills").detail)
+            self.assertFalse([check for check in checks if check.status == "FAIL"])
+
+    def test_missing_agent_is_named(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.make_repo(root)
+            os.remove(os.path.join(root, "agents", "agent-5.md"))
+            check = self.named(desk_doctor.check_repository(root), "agents")
+            self.assertEqual(check.status, "FAIL", check)
+            self.assertIn("agent-5", check.detail)
+
+    def test_missing_skills_index_fails_rather_than_passing_empty(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.make_repo(root)
+            os.remove(os.path.join(root, "skills", "README.md"))
+            self.assertEqual(self.named(desk_doctor.check_repository(root), "skills").status, "FAIL")
 
     def test_setup_pin_lagging_the_manifest_fails(self):
         with tempfile.TemporaryDirectory() as root:

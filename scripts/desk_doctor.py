@@ -13,8 +13,11 @@ import urllib.request
 from dataclasses import asdict, dataclass
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
-EXPECTED_SKILLS = 17
-EXPECTED_AGENTS = 7
+# What the checkout says it ships, read from the two lists it already publishes
+# and `scripts/check.sh` already keeps honest: the skills index links every skill,
+# and the runbook the user follows names every profile it tells them to create.
+SKILL_INDEX = ("skills/README.md", re.compile(r"\[([a-z0-9-]+)\]\(\1/SKILL\.md\)"))
+AGENT_INDEX = ("SETUP.md", re.compile(r"`agents/([a-z0-9-]+)\.md`"))
 REQUIRED_DESK_DIRS = (
     "proposals",
     "briefs",
@@ -37,6 +40,50 @@ def result(condition: bool, name: str, pass_detail: str, fail_detail: str) -> Ch
     return Check("PASS" if condition else "FAIL", name, pass_detail if condition else fail_detail)
 
 
+def present_skills(root: str) -> set[str]:
+    directory = os.path.join(root, "skills")
+    if not os.path.isdir(directory):
+        return set()
+    return {name for name in os.listdir(directory) if os.path.isfile(os.path.join(directory, name, "SKILL.md"))}
+
+
+def present_agents(root: str) -> set[str]:
+    directory = os.path.join(root, "agents")
+    if not os.path.isdir(directory):
+        return set()
+    return {name[:-3] for name in os.listdir(directory) if name.endswith(".md") and os.path.isfile(os.path.join(directory, name))}
+
+
+def inventory(root: str, name: str, index: tuple[str, re.Pattern], present: set[str]) -> Check:
+    """Check the install component by component, against the list it publishes.
+
+    Counting was the wrong question twice over. A count has to be bumped at every
+    release - the defect the version check no longer has - and it passes a tree
+    holding the right number of the wrong things, so an unpacked archive that
+    dropped one skill and left a stray directory behind read as a healthy desk.
+    Naming what is missing is also what the user needs: they can restore one path,
+    rather than diff seventeen directories against the runbook.
+
+    A directory the index does not list only warns. Missing is caught by name now,
+    so an extra can no longer mask one, and a user's own skill is not a broken desk.
+    """
+    source, pattern = index
+    try:
+        with open(os.path.join(root, source), encoding="utf-8") as handle:
+            declared = set(pattern.findall(handle.read()))
+    except OSError as exc:
+        return Check("FAIL", name, f"cannot read {source}: {exc}")
+    if not declared:
+        return Check("FAIL", name, f"{source} lists no {name}; this checkout cannot say what it ships")
+    missing = sorted(declared - present)
+    if missing:
+        return Check("FAIL", name, f"{len(declared) - len(missing)} of {len(declared)} present; missing {', '.join(missing)}")
+    extra = sorted(present - declared)
+    if extra:
+        return Check("WARN", name, f"all {len(declared)} present; {source} does not list {', '.join(extra)}")
+    return Check("PASS", name, f"all {len(declared)} present")
+
+
 def check_repository(root: str) -> list[Check]:
     checks = []
     # `plugin.json` is the release this checkout claims to be. Every other
@@ -53,12 +100,8 @@ def check_repository(root: str) -> list[Check]:
     except (OSError, json.JSONDecodeError) as exc:
         checks.append(Check("FAIL", "release", f"cannot read plugin.json: {exc}"))
 
-    skills_dir = os.path.join(root, "skills")
-    agents_dir = os.path.join(root, "agents")
-    skills = [name for name in os.listdir(skills_dir) if os.path.isfile(os.path.join(skills_dir, name, "SKILL.md"))] if os.path.isdir(skills_dir) else []
-    agents = [name for name in os.listdir(agents_dir) if name.endswith(".md") and os.path.isfile(os.path.join(agents_dir, name))] if os.path.isdir(agents_dir) else []
-    checks.append(result(len(skills) == EXPECTED_SKILLS, "skills", f"{len(skills)} skills present", f"expected {EXPECTED_SKILLS}, found {len(skills)}"))
-    checks.append(result(len(agents) == EXPECTED_AGENTS, "agents", f"{len(agents)} agent profiles present", f"expected {EXPECTED_AGENTS}, found {len(agents)}"))
+    checks.append(inventory(root, "skills", SKILL_INDEX, present_skills(root)))
+    checks.append(inventory(root, "agents", AGENT_INDEX, present_agents(root)))
 
     setup_path = os.path.join(root, "SETUP.md")
     expected_tag = f"v{version}" if version else None

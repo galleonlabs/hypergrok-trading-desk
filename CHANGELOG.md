@@ -6,7 +6,7 @@
 
 + The public Grok Bot contract now exposes its exact release in the visible description. A stdlib checker compares the logged-out profile, description, action and deep-link id with `template/grok-bot.json`, with positive and drift fixtures in the local gate and a daily GitHub Actions check against the live preview. The release runbook now makes re-authoring and that external proof part of every release instead of leaving the public template to drift silently.
 + Audited all seven public forks. Six have no commits absent from upstream; the only diverged fork is a 526-file replacement with an unreleased Python execution runtime whose own support policy disables capital-bearing use, so it is a different product rather than a safe patch source. Its useful repository-review ideas were brought back as required redacted verification evidence on bug reports and required verification and rollback plans on improvements.
-+ Re-authored the public **HyperGrok Desk Lead** template with all seventeen version-pinned `v1.4.2` skills and no plugins, memories or routines, and corrected its botdirectory listing from sixteen skills to seventeen.
++ Re-authored the public **HyperGrok Desk Lead** template with all seventeen version-pinned `v1.4.2` skills and no plugins, memories or routines. Its botdirectory listing still says sixteen skills; the correction is open at https://github.com/elie222/botdirectory.ai/pull/279.
 
 ## 1.4.1 - 2026-09-04
 

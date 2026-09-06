@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,9 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # and `scripts/check.sh` already keeps honest: the skills index links every skill,
 # and the runbook the user follows names every profile it tells them to create.
 SKILL_INDEX = ("skills/README.md", re.compile(r"\[([a-z0-9-]+)\]\(\1/SKILL\.md\)"))
+# The reviewed bytes of every skill the release ships, already published by the
+# checkout and already kept honest by `scripts/check_grok_template.py`.
+TEMPLATE_MANIFEST = "template/grok-bot.json"
 AGENT_INDEX = ("SETUP.md", re.compile(r"`agents/([a-z0-9-]+)\.md`"))
 REQUIRED_DESK_DIRS = (
     "proposals",
@@ -84,6 +88,52 @@ def inventory(root: str, name: str, index: tuple[str, re.Pattern], present: set[
     return Check("PASS", name, f"all {len(declared)} present")
 
 
+def skill_bytes(root: str) -> Check:
+    """Compare each shipped skill body with the bytes the release reviewed.
+
+    Naming what is missing still passes a desk whose skills are all present and
+    one of them is not what was reviewed. `SETUP.md` section 1 judges the clone
+    by `scripts/check.sh`, which catches that through this same manifest, but
+    section 9 and `hypergrok-bootstrap` run the doctor alone, and `README.md`
+    offers it as the desk's standing health tool. So a skill body edited or
+    truncated after the install gate - a Risk Manager whose sizing rules no
+    longer say what the desk agreed - read as a healthy desk. The manifest is
+    already in the checkout and already the release's own statement of those
+    bytes; the doctor now reads it and names every path that no longer matches.
+    """
+    path = os.path.join(root, TEMPLATE_MANIFEST)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            entries = json.load(handle)["skills"]
+        claimed = [(str(entry["path"]), str(entry["sha256"])) for entry in entries]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        return Check("FAIL", "skill bytes", f"cannot read {TEMPLATE_MANIFEST}: {exc}")
+    if not claimed:
+        return Check("FAIL", "skill bytes", f"{TEMPLATE_MANIFEST} claims no skill bytes; this checkout cannot say what it ships")
+
+    changed, unreadable = [], []
+    for relative, expected in claimed:
+        digest = hashlib.sha256()
+        try:
+            with open(os.path.join(root, relative), "rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+        except OSError:
+            unreadable.append(relative)
+            continue
+        if digest.hexdigest() != expected:
+            changed.append(relative)
+    if not changed and not unreadable:
+        return Check("PASS", "skill bytes", f"all {len(claimed)} match {TEMPLATE_MANIFEST}")
+    named = []
+    if changed:
+        named.append(f"changed: {', '.join(sorted(changed))}")
+    if unreadable:
+        named.append(f"unreadable: {', '.join(sorted(unreadable))}")
+    matched = len(claimed) - len(changed) - len(unreadable)
+    return Check("FAIL", "skill bytes", f"{matched} of {len(claimed)} match the reviewed bytes; {'; '.join(named)}")
+
+
 def check_repository(root: str) -> list[Check]:
     checks = []
     # `plugin.json` is the release this checkout claims to be. Every other
@@ -102,6 +152,7 @@ def check_repository(root: str) -> list[Check]:
 
     checks.append(inventory(root, "skills", SKILL_INDEX, present_skills(root)))
     checks.append(inventory(root, "agents", AGENT_INDEX, present_agents(root)))
+    checks.append(skill_bytes(root))
 
     setup_path = os.path.join(root, "SETUP.md")
     expected_tag = f"v{version}" if version else None

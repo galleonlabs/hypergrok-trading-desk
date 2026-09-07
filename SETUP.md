@@ -8,7 +8,7 @@ If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.2 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.3 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 1.4.3 - 2026-09-06
+## 1.4.3 - 2026-09-07
 
 + `scripts/desk_doctor.py` verified the install with two hardcoded counts, `EXPECTED_SKILLS = 17` and `EXPECTED_AGENTS = 7`, so any seventeen directories holding a `SKILL.md` passed whatever they were named. `SETUP.md` section 1 supports unpacking an attached archive when the clone fails; an unpack that dropped `desk-risk-limits` and left a stray `desk-risk-limits.bak` behind still counted seventeen, and the doctor reported 0 failed checks on a desk whose Risk Manager had no sizing skill. `scripts/check.sh` catches that, but section 3 and `hypergrok-bootstrap` run the doctor, not the gate. When the count really was short the user got `expected 17, found 16` and no way to tell which of seventeen directories to restore. The doctor now checks components by name against the lists the checkout already publishes and the gate already keeps honest - the `skills/README.md` index and the `agents/<name>.md` profiles `SETUP.md` tells the user to create - so it names what is missing and there is no constant left to bump at a release, which is the same defect the version check lost in 1.4.1. A directory the index does not list now warns instead of failing: a missing skill is caught by name, so an extra can no longer mask one, and a user's own skill is not a broken desk. Five tests cover a missing skill, a renamed skill that keeps the count, a missing profile, an undeclared extra and a missing index; all five fail against the counting doctor they replace.
 + `hypergrok-bootstrap` now continues independent supported preparation when a Bot or group-creation capability is unavailable, instead of stalling the rest of setup behind a missing manual step.

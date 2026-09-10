@@ -1,11 +1,12 @@
-# Trusted repository jobs use the dappnode runner and its installed tools.
-# Native git avoids shared-IP action-download throttling; fork PRs never run here.
+# PR definitions come from the trusted base; the job guard rejects fork heads
+# before runner admission. Trusted PRs check their exact head SHA.
+# Runner-native git avoids shared-IP action-download throttling.
 name: CI
 on:
   push:
     branches:
       - main
-  pull_request: null
+  pull_request_target: null
 permissions:
   contents: read
 jobs:
@@ -19,6 +20,7 @@ jobs:
       - name: Checkout with runner git
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          CHECKOUT_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
         run: |-
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
@@ -29,14 +31,14 @@ jobs:
           git remote set-url origin "https://github.com/$GITHUB_REPOSITORY.git"
           git config --local --unset-all "http.https://github.com/.extraheader" || true
           header=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $header" fetch --force --prune --tags origin "+refs/heads/*:refs/remotes/origin/*" "$GITHUB_SHA"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $header" fetch --force --prune --tags origin "+refs/heads/*:refs/remotes/origin/*" "$CHECKOUT_SHA"
           unset header
-          git checkout --force --detach "$GITHUB_SHA"
+          git checkout --force --detach "$CHECKOUT_SHA"
           git clean -ffdx -e 'node_modules/' -e '**/node_modules/'
           git log -1 --oneline
       - run: bash scripts/check.sh
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 15
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

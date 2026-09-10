@@ -1,18 +1,42 @@
+# Trusted repository jobs use the dappnode runner and its installed tools.
+# Native git avoids shared-IP action-download throttling; fork PRs never run here.
 name: CI
-
 on:
   push:
-  pull_request:
-
+    branches:
+      - main
+  pull_request: null
 permissions:
   contents: read
-
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - dappnode
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-tags: true
-      - run: git fetch --tags --force origin
+      - name: Checkout with runner git
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          if [[ ! -d .git ]]; then
+            git init
+            git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          fi
+          git remote set-url origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config --local --unset-all "http.https://github.com/.extraheader" || true
+          header=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $header" fetch --force --prune --tags origin "+refs/heads/*:refs/remotes/origin/*" "$GITHUB_SHA"
+          unset header
+          git checkout --force --detach "$GITHUB_SHA"
+          git clean -ffdx -e 'node_modules/' -e '**/node_modules/'
+          git log -1 --oneline
       - run: bash scripts/check.sh
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 15
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true

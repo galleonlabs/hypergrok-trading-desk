@@ -176,7 +176,54 @@ def stale_tag_in_documented_url(root):
     return "README.md", "names release tag v0.9.0"
 
 
+def grok_marketplace_root_source(root):
+    edit(root, ".grok-plugin/marketplace.json",
+         lambda d: d["plugins"][0].update(source={"type": "local", "path": "./"}))
+    return ".grok-plugin/marketplace.json", "source"
+
+
+def grok_marketplace_stale_ref(root):
+    edit(root, ".grok-plugin/marketplace.json",
+         lambda d: d["plugins"][0].update(source={
+             "source": "url", "url": "https://github.com/galleonlabs/hypergrok-trading-desk.git",
+             "ref": "v0.9.0"}))
+    return ".grok-plugin/marketplace.json", "ref"
+
+
+def grok_marketplace_missing_ref(root):
+    edit(root, ".grok-plugin/marketplace.json",
+         lambda d: d["plugins"][0].update(source={
+             "source": "url", "url": "https://github.com/galleonlabs/hypergrok-trading-desk.git"}))
+    return ".grok-plugin/marketplace.json", "ref"
+
+
+def grok_marketplace_wrong_url(root):
+    edit(root, ".grok-plugin/marketplace.json",
+         lambda d: d["plugins"][0].update(source={
+             "source": "url", "url": "https://github.com/galleonlabs/other.git",
+             "ref": current_pin(root)}))
+    return ".grok-plugin/marketplace.json", "url"
+
+
+def grok_documented_moving_ref(root):
+    with open(os.path.join(root, "README.md"), "a", encoding="utf-8") as fh:
+        fh.write("\ngrok plugin install galleonlabs/hypergrok-trading-desk@main --trust\n")
+    return "README.md", "grok plugin install"
+
+
+def grok_documented_missing_ref(root):
+    with open(os.path.join(root, "docs", "FAQ.md"), "a", encoding="utf-8") as fh:
+        fh.write("\ngrok plugin install galleonlabs/hypergrok-trading-desk --trust\n")
+    return "docs/FAQ.md", "grok plugin install"
+
+
 FIXTURES = [
+    grok_marketplace_root_source,
+    grok_marketplace_stale_ref,
+    grok_marketplace_missing_ref,
+    grok_marketplace_wrong_url,
+    grok_documented_moving_ref,
+    grok_documented_missing_ref,
     version_mismatch,
     nested_version_mismatch,
     missing_component_path,

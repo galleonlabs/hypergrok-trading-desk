@@ -103,7 +103,7 @@ Perpetual futures can liquidate an account. HyperGrok is documentation and instr
 
 ## Also runs in Grok Build, Cursor and Claude Code
 
-The same `agents/`, `skills/` and `rules/` load as a plugin: seventeen skills, and the seven roles as subagents.
+The plugin supplies seventeen skills and seven roles as subagents. Cursor and Claude Code load `agents/`, `skills/` and `rules/`.
 
 In Claude Code, install it from this repository:
 
@@ -112,7 +112,22 @@ In Claude Code, install it from this repository:
 /plugin install hypergrok@hypergrok
 ```
 
-In Grok Build and Cursor, open the repository and enable the plugin.
+In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
+
+```bash
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.3 --trust
+```
+
+Grok Build reports the skills and agents directories; loading `rules/` is not verified.
+Alternatively, register this repository’s Grok marketplace and install by name:
+
+```bash
+grok plugin marketplace add galleonlabs/hypergrok-trading-desk
+grok plugin install hypergrok --trust
+```
+
+The marketplace index on `main` pins the same reviewed release.
+In Cursor, open the repository and enable the plugin.
 
 The same pack installs as a skill:
 

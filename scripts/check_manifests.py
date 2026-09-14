@@ -31,6 +31,8 @@ PATH_KEYS = ("source", "logo", "skills", "agents", "rules")
 
 # The marketplace manifest Claude Code resolves `/plugin marketplace add` against.
 MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json"
+GROK_MARKETPLACE_MANIFEST = ".grok-plugin/marketplace.json"
+GROK_INSTALL_RE = re.compile(r"\bgrok plugin install\s+([^\s`]+)")
 MARKETPLACE_ADD_RE = re.compile(r"/plugin marketplace add\s+([^\s`]+)")
 PLUGIN_INSTALL_RE = re.compile(r"/plugin install\s+([^\s`]+)")
 # skills.sh indexes skill directories, not the plugin id. A trailing /hypergrok
@@ -93,6 +95,8 @@ def check_paths(root, rel, prefix, entry, errors):
         if key not in entry:
             continue
         value = entry[key]
+        if rel == GROK_MARKETPLACE_MANIFEST and key == "source":
+            continue  # checked as a pinned remote source by check_grok_source
         if isinstance(value, dict):
             if value.get("type") not in (None, "local"):
                 continue  # a remote source is not this repository's tree
@@ -110,6 +114,18 @@ def check_paths(root, rel, prefix, entry, errors):
             continue
         if not os.path.exists(resolved):
             errors.append(f"{rel}: {prefix}{key} '{value}' does not exist")
+
+
+def check_grok_source(rel, prefix, entry, version, errors):
+    """Grok rejects a marketplace-root path; use this repository at its release tag."""
+    source = entry.get("source")
+    if not isinstance(source, dict) or source.get("source") != "url":
+        errors.append(f"{rel}: {prefix}source must use the pinned remote URL form")
+        return
+    if source.get("url") != REPOSITORY + ".git":
+        errors.append(f"{rel}: {prefix}source.url must be '{REPOSITORY}.git'")
+    if version is not None and source.get("ref") != f"v{version}":
+        errors.append(f"{rel}: {prefix}source.ref must pin v{version}")
 
 
 def declared_counts(value, found):
@@ -189,6 +205,14 @@ def check_documented_pin(root, version, errors):
                     f"{rel}: names release tag {tag}, but the manifests declare "
                     f"{expected}; an instruction file may only name the release "
                     "it ships in"
+                )
+        for target in GROK_INSTALL_RE.findall(text):
+            if target == CANONICAL_NAME:
+                continue  # marketplace install uses the validated index ref
+            expected_target = REPOSITORY.removeprefix("https://github.com/") + "@" + expected
+            if target != expected_target:
+                errors.append(
+                    f"{rel}: 'grok plugin install {target}' must use '{expected_target}'"
                 )
         for command in CLONE_RE.findall(text):
             if REPOSITORY not in command:
@@ -286,6 +310,8 @@ def main(root):
                 if key in entry and entry[key] != REPOSITORY:
                     errors.append(f"{rel}: {prefix}{key} '{entry[key]}' should be '{REPOSITORY}'")
             check_paths(root, rel, prefix, entry, errors)
+            if rel == GROK_MARKETPLACE_MANIFEST and prefix:
+                check_grok_source(rel, prefix, entry, version, errors)
 
         counts = []
         declared_counts(data, counts)

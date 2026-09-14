@@ -40,7 +40,7 @@ It never resends. It checks the exchange by client order id, and if the order is
 Settings, General, Auto-review: add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Require Approval wins over Always Allow.
 
 **Does it work outside Grok Bot?**
-Yes. Grok Build, Cursor and Claude Code load the same `agents/`, `skills/` and `rules/` as a plugin. In Claude Code, run `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`; in Grok Build and Cursor, open the repository and enable the plugin.
+Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.3 --trust` (tested with Grok Build 1.0.30); the CLI reports skills and agents directories, while loading `rules/` is not verified. In Claude Code, run `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`.
 
 **Is this financial advice?**
 It is documentation and instructions. Perpetual futures can liquidate an account.

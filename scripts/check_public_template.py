@@ -70,6 +70,8 @@ def main() -> None:
     args = parser.parse_args()
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if manifest.get("status") != "published":
+        fail("release template is ready-to-publish; public publication is still pending")
     try:
         page = read_preview(str(manifest["publicShareUrl"]), args.html)
     except (OSError, UnicodeError) as error:

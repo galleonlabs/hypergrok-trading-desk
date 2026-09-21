@@ -3,7 +3,7 @@ name: hyperliquid-orders
 description: Place, cancel and modify Hyperliquid orders correctly from the desk computer - limit and IOC (market-style) orders, take-profit and stop-loss trigger orders with grouping, client order ids, reduce-only, batch actions, price and size rounding, and how to read every response status. Write path - Execution Trader only, on an approved ticket. Use for any order action and for reconciling by cloid.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -33,7 +33,7 @@ Common header for every snippet below (network, account, key loader, rounding he
 
 ```python
 import os, secrets
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 import eth_account
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
@@ -59,19 +59,37 @@ exchange = Exchange(eth_account.Account.from_key(load_key()), BASE, account_addr
 
 SZ_DECIMALS = {a["name"]: a["szDecimals"] for a in info.meta()["universe"]}
 
-def round_px(coin, px, spot=False):
-    """5 significant figures, then at most (6|8) - szDecimals decimals. Integers are always valid,
-    so above 100,000 keep whole-dollar precision instead of rounding to tens."""
-    px = float(px)
-    if px >= 100_000:
-        return float(round(px))
+def round_px(coin, px, spot=False, rounding=ROUND_HALF_UP):
+    """Use Decimal throughout; whole-dollar prices bypass the five-significant-figure cap."""
+    value = Decimal(str(px))
+    if not value.is_finite() or value <= 0:
+        raise ValueError("price must be finite and positive")
     max_dec = max((8 if spot else 6) - SZ_DECIMALS[coin], 0)
-    px = float(f"{px:.5g}")
-    return float(Decimal(str(px)).quantize(Decimal(1).scaleb(-max_dec), rounding=ROUND_HALF_UP))
+    exponent = min(0, max(value.adjusted() - 4, -max_dec))
+    result = value.quantize(Decimal(1).scaleb(exponent), rounding=rounding)
+    if result <= 0:
+        raise ValueError("price rounds to zero")
+    return float(result)
 
 def round_sz(coin, sz):
-    """Round DOWN to szDecimals (Decimal, so 0.29 stays 0.29 and never becomes 0.28)."""
-    return float(Decimal(str(sz)).quantize(Decimal(1).scaleb(-SZ_DECIMALS[coin]), rounding=ROUND_DOWN))
+    """Round positive size DOWN, preserving exact decimal input."""
+    value = Decimal(str(sz))
+    if not value.is_finite() or value <= 0:
+        raise ValueError("size must be finite and positive")
+    result = value.quantize(Decimal(1).scaleb(-SZ_DECIMALS[coin]), rounding=ROUND_DOWN)
+    if result <= 0:
+        raise ValueError("size rounds to zero; this helper is for fixed-size orders")
+    return float(result)
+
+def bounded_px(coin, reference, slippage, is_buy):
+    """A buy cannot exceed its ceiling; a sell cannot fall below its floor."""
+    reference, slippage = Decimal(str(reference)), Decimal(str(slippage))
+    if not reference.is_finite() or reference <= 0:
+        raise ValueError("reference must be finite and positive")
+    if not slippage.is_finite() or not 0 <= slippage < 1:
+        raise ValueError("slippage must be a fraction in [0, 1)")
+    bound = reference * (1 + slippage if is_buy else 1 - slippage)
+    return round_px(coin, bound, rounding=ROUND_DOWN if is_buy else ROUND_UP)
 
 def new_cloid():
     return Cloid.from_str("0x" + secrets.token_hex(16))
@@ -92,15 +110,17 @@ print(res)
 
 ```python
 coin, is_buy, sz, slippage = "ETH", True, round_sz("ETH", 0.51), 0.002      # 20 bps
-mid = float(info.all_mids()[coin])
-px = round_px(coin, mid * (1 + slippage) if is_buy else mid * (1 - slippage))
+mid = info.all_mids()[coin]
+px = bounded_px(coin, mid, slippage, is_buy)
 cloid = new_cloid(); print("cloid", cloid.to_raw(), "bound px", px)
 res = exchange.order(coin, is_buy, sz, px, {"limit": {"tif": "Ioc"}}, reduce_only=False, cloid=cloid)
 print(res)
 # The SDK also offers exchange.market_open(coin, is_buy, sz, px=None, slippage=0.01, cloid=cloid): same semantics,
 # it rounds the PRICE for you but not the size (pass round_sz), and its default slippage is 5% if you omit it.
-# State the slippage bound in the report either way.
+# State the final encoded bound in the report; SDK convenience rounding must not widen the ticket limit.
 ```
+
+Rounding must tighten an approved bound: buy prices round down, sell prices round up. Nearest rounding can exceed a buy ceiling (for example 3000.06 to 3000.1) or undercut a sell floor. Keep the reference and slippage decimal until the SDK boundary; recheck the final encoded price against the ticket before signing. A tighter IOC may not fill; never widen it automatically.
 
 ### Entry with stop-loss and take-profit in one action
 
@@ -108,7 +128,7 @@ print(res)
 coin, sz = "ETH", round_sz("ETH", 0.51)
 bound_tp, bound_sl = 0.01, 0.05                                   # worst-acceptable price after trigger (desk defaults)
 entry, tp, sl = round_px(coin, 3000), round_px(coin, 3090), round_px(coin, 2900)
-tp_px, sl_px = round_px(coin, tp * (1 - bound_tp)), round_px(coin, sl * (1 - bound_sl))   # sells: p below trigger
+tp_px, sl_px = bounded_px(coin, tp, bound_tp, False), bounded_px(coin, sl, bound_sl, False)   # sells: p below trigger
 c_entry, c_tp, c_sl = new_cloid(), new_cloid(), new_cloid()
 orders = [
   {"coin": coin, "is_buy": True,  "sz": sz, "limit_px": entry, "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False, "cloid": c_entry},
@@ -131,7 +151,7 @@ pos = next(p["position"] for p in info.user_state(ACCOUNT)["assetPositions"] if 
 szi = float(pos["szi"])                          # positive long, negative short
 sz, is_buy_close = round_sz(coin, abs(szi)), szi < 0
 trigger = round_px(coin, 2900)
-worst = round_px(coin, trigger * (1 + bound) if is_buy_close else trigger * (1 - bound))
+worst = bounded_px(coin, trigger, bound, is_buy_close)
 res = exchange.order(coin, is_buy_close, sz, worst,
                      {"trigger": {"triggerPx": trigger, "isMarket": True, "tpsl": "sl"}},
                      reduce_only=True, cloid=new_cloid())
@@ -220,6 +240,8 @@ await exchange.cancel({ cancels: [{ a, o: 123 }] });
 await exchange.cancelByCloid({ cancels: [{ asset: a, cloid }] });
 await exchange.modify({ oid: 123, order: { a, b: true, p: "2995", s: "0.51", r: false, t: { limit: { tif: "Gtc" } } } });
 ```
+
+For a dynamic TS price bound, inspect the formatter result against the exact decimal ticket limit: truncation can violate a sell floor. Reject an out-of-bound result and use the SDK's documented directional rounding, or supply an already validated tick-aligned decimal string. Never silently enlarge slippage.
 
 The TS client **throws** `ApiRequestError` when any order in the batch has an `error` status; catch it and read `error.response` to see which legs rested. `formatPrice`/`formatSize` truncate (never round up), and `formatPrice` applies the 5-significant-figure cap even above 100,000 (so `117234.5` becomes `117230`); pass an integer string yourself if you want whole-dollar precision there. The package is ESM-only and needs Node 22.12+; run snippets as `.mjs` files or with `"type": "module"` in `package.json`.
 

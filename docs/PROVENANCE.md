@@ -11,3 +11,5 @@ Everything here is original prose and original snippets, written against public 
 | [Grok Build skills and plugins](https://docs.x.ai/build/features/skills-plugins-marketplaces), [Agent Skills spec](https://agentskills.io) | plugin layout and `SKILL.md` conventions | public docs |
 | [Senpi skills](https://github.com/Senpi-ai/senpi-skills), [cezar-r/hyperliquid-skills](https://github.com/cezar-r/hyperliquid-skills), [Hermes hyperliquid skill](https://github.com/NousResearch/hermes-agent/tree/main/optional-skills/blockchain/hyperliquid) | structure survey only; nothing reused | MIT / Apache-2.0 declarations |
 | kaileycompact51/HyperLiquid-Claw | reviewed and not used; it distributes an unverified Windows binary and an obfuscated install script | claimed MIT |
+
+Order price/size precision was rechecked against the official [tick and lot size](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size) contract on 2026-09-21. `scripts/test_order_rounding.py` executes only the published pure Decimal helpers, including buy-ceiling and sell-floor cases. No signed order was submitted for this validation.

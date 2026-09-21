@@ -8,7 +8,7 @@ If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.3 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.4 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
@@ -171,7 +171,7 @@ In Claude Code, add this repository as a marketplace and install the plugin:
 In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.3 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.4 --trust
 ```
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified.

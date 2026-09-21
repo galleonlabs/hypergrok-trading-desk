@@ -4,7 +4,7 @@
 Seven Bots in your Grok Bot workspace, one Trading Floor group chat, seventeen shared skills, a live zero-key Opening Bell and a written way of working. Ask for a market brief, a sized trade, a backtest or a review, and the right Bot answers with live data and sources.
 
 **What do I need to start?**
-[Add HyperGrok Desk Lead to Grok Bot](https://x.ai/bot/PReCwAHq8Vgeex50r883H), then send it `Start the desk.` The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise (the testnet faucet funds any address that has ever deposited on mainnet); add a mainnet one when you decide to trade real money.
+Use the [pinned bootstrap in the README](../README.md#start). The updated public template is awaiting publication. The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise (the testnet faucet funds any address that has ever deposited on mainnet); add a mainnet one when you decide to trade real money.
 
 **What does the desk doctor inspect?**
 The release version and tag pin, all agent and skill files, the desk folders and record, and a public Hyperliquid `allMids` response. It never reads environment variables, keys or account state, and never calls the exchange write endpoint.
@@ -40,7 +40,7 @@ It never resends. It checks the exchange by client order id, and if the order is
 Settings, General, Auto-review: add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Require Approval wins over Always Allow.
 
 **Does it work outside Grok Bot?**
-Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.3 --trust` (tested with Grok Build 1.0.30); the CLI reports skills and agents directories, while loading `rules/` is not verified. In Claude Code, run `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`.
+Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.4 --trust` (tested with Grok Build 1.0.30); the CLI reports skills and agents directories, while loading `rules/` is not verified. In Claude Code, run `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`.
 
 **Is this financial advice?**
 It is documentation and instructions. Perpetual futures can liquidate an account.

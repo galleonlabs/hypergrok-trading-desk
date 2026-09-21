@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.4.4 - 2026-09-21
+
++ Preserve approved buy ceilings and sell floors when rounding IOC and trigger-order bounds. Use Decimal arithmetic until the SDK boundary, reject non-finite or zero-rounded values, and run the published pure helpers in offline regression tests. Refresh the template pointers and skill hashes to this release. The public desktop template is ready to publish; the README uses the pinned bootstrap until its new shared profile is verified.
 
 + Fix Grok Build marketplace installation: the root-local source registered successfully but could not resolve `hypergrok`. The index now uses this repository’s remote URL pinned to the reviewed release. All four install pages name the tested direct command; manifest fixtures guard the remote source and release refs, and release instructions keep both pins aligned. Grok Build component claims are limited to the verified skills and agents directories.
 

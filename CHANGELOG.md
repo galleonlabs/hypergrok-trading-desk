@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.5 - 2026-09-26
+
++ Correct the TypeScript grouped order's take-profit sell floor and show exact decimal, directional rounding for dynamic buy ceilings and sell floors. The SDK formatter has no directional-rounding option; the offline gate now checks the published trigger arguments.
+
 ## 1.4.4 - 2026-09-21
 
 + Preserve approved buy ceilings and sell floors when rounding IOC and trigger-order bounds. Use Decimal arithmetic until the SDK boundary, reject non-finite or zero-rounded values, and run the published pure helpers in offline regression tests. Refresh the template pointers and skill hashes to this release. The public desktop template is ready to publish; the README uses the pinned bootstrap until its new shared profile is verified.

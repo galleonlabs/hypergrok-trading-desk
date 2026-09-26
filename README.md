@@ -10,11 +10,11 @@ Set up the Desk Lead in Grok Bot using the pinned bootstrap below. It opens with
 
 ## Start
 
-The updated public template is awaiting publication. Use the reviewed v1.4.4 bootstrap now; an older shared template does not contain this release's order-rounding fix.
+The updated public template is awaiting publication. Use the reviewed v1.4.5 bootstrap now; an older shared template does not contain this release's order-rounding fix.
 
 Open Grok Bot and paste this to a Bot:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.4/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.4/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.5/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.5/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 The desk starts in research mode. The first demo uses only Hyperliquid's public `/info` endpoint: no wallet, account read or order. Add a testnet API wallet when you want to practise with play money, and a mainnet one when you are ready.
 
@@ -112,7 +112,7 @@ In Claude Code, install it from this repository:
 In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.4 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.5 --trust
 ```
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified.

@@ -3,7 +3,7 @@ name: hyperliquid-orders
 description: Place, cancel and modify Hyperliquid orders correctly from the desk computer - limit and IOC (market-style) orders, take-profit and stop-loss trigger orders with grouping, client order ids, reduce-only, batch actions, price and size rounding, and how to read every response status. Write path - Execution Trader only, on an approved ticket. Use for any order action and for reconciling by cloid.
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.1.2"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -203,6 +203,7 @@ Then reconcile: `info.query_order_by_cloid(ACCOUNT, cloid)`, `info.open_orders(A
 ```ts
 import { ExchangeClient, HttpTransport, InfoClient } from "@nktkas/hyperliquid";
 import { formatPrice, formatSize, SymbolConverter } from "@nktkas/hyperliquid/utils";
+import Decimal from "decimal.js"; // npm install decimal.js@10.6.0; exact decimal ticket bounds
 import { privateKeyToAccount } from "viem/accounts";
 import { randomBytes } from "node:crypto";
 
@@ -214,6 +215,21 @@ const exchange = new ExchangeClient({ transport, wallet });
 const conv = await SymbolConverter.create({ transport });
 const a = conv.getAssetId("ETH")!, szDec = conv.getSzDecimals("ETH")!;
 const cloid = ("0x" + randomBytes(16).toString("hex")) as `0x${string}`;
+
+// Directional price rounding for an approved reference and fractional slippage.
+// Integer prices are valid even when they have more than five significant figures.
+function boundedPrice(reference: string, slippage: string, isBuy: boolean, szDecimals: number): string {
+  const ref = new Decimal(reference), slip = new Decimal(slippage);
+  if (!ref.isFinite() || ref.lte(0) || !slip.isFinite() || slip.lt(0) || slip.gte(1))
+    throw new Error("invalid ticket price or slippage");
+  const bound = ref.mul(isBuy ? new Decimal(1).plus(slip) : new Decimal(1).minus(slip));
+  const places = Math.max(0, 6 - szDecimals); // perps; use 8 - szDecimals for spot
+  const exponent = Math.min(0, Math.max(bound.e - 4, -places));
+  const tick = new Decimal(10).pow(exponent);
+  const rounded = bound.div(tick).toDecimalPlaces(0, isBuy ? Decimal.ROUND_DOWN : Decimal.ROUND_UP).mul(tick);
+  if (rounded.lte(0)) throw new Error("ticket price rounds to zero");
+  return rounded.toFixed(-exponent);
+}
 
 // resting limit
 const res = await exchange.order({
@@ -230,8 +246,8 @@ const [cEntry, cTp, cSl] = [0, 1, 2].map(
 await exchange.order({
   orders: [
     { a, b: true,  p: "3000", s: "0.51", r: false, t: { limit: { tif: "Gtc" } }, c: cEntry },
-    { a, b: false, p: "3059", s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "3090", tpsl: "tp" } }, c: cTp },
-    { a, b: false, p: "2755", s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "2900", tpsl: "sl" } }, c: cSl },
+    { a, b: false, p: boundedPrice("3090", "0.01", false, szDec), s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "3090", tpsl: "tp" } }, c: cTp },
+    { a, b: false, p: boundedPrice("2900", "0.05", false, szDec), s: "0.51", r: true,  t: { trigger: { isMarket: true, triggerPx: "2900", tpsl: "sl" } }, c: cSl },
   ],
   grouping: "normalTpsl",
 });
@@ -241,7 +257,7 @@ await exchange.cancelByCloid({ cancels: [{ asset: a, cloid }] });
 await exchange.modify({ oid: 123, order: { a, b: true, p: "2995", s: "0.51", r: false, t: { limit: { tif: "Gtc" } } } });
 ```
 
-For a dynamic TS price bound, inspect the formatter result against the exact decimal ticket limit: truncation can violate a sell floor. Reject an out-of-bound result and use the SDK's documented directional rounding, or supply an already validated tick-aligned decimal string. Never silently enlarge slippage.
+For a dynamic TS price bound, use `boundedPrice` with the ticket's decimal strings and the asset's `szDecimals`: it rounds a buy down to its ceiling or a sell up to its floor. Use the returned string as `p` for IOC and trigger orders, and check the final encoded price against the ticket before signing. `formatPrice` truncates and has no directional-rounding option; it is not safe by itself for a sell floor. Never silently enlarge slippage.
 
 The TS client **throws** `ApiRequestError` when any order in the batch has an `error` status; catch it and read `error.response` to see which legs rested. `formatPrice`/`formatSize` truncate (never round up), and `formatPrice` applies the 5-significant-figure cap even above 100,000 (so `117234.5` becomes `117230`); pass an integer string yourself if you want whole-dollar precision there. The package is ESM-only and needs Node 22.12+; run snippets as `.mjs` files or with `"type": "module"` in `package.json`.
 

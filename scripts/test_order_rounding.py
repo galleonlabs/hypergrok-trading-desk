@@ -19,6 +19,25 @@ exec(compile(helpers, '<published order helpers>', 'exec'), namespace)
 
 
 class OrderRoundingTest(unittest.TestCase):
+    def test_typescript_trigger_bounds(self):
+        # Inspect the published grouped-order arguments without running a wallet or SDK.
+        ts = text.split('## TypeScript (`@nktkas/hyperliquid`)', 1)[1].split('## Raw wire format', 1)[0]
+        children = re.findall(
+            r'b: false, p: boundedPrice\("([0-9.]+)", "([0-9.]+)", false, szDec\).*?'
+            r'triggerPx: "([0-9.]+)", tpsl: "(tp|sl)"', ts,
+        )
+        self.assertEqual(len(children), 2)
+        self.assertEqual({kind for *_, kind in children}, {'tp', 'sl'})
+        for reference, slippage, trigger, kind in children:
+            with self.subTest(kind=kind):
+                self.assertEqual(reference, trigger)
+                floor = Decimal(trigger) * (1 - Decimal(slippage))
+                encoded = Decimal(str(namespace['bounded_px']('ETH', trigger, slippage, False)))
+                self.assertGreaterEqual(encoded, floor)
+                self.assertLess(encoded, Decimal(trigger))
+        self.assertIn('Decimal.ROUND_UP', ts)
+        self.assertNotIn("SDK's documented directional rounding", ts)
+
     def test_buy_ceiling_and_sell_floor(self):
         bound = namespace['bounded_px']
         self.assertEqual(bound('ETH', '3000.06', '0', True), 3000.0)

@@ -3,7 +3,7 @@ name: desk-risk-limits
 description: How the Risk Manager writes the desk's risk limits with the user, sizes every proposed trade from live account state and Hyperliquid's real constraints, checks the book, and issues a PASS or REJECT with exact ticket fields. Use for setting up or changing limits, sizing any trade, and answering "how's the book".
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.1.2"
   author: Galleon Labs
   category: desk
 ---
@@ -40,7 +40,7 @@ Interview the user, one question at a time, then write `/workspace/trading-desk/
 - account: 0xabc...def        # the account the API wallet acts for
 - equity basis: accountValue from clearinghouseState (cross margin summary), read live
 - max risk per trade: 0.5% of equity      # loss if the stop is hit
-- max total open risk: 2% of equity       # sum of risk-to-stop across open positions
+- max total open risk: 2% of equity       # positions plus reserved risk for pending entries
 - max leverage per market: 3x             # never above the exchange max, and never above this
 - max positions: 3
 - allowed markets: BTC, ETH, SOL, HYPE     # perps; spot needs an explicit entry
@@ -65,6 +65,10 @@ Inputs you need before you start: entry price, stop price, side, market, the cur
 - Market: `meta` for the asset's `szDecimals`, `maxLeverage` and its margin table; `metaAndAssetCtxs` for mark and mid; `l2Book` depth from the Market Analyst's evidence. Skill: `hyperliquid-market-data`.
 - Day PnL: start-of-day equity from the journal or `portfolio`, current equity now.
 
+Read `userAbstraction` before choosing the equity and margin basis. Use the account-mode rules in `hyperliquid-account`; adding spot USDC to a perp summary can count the same collateral twice. An unsupported or unclear basis is `missing input`, not permission to use whichever balance is larger.
+
+Record each request's account, network, exchange time where supplied, and local request/receipt times. These reads are separate responses, not an atomic account snapshot. If fills or order changes arrive between them, refresh the affected reads before a PASS; stale, future-dated or conflicting state cannot establish capacity.
+
 ### 2.2 Arithmetic (show every line in the PASS)
 
 ```
@@ -81,11 +85,12 @@ size              = round_down(raw_size, szDecimals)   (never round up)
 notional          = size x entry
 check             notional >= 10 USD                   (Hyperliquid minimum order value)
 check             size >= 1 lot at szDecimals          (else REJECT: risk budget too small for this stop)
-tier              = margin tier that applies to (existing position notional + notional)
+tier              = margin tier for existing + pending entry + candidate notional
 max_lev_here      = min(ceiling 20x, limits.max_leverage, tier max leverage)
 margin_needed     = notional / requested_leverage      (requested_leverage <= max_lev_here)
-check             margin_needed <= free_margin x 0.8   (20% headroom; tighter if the user says so)
-open_risk_after   = sum(stressed risk of open positions) + risk_usd
+check             margin_needed + pending_margin <= free_margin x 0.8
+                    (20% headroom; tighter if the user says so)
+open_risk_after   = sum(stressed risk of open positions) + pending_risk + risk_usd
 check             open_risk_after <= equity x max_total_open_risk
 check             open_risk_after <= equity x 6%       (desk ceiling, section 0)
 check             risk_usd <= equity x 2%              (desk ceiling, section 0)
@@ -100,6 +105,14 @@ check             market in allowed list ; stop present ; daily loss stop not hi
 Worked, on the numbers from `agents/risk-manager.md`: equity $10,200, 0.5% budget, ETH long at 3,000 with the stop at 2,900, 3.00 of slippage on the triggered stop (10 bps of the 3,000 ticket price, the desk's convention in `desk-trade-lifecycle`) and 0.045% taker on both legs. Stressed distance is 105.65, not 100, so the size is 0.4827 ETH rather than 0.51, and the worst case comes to exactly the $51.00 budgeted. Sized the naive way at 0.51 ETH, the same stop costs $53.88, which is 0.528% of equity: the budget was 0.5% and the desk quietly spent more, on every trade, in the same direction.
 
 The stress is a sizing input, not a promise. A gap through the stop can still exceed it; that is the residual the user carries, and the daily loss stop is what bounds it.
+
+**Reserve capacity before the fill.** `pending_risk` and `pending_margin` cover other live ticket reservations, resting entry remainders, and sends whose outcomes are unknown, across this account and network. The Risk Manager allocates capacity in order and records the ticket revision, reserved risk and margin under `## risk` before issuing a PASS; the next ticket includes that reservation. Do not let two parallel proposals each spend the same free capacity. Exclude this candidate's own reservation from the `pending_*` sums, then include its risk and margin once in the checks above.
+
+For a confirmed partial fill, count the filled portion in positions and keep the unfilled portion reserved; an $80 reservation split into $30 filled risk and $50 pending risk still consumes $80. For an unknown result keep the full reservation until reconciliation establishes the split. Any unidentifiable open entry, missing stop assumption or incomplete history blocks new risk rather than receiving a zero estimate. Count markets and correlated clusters after all pending entries could fill, and include their notional when selecting margin tiers. Reduce-only exits do not create new capacity until their fills are reconciled.
+
+A never-sent ticket releases its reservation when explicitly voided or expired. A dispatched ticket does not release on ticket expiry, a cancel request, a missing WebSocket update, an empty `openOrders` read or elapsed time. Establish the remaining order's terminal state (or the original send's proven expiry per `desk-execution-protocol`), reconcile fills and resulting positions, then release only the unused capacity. Keep a conservative reservation when the evidence is incomplete. Compare the result with fresh `activeAssetData` capacity as well; an exchange figure is an additional constraint, not a replacement for the desk's risk limit. Avoid deducting an exchange hold twice only when its coverage is demonstrated.
+
+Example: equity $10,000 and a 2% total-risk limit allow $200. Positions risk $40 and a resting entry reserves $80; another $100 ticket would consume $220 and is REJECTed even though the resting order has not filled.
 
 ### 2.3 Margin tiers matter
 
@@ -117,7 +130,7 @@ From `clearinghouseState`, `openOrders`/`frontendOpenOrders`, `metaAndAssetCtxs`
 
 - equity, free margin, `crossMaintenanceMarginUsed`, margin ratio (`crossMaintenanceMarginUsed / crossMarginSummary.accountValue`), and the distance from mark to `liquidationPx` per position in percent
 - positions: coin, side, size, entry, mark, unrealised PnL, leverage and mode, margin used
-- open risk to stop per position and in total, versus limits
+- open risk to stop per position, pending risk and margin by ticket, and the combined risk versus limits
 - protection: for each position, is there a reduce-only stop resting on the exchange (trigger order, `reduceOnly: true`, correct side, and either size at least the position size or a position-tied stop with `sz: 0.0` and `isPositionTpsl: true`, which closes the whole position)? If not: **unprotected**, flagged as an incident to the Desk Lead
 - open orders that no longer belong to a position (orphans)
 - day PnL versus the daily loss stop

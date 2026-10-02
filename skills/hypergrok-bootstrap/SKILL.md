@@ -3,7 +3,7 @@ name: hypergrok-bootstrap
 description: Build and verify a HyperGrok trading desk from the pinned public release. Use for first-run setup, repair, or a readiness check. Starts with a live zero-key Opening Bell, installs the seven role profiles and seventeen shared skills, prepares the Trading Floor, and returns an evidence receipt. Read-only by default; never requests a wallet or places an order.
 license: MIT
 metadata:
-  version: "1.0.5"
+  version: "1.0.6"
   author: Galleon Labs
   category: desk
 ---
@@ -29,7 +29,7 @@ If `/workspace/hypergrok` is already a Git checkout, read its `plugin.json` and 
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.5 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.6 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok
 git rev-parse HEAD
 bash scripts/check.sh
@@ -103,6 +103,7 @@ Unless the user explicitly selects testnet or mainnet, create a research desk:
 - group chats: Trading Floor (6)
 - risk limits: not yet written
 - standing approvals: none
+- exchange approval gate: unverified; required before provisioning any API wallet key
 - unprotected position deadline: not applicable
 - status: research-only; no API wallet provisioned
 ```

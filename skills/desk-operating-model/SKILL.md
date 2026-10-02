@@ -3,7 +3,7 @@ name: desk-operating-model
 description: How the HyperGrok trading desk works as a team of Grok Bots - roles, seats, shared workspace, evidence standard, approval model and handoff format. Use when setting up the desk, when a Bot is unsure who owns something, or when a request does not fit the normal trade lifecycle.
 license: MIT
 metadata:
-  version: "1.1.2"
+  version: "1.1.3"
   author: Galleon Labs
   category: desk
 ---
@@ -18,7 +18,7 @@ Use the user's request and prior context to carry authorized work through the cu
 
 User instructions govern workflow and style defaults, subject to system and tool controls and the financial boundaries below. When a skill blocks a path, name and link its exact file, quote the rule, and explain the missing input or authority. Do not invent an approval requirement for an ordinary read.
 
-Delegate independent market and research work to the smallest useful set of available specialists, with a concrete deliverable and owner. Keep risk sign-off, approval, and execution in lifecycle order. Check returned evidence; agent agreement never replaces it. Lead with the result in concise prose, retaining required ticket and handoff fields.
+Delegate independent market and research work to the smallest useful set of available specialists, with a concrete deliverable and owner. Keep risk sign-off, approval, and execution in lifecycle order. Check returned evidence; agent agreement never replaces it. Lead requested reports with a plain conclusion, then the evidence that supports it, retaining required ticket and handoff fields.
 
 ## Roles and seats
 
@@ -63,6 +63,8 @@ The desk works at whichever level the user chooses, recorded in `desk.md`:
 
 Moving up a level is the user's decision, stated in chat and recorded in `desk.md`. The desk never moves itself up.
 
+Before levels 2 or 3, verify that a native approval gate, enforced outside Bot-authored messages, covers every exchange write route: SDK calls, scripts and direct HTTP requests. Record the verified coverage in `desk.md`. If that coverage cannot be established, remain at level 1: do not provision an API wallet key or send to testnet or mainnet.
+
 ## Evidence standard
 
 - Every number carries a source (endpoint and request type, page URL, or file path), the network (`mainnet`/`testnet`) where relevant, and a UTC timestamp.
@@ -75,9 +77,9 @@ Moving up a level is the user's decision, stated in chat and recorded in `desk.m
 ## Approval model
 
 - Only the user approves a trade, and only by writing the ticket id ("approve HG-20260816-01") in chat after seeing the exact ticket.
-- **The approval line is evidence, not the gate.** The Bots write the floor's messages, so an approval a Bot can read is an approval a Bot could have written. The gate that actually holds is out of band: Grok Bot's own Require Approval rule on the exchange write path, and the user's eyes on the ticket. A Bot never types, pastes, relays, predicts or simulates the user's approval, and never treats its own transcript as proof that one was given.
-- Only the Execution Trader sends, only after a Risk Manager PASS on that ticket, only once per approval, and only within the ticket's expiry (30 minutes by default).
-- Grok Bot's own approval controls should be set so that any action touching the exchange write path requires approval: in **Settings, General, Auto-review** add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. If the rule syntax cannot express that precisely, the desk's own ticket protocol still applies. Require Approval always wins over Always Allow.
+- **The approval line is evidence, not the gate.** The Bots write the floor's messages, so text in the transcript alone cannot establish that the user approved. A Bot never types, pastes, relays, predicts or simulates the user's approval, and never treats its own transcript as proof that one was given.
+- Only the Execution Trader sends, only after a Risk Manager PASS on that ticket, only once per approval, and only within the ticket's expiry (30 minutes by default). Before every send, verify that the native approval gate still covers the actual SDK, script or HTTP route being used.
+- Configure Grok Bot's native approval controls to require user approval on all exchange writes, and verify that a Bot cannot bypass them through another route. A chat instruction or command-matching hook does not establish this protection. If native enforcement cannot cover SDK, script and direct HTTP sends, the ticket protocol is insufficient: remain research-only, with no provisioned API wallet key and no testnet or mainnet sends.
 - Standing approvals ("always allow testnet cancels") are the user's choice; if given, they are written into `desk.md` with date and scope. A standing approval never covers a mainnet send that can open or increase exposure. It may cover reduce-only protection - placing or resizing a stop for a position that has none - on any network, and the desk recommends granting exactly that one, because the alternative is a naked position waiting on someone to read a message.
 - No unattended sending. Routines may read, alert and draft; they may not send.
 
@@ -101,6 +103,9 @@ Replies use the same id, state facts first, and end with `next: @<owner>` or `ne
 
 ## Message discipline on the floor
 
+- Answer a user-requested update, including a requested scheduled report, with the conclusion and current evidence.
+- For background checks without a requested report, save timestamped evidence and stay quiet only when the reads succeeded, are fresh and show no actionable change. Surface failures, stale data, gaps, changed conditions and required decisions with the next owner or action.
+- Account summaries name existing positions and live or pending tickets. Never claim there are no open items while any of those remain.
 - @mention the Bot that owns the next step; do not broadcast.
 - One topic per thread where the app allows it; always carry the proposal id.
 - The Desk Lead summarises for the user; specialists answer the Desk Lead's ask, not the whole room.

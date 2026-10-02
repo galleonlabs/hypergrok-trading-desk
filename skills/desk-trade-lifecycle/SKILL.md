@@ -3,7 +3,7 @@ name: desk-trade-lifecycle
 description: The end-to-end procedure for one trade on the HyperGrok desk - from an idea to a reviewed, journaled result - with the ticket format, who owns each stage, and what "done" looks like. Use whenever the user wants to open, adjust or close a position, or whenever any Bot is about to touch the exchange write path.
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.1.2"
   author: Galleon Labs
   category: desk
 ---
@@ -79,7 +79,7 @@ If the ticket expires before approval, it is void; a fresh Risk sign-off is need
 
 ## 4. Execution
 
-**Owner: Execution Trader.** Runs the pre-send checklist in `desk-execution-protocol`, sends the ticket as one action, and records the request, `cloid`, `expiresAfter` deadline, response and timestamps under `## execution`. Anything other than a clean response is handled per `desk-incident-response`.
+**Owner: Execution Trader.** Before every send, verifies that the native approval gate described in `desk-operating-model` covers the actual SDK, script or direct HTTP write route. If that cannot be verified, the desk remains research-only and does not send on either network. Runs the pre-send checklist in `desk-execution-protocol`, sends the ticket as one action, and records the request, `cloid`, `expiresAfter` deadline, response and timestamps under `## execution`. Anything other than a clean response is handled per `desk-incident-response`.
 
 ## 5. Reconciliation
 
@@ -91,7 +91,9 @@ If the ticket expires before approval, it is void; a fresh Risk sign-off is need
 
 ## Adjustments and exits are trades too
 
-Moving a stop, adding to a position, reducing, closing, changing leverage: each is a new ticket under the same proposal id with a suffix (`HG-20260816-01-B`), goes to the Risk Manager for a PASS, and needs the user's approval by that id. Closing a position at market needs a ticket stating the reduce-only size read live from the account and the slippage bound.
+Moving a stop, adding to a position, reducing, closing, changing leverage: each is a new ticket under the same proposal id with a suffix (`HG-20260816-01-B`). Begin every adjustment ticket with the parent proposal id and the original proposal's `- idea:` text, then state what is changing and why. This retains the user's original context when an adjustment is read on its own.
+
+Each adjustment receives fresh evidence and a new Risk Manager PASS, the exact suffixed ticket id for user approval, and its own expiry. Earlier approval or Risk PASS does not carry forward. Closing a position at market needs a ticket stating the reduce-only size read live from the account and the slippage bound. Execute once within expiry, then reconcile the adjustment against the exchange record under the parent proposal.
 
 The only exception is a pre-authorised protective action the user has written into `desk.md` (for example "the Execution Trader may cancel orphaned stops after a position closes without asking"). Even then, the action is journaled.
 

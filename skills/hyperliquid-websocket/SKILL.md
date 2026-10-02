@@ -3,7 +3,7 @@ name: hyperliquid-websocket
 description: Subscribe to live Hyperliquid data over WebSocket from the desk computer - mids, order book, trades, candles, best bid/offer, and per-account fills, order updates and events - with raw JSON, Python SDK and TypeScript examples, plus how to run a supervised watch that logs to a file and alerts. Read-only. Use for monitoring, fill notifications and any watch that polling would make expensive.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -81,7 +81,7 @@ nohup python3 /workspace/trading-desk/watch/ws_watch.py >> /workspace/trading-de
 echo $! > /workspace/trading-desk/watch/ws_watch.pid
 ```
 
-Heartbeat check for a routine: `tail -1 /workspace/trading-desk/watch/ws.log` should be recent; if the pid is gone or the log is stale for more than a few minutes, restart it and note the gap.
+Heartbeat check for a routine: `tail -1 /workspace/trading-desk/watch/ws.log` should be recent; if the pid is gone or the log exceeds the watch's staleness bound, mark the watch unavailable, restart it and complete the recovery below. A new PID or subscription acknowledgement does not prove that missed account activity has been recovered.
 
 ## TypeScript (`@nktkas/hyperliquid`)
 
@@ -98,6 +98,20 @@ await subs.userFills({ user }, (d) => { if (!d.isSnapshot) console.log("fills", 
 const s = await subs.orderUpdates({ user }, (u) => console.log("orders", u), { onError: (e) => console.error(e) });
 // await s.unsubscribe(); transport.close();
 ```
+
+The callback examples above are live notifications, not a complete account journal. They suppress snapshot alerts to avoid announcing old fills as new, but snapshots still need reconciliation and de-duplication before they can support risk decisions.
+
+## Recover after a gap or restart
+
+Treat account events as prompts to reconcile, not proof of a gap-free history. On a disconnect, stale heartbeat, process restart or uncertain event order, record the last good UTC time, alert `unavailable`, and pause new-risk sends. Retain pending risk reservations and the daily-stop latch; restarting does not clear either.
+
+1. Re-establish the account subscriptions and confirm their acknowledgements. Record a new connection generation so cached messages and old snapshots cannot satisfy recovery.
+2. Fetch fresh `/info` account state, `frontendOpenOrders`, and order statuses for every outstanding ticket after reconnect. Recover `userFillsByTime` from an overlap before the last good time through the new reads, with pagination. At desk startup use the last durable reconciliation time; if it is absent or outside the retained history, say that coverage is unavailable.
+3. Merge REST history and streamed fills without double counting, using account/network plus `(time, coin, tid)` as the fill identity. Include snapshot fills not already processed. Preserve equal-timestamp boundaries when paging; a saturated page with no forward progress is incomplete evidence, not the end of history.
+4. Compare positions, orders, protection and proposal reservations. Separate responses are not atomic: if account activity occurs during the reads or they disagree, refresh the affected state. Keep unknown sends reserved and follow `desk-execution-protocol`; silence never resolves them.
+5. Record the recovery window, sources, timestamps and any unresolved gaps. Risk permits new risk only after coverage is complete, the account agrees with the reconciled journal, and a fresh capacity check passes. Report the recovery once. If evidence remains incomplete, keep new risk paused and route protection or exits through the normal approval gates using verified live state.
+
+For a public price/book watch, refresh that market's snapshot and reset its condition baseline before reporting an unchanged result. A recovered price feed alone cannot restore account readiness.
 
 ## Raw (websocat or any client)
 

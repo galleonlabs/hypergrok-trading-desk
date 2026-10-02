@@ -3,7 +3,7 @@ name: desk-execution-protocol
 description: The Execution Trader's procedure for turning an approved ticket into one Hyperliquid action and reconciling it - the pre-send checklist, order construction rules, single-send discipline, unknown-result handling and the execution report. Use before and after every send, cancel, modify, leverage change or close.
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.1.2"
   author: Galleon Labs
   category: desk
 ---
@@ -22,14 +22,14 @@ This is the only skill on the desk that ends with a request to Hyperliquid's `/e
 
 Run every item and write the result under `## execution` before sending. Any failure: do not send, name the item, hand back to the Desk Lead.
 
-1. **Ticket integrity.** Id, PASS and approval refer to the same ticket text. If the Desk Lead edited the ticket after the PASS, it goes back to Risk.
+1. **Ticket integrity and gate.** Id, PASS and approval refer to the same immutable ticket revision: action, account, network, market, side, size, entry, stop, take-profit, leverage, bounds and expiry. Append revisions; never overwrite the approved text. Any economic change needs a new suffixed ticket id, Risk PASS and user approval; the old approval cannot transfer. Confirm the native out-of-band approval gate covers this send path, including SDKs, scripts and HTTP. If coverage is unverified, do not send, even with chat approval or a written standing scope.
 2. **Network.** `HYPERLIQUID_NETWORK` equals the ticket's network. Mainnet is never assumed.
-3. **Account and wallet.** `HYPERLIQUID_ACCOUNT_ADDRESS` equals the ticket's account. The API wallet still acts for it (a read that requires the agent to be approved, or `extraAgents` for the account, shows the wallet address). If the desk has never sent from this wallet on this network, send a tiny testnet-style rehearsal on testnet first, not on mainnet.
+3. **Account and wallet.** `HYPERLIQUID_ACCOUNT_ADDRESS` equals the ticket's account. Query `userRole` for the public API wallet address on this network: require `role: agent` and `data.user` equal to the ticket's account. Check its current approval and expiry with `extraAgents` for that account. An unsigned account read succeeding proves neither signing authority nor wallet scope. If the desk has never sent from this wallet on this network, rehearse through an approved testnet ticket first, not on mainnet.
 4. **Price still valid.** Fresh mid from `allMids` is within the ticket's slippage tolerance of the ticket price. For a stop or take-profit ticket, the trigger price is on the correct side of the current mark.
 5. **Formatting.** Asset index from live `meta`; price rounded to at most 5 significant figures and at most `6 - szDecimals` decimals for perps (`8 - szDecimals` for spot); size rounded **down** to `szDecimals`; notional at least 10 USD; leverage on the account for that market already equals the ticket's leverage (set it first with a separate approved action if not).
-6. **cloid and expiry.** Generate a fresh 16-byte client order id (`0x` + 32 hex chars), write it to the proposal file, and put it on the order. One cloid per order, never reused. Set `expiresAfter` on the send, a minute out (`hyperliquid-advanced`), and write that deadline beside the cloid. The cloid makes a duplicate detectable; `expiresAfter` is what later makes the original provably dead. A send with neither cannot be cleanly recovered from an unknown result.
+6. **cloid and expiry.** Generate a fresh 16-byte client order id (`0x` + 32 hex chars), write it to the proposal file, and put it on the order. One cloid per order, never reused. Set `expiresAfter` on the send, no later than the ticket's expiry and normally a minute out (`hyperliquid-advanced`), and write that deadline beside the cloid. The cloid makes a duplicate detectable; `expiresAfter` is what later makes the original provably dead. A send with neither cannot be cleanly recovered from an unknown result.
 7. **One action.** Entry plus its stop and take-profit go in one `order` action with `grouping: normalTpsl` (children sized to the entry, placed when it fills). Protection for an existing position is a standalone reduce-only trigger. Anything else in the ticket that is a different action type (leverage change, cancel) is a separate, separately approved step.
-8. **Nothing else pending.** No other unreconciled send from this desk in the last few minutes. If there is, reconcile it first.
+8. **Capacity and recovery.** Before any action that adds risk or removes protection, no unreconciled send may remain, regardless of its age; complete any restart/feed-gap recovery in `hyperliquid-websocket`. Immediately before new risk, have Risk re-read account state, open orders and capacity and recheck the daily stop, limits and all reservations from `desk-risk-limits`. Reserve the approved revision once. Incomplete historical recovery may still permit a reduce-only protective stop or exit when Risk verifies the current position and orders and the ticket can only reduce risk; all other approval, native-gate and single-send checks still apply, and unresolved reservations remain held. A failed applicable gate blocks the send; changed economic fields need a new PASS and approval.
 
 ## Send
 
@@ -58,6 +58,8 @@ Immediately after the response, and again when fills arrive:
 - `clearinghouseState`: position size, entry, leverage, liquidation price, margin used.
 
 Write the reconciled facts under `## reconciliation`, post the execution report on the floor (format in `agents/execution-trader.md`), and DM the Trade Reviewer with the id and the report.
+
+Update the risk reservation with those same facts. A resting remainder or unknown send retains its allocation; a cancellation response alone does not free it. Filled exposure moves into the position calculation, and only reconciled unused capacity is released. Record the change so a restarted desk can reconstruct it from proposals and the exchange.
 
 ## Cancels, modifies, leverage, closes
 

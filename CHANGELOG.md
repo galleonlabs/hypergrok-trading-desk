@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.6 - 2026-10-02
+
++ Reviewed all 18 public forks and all 23 branches, with pinned heads and dispositions in [the fork review](docs/FORK_REVIEW.md). Adapted useful controls from thysmans, jawndiego and shadowslayerai into original desk instructions; no trading runtime, strategy or approval hook was imported.
++ Reserve account risk and margin for accepted tickets, resting entry remainders and unknown sends. Preserve allocations through partial fills, cancellations and restarts; recheck fresh capacity and the daily stop immediately before sending. Bind approval to immutable ticket economics and the send deadline to ticket expiry.
++ Recover account/orders and overlapping, de-duplicated fill history after feed gaps or desk restarts before permitting new risk. Read account abstraction mode before sizing and verify an API wallet's exact account mapping and current approval instead of treating unsigned reads as authority.
++ Remove the setup fallback to chat-only protection: unverified native SDK/script/HTTP approval coverage keeps the desk research-only without a provisioned key. Apply the same prerequisite to API-wallet setup and every send.
++ Lead reports with the conclusion, keep successful unchanged background checks quiet with durable evidence, and preserve the original idea on adjustment tickets. Requested reports and unavailable or actionable conditions still receive an answer. Refresh all release pins and reviewed skill hashes; the public desktop template remains pending publication.
+
 ## 1.4.5 - 2026-09-26
 
 + Correct the TypeScript grouped order's take-profit sell floor and show exact decimal, directional rounding for dynamic buy ceilings and sell floors. The SDK formatter has no directional-rounding option; the offline gate now checks the published trigger arguments.

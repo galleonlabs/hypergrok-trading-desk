@@ -3,7 +3,7 @@ name: hyperliquid-setup
 description: Prepare the desk computer to work with Hyperliquid - install the SDKs, pick testnet or mainnet, verify connectivity, and (only when the user asks) provision a trade-only API wallet through the secure secret store and verify it is approved. Use during desk setup, when moving between research, testnet and mainnet levels, when a key is rotated, or when any Hyperliquid call fails with an environment problem.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -63,6 +63,8 @@ done
 Both lines should read `ok`. Record the time and result in the desk record. If one network fails, the desk is not blind on the other; say which.
 
 ## 4. API wallet (only when the user asks to trade)
+
+Before creating or provisioning any key, verify and record native out-of-band approval coverage for the actual SDK, script and HTTP send paths, per `desk-operating-model` and `SETUP.md` section 7. If it cannot be verified, continue research without a key. An existing key or chat approval does not remove this prerequisite.
 
 An **API wallet** (Hyperliquid also calls it an agent wallet) is a separate key the user authorises to sign trading actions for their account. It can place, modify and cancel orders and change leverage and margin; it cannot withdraw to Arbitrum, cannot send USDC or tokens to another wallet, and cannot approve other agents or builders (those need the main wallet's signature). It *can* still move funds inside the user's own account (perp to spot and across dexs via `agentSendAsset`, into sub-accounts and vaults, and it can spend USDC on `reserveRequestWeight`), all of which the desk forbids by rule. That is the only kind of key that ever reaches the desk computer.
 

@@ -41,7 +41,7 @@ Verify the published preview directly:
 python3 scripts/check_public_template.py --live
 ```
 
-The scheduled **Public Grok Bot template** workflow repeats that check daily. A failure is a release incident: re-author the public template from the manifest and rerun the workflow. Do not weaken the manifest to match stale public content.
+The scheduled **Public Grok Bot template** workflow repeats that check weekly. A failure is a release incident: re-author the public template from the manifest and rerun the workflow. Do not weaken the manifest to match stale public content.
 
 ## Evaluate a clean install
 

@@ -3,7 +3,7 @@ name: desk-incident-response
 description: What the desk does when something goes wrong on Hyperliquid - unknown send results, unexpected fills or positions, unprotected positions, stuck or orphaned orders, API outages, rate limiting, and suspected API wallet compromise. Contain first, reconcile from the exchange record, act only through approved tickets, then review. Use the moment anything does not match the ticket.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -62,6 +62,7 @@ The Desk Lead confirms an owner (usually the Execution Trader for order/position
 - `/info` failing or slow: mark the desk **blind**; no new tickets; watches log the outage; check `https://api.hyperliquid.xyz/info` with a tiny `allMids` call every minute; report when back.
 - HTTP 429: back off (respect the response), reduce polling, prefer WebSocket for continuous data. Read `userRateLimit` for the account's remaining budget.
 - Blind with open positions: the user is told plainly that stops resting **on the exchange** still work while the desk cannot see; that is why stops are mandatory.
+- Connectivity returning is only the start of recovery. Follow `hyperliquid-websocket`'s gap/restart procedure: restore account and detailed order snapshots, recover overlapping fills, reconcile reservations and protection, then let Risk recheck capacity before new risk resumes. A successful public price read or a restarted process cannot lift the account pause. Protection and exits still use verified live state and the normal approval gates.
 
 ### G. Suspected API wallet compromise or misuse
 

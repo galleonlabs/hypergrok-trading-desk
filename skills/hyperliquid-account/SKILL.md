@@ -3,7 +3,7 @@ name: hyperliquid-account
 description: Read a Hyperliquid account from the desk computer - positions and margin, spot balances, open orders including trigger details, fills, funding paid, ledger updates, order status by oid or cloid, historical orders, portfolio history, fee tier and rate-limit budget - with curl and Python SDK examples. Read-only, needs only the account address. Use for sizing inputs, book checks, reconciliation and reviews.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -41,7 +41,7 @@ hl "{\"type\":\"clearinghouseState\",\"user\":\"$ADDR\"}" | jq '{
 
 Python: `info.user_state(ADDR)`. `szi` is signed size; `leverage` is `{type: cross|isolated, value, rawUsd?}`; `crossMarginSummary` mirrors `marginSummary` for the cross portion. Margin ratio for a book check: `crossMaintenanceMarginUsed / crossMarginSummary.accountValue` (`marginSummary` also counts isolated margin).
 
-Under the account's abstraction mode (`{"type":"userAbstraction","user":ADDR}` returns `default`, `disabled`, `unifiedAccount`, `portfolioMargin` or `dexAbstraction`), USDC may live in the spot state; check both when equity looks wrong.
+Read the account's abstraction mode first: `{"type":"userAbstraction","user":ADDR}` returns `default`, `disabled`, `unifiedAccount`, `portfolioMargin` or `dexAbstraction`. Record it with the sizing inputs. The separate spot/perp balance model must not be assumed for unified, portfolio-margin or DEX-abstraction accounts. Check the mode's documented collateral basis and relevant account states, and compare with `activeAssetData` for trading capacity. Do not add spot USDC to perp equity or use `spot total - hold` as universal free margin: collateral can be shared, and a balance alone does not establish capacity. If the mode's equity or margin interpretation cannot be verified, report it as unavailable and reject new risk.
 
 ## Spot balances
 
@@ -112,6 +112,8 @@ hl "{\"type\":\"extraAgents\",\"user\":\"$ADDR\"}" | jq '.[] | {address, name, v
 `portfolio` gives PnL and account-value history per period (`day`, `week`, `month`, `allTime`, and perp-only variants); `userFees` gives the effective taker (`userCrossRate`) and maker (`userAddRate`) rates for the strategy lab and reviews; `userRateLimit` shows the address's action budget (`nRequestsUsed`, `nRequestsCap`, `cumVlm`); `userRole` classifies an address (`user`, `agent`, `vault`, `subAccount`, `missing`); `extraAgents` lists approved API wallets with expiry. Python: `info.portfolio(ADDR)`, `info.user_fees(ADDR)`, `info.user_rate_limit(ADDR)`, `info.user_role(ADDR)`, `info.extra_agents(ADDR)`.
 
 Per-market account data (leverage setting, available to trade, max trade sizes) without opening a position: `hl "{\"type\":\"activeAssetData\",\"user\":\"$ADDR\",\"coin\":\"ETH\"}"`.
+
+To verify signing scope, query `userRole` for the public **API wallet** address separately: require `role: agent` with `data.user` equal to the ticket's account, on the ticket's network, and check its unexpired approval in `extraAgents`. Record those fresh reads before sending. A successful unsigned `/info` account query works without a key and cannot attest to an API wallet's authority.
 
 ## Sub-accounts and vaults (read only on this desk)
 

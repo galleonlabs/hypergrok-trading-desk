@@ -8,7 +8,7 @@ If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.5 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.6 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
@@ -94,7 +94,7 @@ Post this as the first message in the group:
 
 ## 7. Approvals
 
-Ask the user to open **Settings, General, Auto-review** and add a **Require Approval** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. If the rule syntax cannot express that exactly, say so; the desk's own protocol still holds: the Execution Trader sends only after the user writes "approve <ticket id>" in chat. Exchange writes always stay behind approval.
+Ask the user to open **Settings, General, Auto-review** and add a **Require Approval** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Verify that the native control covers SDK calls, scripts and direct HTTP through the supported settings or a non-sending approval preview; do not submit a live order to test it. Record the coverage evidence in `desk.md`. If coverage cannot be established, keep the desk research-only, do not provision an API wallet key, and report the exact missing control. Chat approval and a command-matching hook cannot substitute for this gate.
 
 That rule is the gate. The approval phrase in chat is the desk's record that the user agreed, but the Bots write the floor's messages, so it cannot be the only thing standing in the way of a send. Set the rule up here, not later.
 
@@ -119,8 +119,9 @@ Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
 - group chats: Trading Floor (6)
 - risk limits: not yet written  (Risk Manager runs the interview: skills/desk-risk-limits)
 - standing approvals: none          # recommended: protective stops (reduce-only), any network
+- exchange approval gate: unverified # evidence of native coverage required before provisioning a key
 - unprotected position deadline: 15m  # chase this long, then tell the user to fix it in the app
-- status: research-only until an API wallet is provisioned
+- status: research-only until the native gate is verified, limits exist and an API wallet is provisioned
 ```
 
 Then hand the Risk Manager the `desk-risk-limits` interview to write `risk-limits.md` with the user. It is short, and it is where the user decides how the desk trades for them.
@@ -139,7 +140,7 @@ Then run these and record the results:
 
 1. In the Trading Floor, ask: "@Market Analyst brief us on BTC." Expect a timestamped brief with sources.
 2. Ask: "@Risk Manager assuming equity of 10,000 USD and the current limits, size a hypothetical long BTC with a 1% stop." Expect a PASS or REJECT with the arithmetic and a ticket, and a note that nothing will be sent.
-3. Ask: "@Execution Trader what would you need before sending that ticket?" Expect the pre-send checklist and a refusal to send without approval by id.
+3. Ask: "@Execution Trader what would you need before sending that ticket?" Expect the pre-send checklist, including native approval coverage, fresh account capacity and retained pending reservations, and a refusal to send without the exact ticket's approval.
 4. DM the Trade Reviewer: "Open today's journal and record that the desk was set up." Expect a journal entry.
 5. Ask the Research Analyst for one sourced fact about Hyperliquid itself.
 
@@ -151,6 +152,7 @@ Finish by giving the user:
 - the skills installed and how (saved in full, or as pointers to files)
 - the Trading Floor group and its members
 - the desk record and its engagement level
+- native exchange approval coverage, or the exact blocker keeping the desk research-only
 - the desk doctor and Opening Bell results
 - the results of the five verification checks
 - confirmation that setup stayed read-only: no key requested, no order placed
@@ -171,7 +173,7 @@ In Claude Code, add this repository as a marketplace and install the plugin:
 In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.5 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.6 --trust
 ```
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified.

@@ -1,8 +1,14 @@
 # Changelog
 
+## 1.4.8 - 2026-10-02
+
++ Require the bootstrap’s exact pinned release even when an older checkout passes its own check. Verify actual native skill name, description and complete Markdown body; repository hashes and staged save arguments do not prove stored instructions. Preserve internal whitespace and keep unreadable or different native content pending.
++ Reuse a role only with verified profile and standing-instruction evidence. Record Bot IDs, Trading Floor ID and member IDs, route checks to that Floor and preserve existing desks. Distinguish full native prompt proof from delivered-prompt and verified file-pointer evidence. Native testing found these gaps while upgrading an existing research desk; the execution role carries the material fork safeguards.
++ Document Grok’s geometric-only share avatar limit and retain all seventeen full-file release hashes alongside the bootstrap-only public export.
+
 ## 1.4.7 - 2026-10-02
 
-+ Export the exact bootstrap skill in the public Grok Bot template, then install and verify all seventeen reviewed skills from the pinned release when the user sends **Start the desk.** The full inline pack exceeds Grok Bot's 100,000-character share limit; the template contract now distinguishes exported skills from the complete release inventory.
++ Export the reviewed bootstrap Markdown body in the public Grok Bot template, then install and verify all seventeen reviewed skills from the pinned release when the user sends **Start the desk.** The full inline pack exceeds Grok Bot's 100,000-character share limit; the template contract now distinguishes exported skills from the complete release inventory.
 + Retain all seventeen skill hashes in repository and desk-doctor validation. Reject a missing, duplicate or incorrect bootstrap export; preserve explicit full-file, pointer and mismatch results during setup.
 
 ## 1.4.6 - 2026-10-02

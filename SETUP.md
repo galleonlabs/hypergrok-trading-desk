@@ -6,9 +6,11 @@ If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`
 
 ## 1. Get the repository onto the desk computer
 
+If `/workspace/hypergrok` already contains a Git checkout, preserve it. Its `plugin.json` must name version `1.4.8`, and `git rev-parse HEAD` must equal `git rev-parse 'refs/tags/v1.4.8^{commit}'`. If the tag is unavailable or either comparison fails, report the existing version and commit and stop dependent setup without overwriting, resetting or switching the checkout. An older release passing its own structural check is insufficient. For a matching existing checkout, run only the final `cd`, commit and structural-check line below; otherwise clone:
+
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.7 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.8 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
@@ -17,6 +19,8 @@ That pin is a release tag, not a moving branch: the desk you build is the desk t
 `git clone` prints `warning: refs/tags/... is not a commit!` when it shallow-clones an annotated tag. That warning is expected and harmless: the clone still resolves to the tagged commit, which is why the command prints it. Judge the step by `scripts/check.sh`, not by that line.
 
 `scripts/check.sh` is the desk's own structural check: it runs offline, touches no keys and no network, and confirms the skills, agents and manifests are intact and internally consistent. If it fails, stop and tell the user; do not build a desk from a tree that does not check out.
+
+Before using any agent profile or System prompt, run `git diff --exit-code refs/tags/v1.4.8 -- agents/` in the checkout. HEAD matching the tag does not prove the working files are unchanged. If the command reports differences or fails, name the affected paths, stop dependent setup and preserve the user's files.
 
 Record the commit `git rev-parse HEAD` printed. It goes into `desk.md` in section 8 as `instructions commit`, so the desk can always say which version of these rules it is running and the user can diff it later.
 
@@ -46,7 +50,7 @@ Show the Opening Bell output to the user. It is a timestamped public market snap
 
 ## 4. Create the Bots
 
-For each file in `agents/`, create one Bot. Use the profile card exactly:
+For each file in `agents/`, select one verified Bot or create a separate one. Use the profile card exactly:
 
 | File | Name | Job |
 | --- | --- | --- |
@@ -65,13 +69,24 @@ For each Bot:
 - **Avatar:** the desk mascot at `/workspace/hypergrok/assets/mascot.jpg` (attach it from the computer, or let the user pick their own).
 - Then send the new Bot its full **System prompt** section as its first message, prefixed with: "These are your standing instructions. Confirm you have read them and state your job in one sentence." Ask it to keep the instructions in memory and to re-read its file at `/workspace/hypergrok/agents/<name>.md` whenever it is unsure.
 
-Grok Bot lets existing Bots create focused Bots. If you can create them, do so now. If you cannot, give the user the seven profile cards as labelled copy-and-paste blocks and wait until they confirm the Bots exist. Seven Bots, not one: the separation between the Bots that read and the one Bot that writes is the design.
+Read back the native Name, Job and Description and compare them exactly with the profile. Before reuse or after creation, verify the complete standing System prompt through supported native readback. If a full persistent instruction field is not exposed, acceptable separate evidence is readback of the exact full System prompt delivered as a standing-instructions message, the Bot's acknowledgement that it follows the pinned agent file, and that local file's hash matching the expected bytes from `git show 'refs/tags/v1.4.8:agents/<name>.md'`. Hashing an arbitrary local file is insufficient. Record this as `delivery-and-pointer`, with the limitation that delivery and the checked target do not establish byte-identical persistent memory. A matching Description, summarized memory or file pointer alone is insufficient.
+
+If an existing seat differs, is missing or lacks both proof methods, create a separate Bot and verify it. Preserve the existing Bots and unrelated desks' profiles, prompts and memories. Record the selected native Bot IDs; names alone do not identify the intended seats. Grok Bot lets existing Bots create focused Bots. If a needed creation step or both supported verification methods are unavailable, give the user the exact profile card and full standing prompt for each affected role as labelled copy-and-paste blocks, and keep readiness pending until verified. Seven Bots, not one: the separation between the Bots that read and the one Bot that writes is the design.
 
 ## 5. Install the skills
 
 Skills in Grok Bot are shared across all of the user's Bots. Inspect the shared skills first: a Desk Lead added from the public HyperGrok template carries this release's bootstrap skill. Setup installs the remaining reviewed skills from the pinned checkout without creating duplicates.
 
-For each directory under `skills/`, read `SKILL.md` and compare its `name` and instructions with the shared skill when one exists. A matching skill is enabled and recorded as `template`. A missing skill is saved unchanged and recorded as `installed`. If the app cannot save a skill of that length, save a short pointer skill instead: "When this skill is used, read `/workspace/hypergrok/skills/<name>/SKILL.md` and follow it," and record `pointer`. A same-name skill with different instructions that cannot be replaced by the reviewed file is a `mismatch` and fails readiness. The receipt must list exactly seventeen unique names and one status for each; a name alone is not proof that its content is current.
+For each directory under `skills/`, compare the source with actual supported native readback of the shared skill's exact name, exact description and complete Markdown body. Grok stores the name and description separately and rebuilds the YAML wrapper without source license or metadata. Remove frontmatter, leading empty lines and the final newline only when comparing bodies; preserve all internal text, spaces and line breaks, including trailing spaces within lines. The seventeen full-file hashes in `template/grok-bot.json` still verify the pinned checkout. Neither those hashes nor a staged save argument proves the native stored content.
+
+Record exactly one status for each skill:
+
+1. `template`: an already-present shared skill independently read back and matched, then enabled for the selected Desk Lead. This does not claim all seventeen skills were exported by the public share.
+2. `installed`: a missing skill saved with exact source name, description and normalized body, then independently read back and matched.
+3. `pointer`: if the app cannot save the body, save the source name and description with "When this skill is used, read `/workspace/hypergrok/skills/<name>/SKILL.md` and follow it." Verify the complete stored pointer text and target's full-file hash.
+4. `mismatch`: native content differs or cannot be read back completely. Name the reason and fail native readiness. Do not overwrite shared content used by unrelated desks without user authority.
+
+The receipt must list exactly seventeen unique names, one status and native readback evidence or an unavailable reason for each. A name, local file or staged argument alone is insufficient.
 
 When copying a skill into another workspace or distributing the desk, retain its `LICENSE` and `ATTRIBUTION.md` beside the instructions. If the destination only accepts a single instruction field, keep the complete license notice in its accompanying project documentation or third-party notices. See [reuse and attribution](ATTRIBUTION.md); stars and public credit links are optional.
 
@@ -86,7 +101,7 @@ Tell each Bot which skills are its own (listed in its agent file's frontmatter).
 
 ## 6. Create the Trading Floor
 
-Create one group chat named **Trading Floor** with exactly these six Bots: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader. (Grok Bot group chats hold up to six Bots; the Trade Reviewer works from its own conversation and by direct message.)
+Create one private group chat named **Trading Floor** with the selected native Bot IDs for exactly these six roles: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader. (Grok Bot group chats hold up to six Bots; the Trade Reviewer works from its own conversation and by direct message.) Reuse a group only when its ID is already selected for this desk and native readback confirms exactly those six member IDs. Preserve prior groups; a matching name alone is insufficient. Record the group ID and membership IDs. If creation or membership readback is unavailable, return the exact manual step and keep group readiness pending. Send the welcome message and later role checks to the recorded Floor ID.
 
 Post this as the first message in the group:
 
@@ -104,6 +119,8 @@ Then ask the user one question: **may the desk place a protective stop for a pos
 
 Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
 
+Record only verified Bot, group and member IDs as observed; mark uncreated, manual or unverified roles and any unverified Floor as pending rather than copying the desired seven-Bot/six-member inventory as an observed result.
+
 1. Engagement level: **research** (no key), **testnet** (play money, recommended to start), or **mainnet**.
 2. If testnet or mainnet: the Hyperliquid account address the desk should read (the main account, not an API wallet address).
 
@@ -116,7 +133,9 @@ Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
 - network: testnet
 - account: 0x...            # or "none" for a research desk
 - bots: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader, Trade Reviewer
+- bot ids: <role to verified native Bot ID>
 - group chats: Trading Floor (6)
+- trading floor id and member ids: <verified native group and six Bot IDs>
 - risk limits: not yet written  (Risk Manager runs the interview: skills/desk-risk-limits)
 - standing approvals: none          # recommended: protective stops (reduce-only), any network
 - exchange approval gate: unverified # evidence of native coverage required before provisioning a key
@@ -148,16 +167,16 @@ Then run these and record the results:
 
 Finish by giving the user:
 
-- the seven Bots and how each was created (by you, or by the user from the cards)
-- the skills installed and how (saved in full, or as pointers to files)
-- the Trading Floor group and its members
+- the seven Bot IDs, created/reused/manual-card status, profile comparison and standing-instruction proof method, including any `delivery-and-pointer` limitation
+- each skill's status, native readback method or unavailable reason, normalized stored body length/hash and comparison result; distinguish pointer evidence
+- the Trading Floor ID and verified member IDs
 - the desk record and its engagement level
 - native exchange approval coverage, or the exact blocker keeping the desk research-only
 - the desk doctor and Opening Bell results
 - the results of the five verification checks
 - confirmation that setup stayed read-only: no key requested, no order placed
 
-Then say: "The desk is ready. Ask the Desk Lead for a market brief to see it work. When you want to trade with play money, say 'set up a testnet API wallet' and it will walk you through `hyperliquid-setup` step 4."
+Only after the required native and role checks pass, say: "The desk is ready. Ask the Desk Lead for a market brief to see it work. When you want to trade with play money, say 'set up a testnet API wallet' and it will walk you through `hyperliquid-setup` step 4." Otherwise name the failed or pending check and next safe action.
 
 ## If you are not Grok Bot
 
@@ -173,7 +192,7 @@ In Claude Code, add this repository as a marketplace and install the plugin:
 In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.7 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.8 --trust
 ```
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified.

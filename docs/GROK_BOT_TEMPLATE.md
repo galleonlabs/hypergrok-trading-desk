@@ -4,11 +4,13 @@
 
 The public template carries one `hypergrok-bootstrap` skill. **Add to Grok Bot** imports the Desk Lead and bootstrap; **Start the desk.** fetches the pinned release and installs the full seventeen-skill desk. Grok Bot's share helper limits its inline recipe to 100,000 characters; the full reviewed pack exceeds that limit. Keep the complete instructions in the release instead of shortening them to fit the share.
 
+Grok’s current share helper exports geometric avatars only; it does not carry a custom JPEG from the publishing Bot. The public template therefore uses Grok’s default icon. The release mascot remains available for installed Bots where supported.
+
 The template deliberately carries no plugins, memories or routines. The Opening Bell and bootstrap use public Hyperliquid data and the repository checkout, so a new user should not see a connector prompt, inherit an author's context or activate unattended work during installation.
 
 ## Author the template
 
-Use a fresh Grok Bot named **HyperGrok Desk Lead**. Copy the `name`, `title`, `description` and avatar from `template/grok-bot.json`, then add the full skill body for each name in `templateSkillNames` from its pinned `path` in `skills`. Do not paraphrase the skill file or substitute a URL/hash declaration for its body. The manifest's SHA-256 values identify the reviewed bytes. The public description must include the exact `source.release`; that visible marker lets automation detect a stale public template without depending on Grok Bot's private template format.
+Use a fresh Grok Bot named **HyperGrok Desk Lead**. Copy the `name`, `title` and `description` from `template/grok-bot.json`, and use its avatar where supported, then add the full skill body for each name in `templateSkillNames` from its pinned `path` in `skills`. Do not paraphrase the skill file or substitute a URL/hash declaration for its body. The manifest's SHA-256 values identify the reviewed bytes. The public description must include the exact `source.release`; that visible marker lets automation detect a stale public template without depending on Grok Bot's private template format.
 
 Grok Bot stores the skill's `name` and `description` separately and rebuilds their YAML wrapper. Its native content field rejects a complete file beginning with `---` and does not retain the source's `license` or `metadata` fields. Copy the source name and description unchanged, and supply all Markdown after the closing frontmatter delimiter, omitting only empty lines at the beginning and the final newline. Preserve all internal content. The shared native skill is therefore not byte-identical to the complete `SKILL.md` file.
 
@@ -63,14 +65,15 @@ The Desk Lead follows `hypergrok-bootstrap`. A passing result has:
 4. exactly seventeen unique skills, each reported as `template`, `installed` or `pointer`, with no `mismatch`
 5. a private Trading Floor with the six floor Bots, or an exact manual step if group creation is unavailable
 6. a passing desk doctor and all five role checks
-7. this sentence: **Setup stayed read-only: no key requested and no order created or sent.**
+7. actual native name/description/body readback for every skill, with only documented boundary normalization; verified role standing-instruction evidence; recorded Bot, Floor and membership IDs
+8. this sentence: **Setup stayed read-only: no key requested and no order created or sent.**
 
 Do not describe the template as a zero-interaction installer. **Add to Grok Bot** creates the Desk Lead; **Start the desk.** runs the reviewed setup. The public path is one click and one message.
 
-## Publication receipt - 2026-10-02
+## Publication and native test - 2026-10-02
 
-The native Publish action created the public [HyperGrok Desk Lead template](https://x.ai/bot/1HXwKKdavqHZRzSsWbDCN). A fresh anonymous preview passed the checks for the exact `v1.4.7` name and description, **Add to Grok Bot** action and matching template-id deep link. The native Context panel showed one `hypergrok-bootstrap` skill. These checks establish publication and the visible profile; they do not establish the complete stored skill bytes or a passing clean install.
+Release 1.4.7 was published as [HyperGrok Desk Lead](https://x.ai/bot/1HXwKKdavqHZRzSsWbDCN). Its anonymous preview and the public-template workflow passed. Andrew imported a new Bot, then **Start the desk.** was sent. The native readback reported the loaded bootstrap body as 5,594 bytes with SHA-256 `264dc49723a2a9cac4b4c0b61026ecc075a363a21ac01a6b89b5c474c85ae622`, matching the reviewed source at commit `1063e6c40fcfd287edf2d118669689a5297d066f` after removing frontmatter and the leading blank line/final newline. This proves normalized body equivalence, not complete-file byte identity.
 
-The source is `skills/hypergrok-bootstrap/SKILL.md` at the reviewed `v1.4.7` release, commit `1063e6c40fcfd287edf2d118669689a5297d066f`. Its complete file is 6,085 bytes with SHA-256 `bdc8c996ff73d69fbd7863bdb571e2e8cd414108b3b48665d216cb01134bf9ca`. Removing its YAML frontmatter, leading blank line and final newline yields the locally staged native content argument: 5,594 bytes with SHA-256 `264dc49723a2a9cac4b4c0b61026ecc075a363a21ac01a6b89b5c474c85ae622`. This is a source-derived argument hash; independent export/readback of the complete stored body remains pending.
+The native run produced live ETH and BTC briefs and five passing role checks. Its final doctor reported a transient public API HTTP 429, and role reuse initially relied on old seats. Skill comparison also used a broader whitespace transformation than the documented rule. These observations are why v1.4.8 requires exact native content comparison, evidence for role reuse and group/member IDs before readiness. The current v1.4.8 template is awaiting publication and verification.
 
-The publishing Bot's mascot visually matched the released asset, but the share modal showed a default white icon. Exported avatar matching is unverified. Fresh import and the clean-install acceptance checks above remain pending; publication does not establish that the seventeen-skill desk was installed.
+The current share tool has no image/path/bytes/URL avatar field and copies only a live geometric avatar. Both public preview and the imported Bot showed Grok’s default icon; a custom mascot export is unsupported. No claim of mascot byte identity is made for the share.

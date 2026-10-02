@@ -117,8 +117,8 @@ def main(root):
     version = manifest.get("version")
     expected_release = f"v{version}"
 
-    if template.get("schemaVersion") != 1:
-        errors.append(f"{TEMPLATE}: schemaVersion must be 1")
+    if template.get("schemaVersion") != 2:
+        errors.append(f"{TEMPLATE}: schemaVersion must be 2")
     if template.get("name") != "HyperGrok Desk Lead":
         errors.append(f"{TEMPLATE}: name must be 'HyperGrok Desk Lead'")
     if template.get("startMessage") != "Start the desk.":
@@ -166,6 +166,23 @@ def main(root):
         )
     if len(names) != len(set(names)):
         errors.append(f"{TEMPLATE}: duplicate skill names are not allowed")
+
+    # The exported Bot carries the bootstrap; its release manifest still
+    # verifies the complete pack the bootstrap installs.
+    template_skill_names = template.get("templateSkillNames")
+    if not isinstance(template_skill_names, list) or not all(
+        isinstance(name, str) for name in template_skill_names
+    ):
+        errors.append(f"{TEMPLATE}: templateSkillNames must be a list of skill names")
+        template_skill_names = []
+    else:
+        if len(template_skill_names) != len(set(template_skill_names)):
+            errors.append(f"{TEMPLATE}: duplicate templateSkillNames are not allowed")
+        unknown = sorted(set(template_skill_names) - set(expected_skill_names))
+        if unknown:
+            errors.append(f"{TEMPLATE}: templateSkillNames contains unknown skills: {', '.join(unknown)}")
+    if template_skill_names != ["hypergrok-bootstrap"]:
+        errors.append(f"{TEMPLATE}: templateSkillNames must export exactly hypergrok-bootstrap")
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -218,7 +235,10 @@ def main(root):
         return 1
     for line in skips:
         print(line)
-    print(f"ok: Grok Bot template is {status}, pinned to {expected_release}, with {len(entries)} verified skills")
+    print(
+        f"ok: Grok Bot template is {status}, pinned to {expected_release}, "
+        f"exports hypergrok-bootstrap, with {len(entries)} verified release skills"
+    )
     return 0
 
 

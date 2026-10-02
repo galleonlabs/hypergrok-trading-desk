@@ -8,7 +8,7 @@ If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.6 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.7 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
@@ -69,7 +69,7 @@ Grok Bot lets existing Bots create focused Bots. If you can create them, do so n
 
 ## 5. Install the skills
 
-Skills in Grok Bot are shared across all of the user's Bots. Inspect the shared skills first: a Desk Lead added from the public HyperGrok template already carries this release's reviewed set, and setup must not create duplicates.
+Skills in Grok Bot are shared across all of the user's Bots. Inspect the shared skills first: a Desk Lead added from the public HyperGrok template carries this release's bootstrap skill. Setup installs the remaining reviewed skills from the pinned checkout without creating duplicates.
 
 For each directory under `skills/`, read `SKILL.md` and compare its `name` and instructions with the shared skill when one exists. A matching skill is enabled and recorded as `template`. A missing skill is saved unchanged and recorded as `installed`. If the app cannot save a skill of that length, save a short pointer skill instead: "When this skill is used, read `/workspace/hypergrok/skills/<name>/SKILL.md` and follow it," and record `pointer`. A same-name skill with different instructions that cannot be replaced by the reviewed file is a `mismatch` and fails readiness. The receipt must list exactly seventeen unique names and one status for each; a name alone is not proof that its content is current.
 
@@ -173,7 +173,7 @@ In Claude Code, add this repository as a marketplace and install the plugin:
 In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.6 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.4.7 --trust
 ```
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified.

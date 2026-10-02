@@ -60,7 +60,52 @@ def invalid_public_url(root):
     return "published template needs"
 
 
-FIXTURES = [wrong_release, missing_skill, stale_hash, template_has_plugin, invalid_public_url]
+def old_schema(root):
+    edit(root, lambda data: data.update(schemaVersion=1))
+    return "schemaVersion must be 2"
+
+
+def missing_template_inventory(root):
+    edit(root, lambda data: data.pop("templateSkillNames"))
+    return "templateSkillNames must be a list"
+
+
+def malformed_template_inventory(root):
+    edit(root, lambda data: data.update(templateSkillNames="hypergrok-bootstrap"))
+    return "templateSkillNames must be a list"
+
+
+def malformed_template_skill_name(root):
+    edit(root, lambda data: data.update(templateSkillNames=[{"name": "hypergrok-bootstrap"}]))
+    return "templateSkillNames must be a list"
+
+
+def empty_template_inventory(root):
+    edit(root, lambda data: data.update(templateSkillNames=[]))
+    return "templateSkillNames must export exactly hypergrok-bootstrap"
+
+
+def unknown_template_skill(root):
+    edit(root, lambda data: data.update(templateSkillNames=["unknown-skill"]))
+    return "templateSkillNames contains unknown skills: unknown-skill"
+
+
+def duplicate_template_skill(root):
+    edit(root, lambda data: data.update(templateSkillNames=["hypergrok-bootstrap"] * 2))
+    return "duplicate templateSkillNames"
+
+
+def nonbootstrap_template_skill(root):
+    edit(root, lambda data: data.update(templateSkillNames=["desk-operating-model"]))
+    return "templateSkillNames must export exactly hypergrok-bootstrap"
+
+
+FIXTURES = [
+    wrong_release, missing_skill, stale_hash, template_has_plugin, invalid_public_url,
+    old_schema, missing_template_inventory, malformed_template_inventory,
+    malformed_template_skill_name, empty_template_inventory, unknown_template_skill,
+    duplicate_template_skill, nonbootstrap_template_skill,
+]
 
 
 def git(root, args, check=True):

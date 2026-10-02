@@ -3,7 +3,7 @@ name: hypergrok-bootstrap
 description: Build and verify a HyperGrok trading desk from the pinned public release. Use for first-run setup, repair, or a readiness check. Starts with a live zero-key Opening Bell, installs the seven role profiles and seventeen shared skills, prepares the Trading Floor, and returns an evidence receipt. Read-only by default; never requests a wallet or places an order.
 license: MIT
 metadata:
-  version: "1.0.6"
+  version: "1.0.7"
   author: Galleon Labs
   category: desk
 ---
@@ -29,7 +29,7 @@ If `/workspace/hypergrok` is already a Git checkout, read its `plugin.json` and 
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.4.6 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.4.7 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok
 git rev-parse HEAD
 bash scripts/check.sh
@@ -74,7 +74,7 @@ Create one Bot from each agent file's **Bot profile** and **System prompt**:
 
 Use `assets/mascot.jpg` as the avatar when the product supports it. Do not add unrelated memories, conversation history or private files. If Bot creation is unavailable, return seven clearly labelled copy-and-paste cards and ask the user to create them. Continue independent local preparation and checks; keep Bot and group readiness pending until their existence is verified.
 
-Inspect the shared skills before installing anything. A Desk Lead added from the public HyperGrok template already carries the reviewed skill set; do not create duplicate skills.
+Inspect the shared skills before installing anything. A Desk Lead added from the public HyperGrok template carries the exact reviewed bootstrap skill. Install the remaining release skills from this checkout; do not create duplicate skills. Verify existing shared instructions before recording them as `template`.
 
 For each of the seventeen `skills/*/SKILL.md` files:
 

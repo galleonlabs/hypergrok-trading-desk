@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.7 - 2026-10-02
+
++ Export the exact bootstrap skill in the public Grok Bot template, then install and verify all seventeen reviewed skills from the pinned release when the user sends **Start the desk.** The full inline pack exceeds Grok Bot's 100,000-character share limit; the template contract now distinguishes exported skills from the complete release inventory.
++ Retain all seventeen skill hashes in repository and desk-doctor validation. Reject a missing, duplicate or incorrect bootstrap export; preserve explicit full-file, pointer and mismatch results during setup.
+
 ## 1.4.6 - 2026-10-02
 
 + Reviewed all 18 public forks and all 23 branches, with pinned heads and dispositions in [the fork review](docs/FORK_REVIEW.md). Adapted useful controls from thysmans, jawndiego and shadowslayerai into original desk instructions; no trading runtime, strategy or approval hook was imported.

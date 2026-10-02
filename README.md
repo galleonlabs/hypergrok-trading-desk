@@ -10,9 +10,9 @@ Set up the Desk Lead in Grok Bot using the pinned bootstrap below. It opens with
 
 ## Start
 
-The updated public template is awaiting publication. Use the reviewed v1.4.7 bootstrap now; an older shared template does not contain this release's order-rounding fix.
+[Add HyperGrok Desk Lead to Grok Bot](https://x.ai/bot/1HXwKKdavqHZRzSsWbDCN), then send **Start the desk.** The v1.4.7 template carries the bootstrap, which fetches and verifies the complete seventeen-skill release.
 
-Open Grok Bot and paste this to a Bot:
+Alternatively, open Grok Bot and paste this to a Bot:
 
 > Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.7/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.4.7/SETUP.md for the complete runbook, and finish with its evidence receipt.
 

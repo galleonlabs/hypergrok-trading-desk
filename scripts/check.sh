@@ -122,6 +122,7 @@ python3 scripts/check_grok_template.py .
 python3 scripts/test_check_grok_template.py
 python3 scripts/test_check_public_template.py
 python3 scripts/test_opening_bell.py
+python3 scripts/test_research_dataset.py
 python3 scripts/test_desk_doctor.py
 
 # Verify the published arithmetic without loading a wallet or SDK.

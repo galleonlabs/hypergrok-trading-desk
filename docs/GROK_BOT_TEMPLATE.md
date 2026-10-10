@@ -2,6 +2,8 @@
 
 `template/grok-bot.json` is the release contract for the public **HyperGrok Desk Lead** template. It records the exact public profile, source release, avatar, exported bootstrap skill and complete reviewed release inventory. `templateSkillNames` lists the skills carried by the share; `skills` contains all seventeen files and hashes that setup must install and verify.
 
+**Candidate state — 2026-10-10:** this checkout prepares v1.6.0 with `status: ready-to-publish` and `publicShareUrl: null`. No candidate tag, npm publication, public template, native readback or fresh-import acceptance is claimed. The existing 1.5.0 share and its recorded proof below remain historical evidence for that release only. Candidate skill hashes identify local reviewed bytes; the missing-tag skip from `check_grok_template.py` does not prove a published release.
+
 The public template carries one `hypergrok-bootstrap` skill. **Add to Grok Bot** imports the Desk Lead and bootstrap; **Start the desk.** fetches the pinned release and installs the full seventeen-skill desk. Grok Bot's share helper limits its inline recipe to 100,000 characters; the full reviewed pack exceeds that limit. Keep the complete instructions in the release instead of shortening them to fit the share.
 
 Grok’s current share helper exports geometric avatars only; it does not carry a custom JPEG from the publishing Bot. The public template therefore uses Grok’s default icon. The release mascot remains available for installed Bots where supported.
@@ -74,9 +76,9 @@ Do not describe the template as a zero-interaction installer. **Add to Grok Bot*
 
 The [1.5.0 public template](https://x.ai/bot/-c_oDxnkrXbWhBz-u4qu5) was published from source commit `5eb1d9a82157440d64f25a72cd06d9f3977dc472`. The native Context panel showed only the public description and one `hypergrok-bootstrap` skill, with no memories, plugins or routines. Complete independent native Settings readback verified the exact name, description and 9,450-byte normalized Markdown body, SHA-256 `be054eedaad650646148b10d5af49f143eddb64f9f1554df8c4632f7277051af`, against the tagged source. This is stored native skill evidence, not a hash of a staged argument. Grok rebuilds its YAML wrapper without source license or metadata.
 
-The anonymous public preview matches the release description, Add action and new deep-link ID. The public avatar is Grok's geometric default and its creator attribution follows the publishing account. The previous October 2 share has a different ID; current install surfaces use the new link. A clean pinned-tag clone passed the complete repository gate. A fresh public import/setup round trip was not performed during this release, and the earlier native desk acceptance does not prove one for 1.5.0.
+At publication, the anonymous public preview matched the release description, Add action and new deep-link ID. The public avatar was Grok's geometric default and its creator attribution followed the publishing account. The previous October 2 share had a different ID; 1.5.0 install surfaces used the new link. A clean pinned-tag clone passed the complete repository gate. A fresh public import/setup round trip was not performed during this release, and the earlier native desk acceptance does not prove one for 1.5.0.
 
-The reviewed template is publicly shared. A search of the curated Grok Bot marketplace returned no HyperGrok listing, and its visible page and official sharing guide exposed no submission action. Public sharing does not establish catalog acceptance.
+The reviewed 1.5.0 template was publicly shared. A search of the curated Grok Bot marketplace returned no HyperGrok listing, and its visible page and official sharing guide exposed no submission action. Public sharing does not establish catalog acceptance. This record does not refresh the live share or establish publication of a later candidate.
 
 ## Publication and native test - 2026-10-02
 

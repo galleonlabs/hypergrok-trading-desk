@@ -47,6 +47,14 @@ Chat is where the desk talks; files are where it remembers.
 | `journal/*.md` | the desk diary, append-only |
 | `briefs/`, `research/`, `strategies/`, `data/`, `watch/` | working material |
 
+## Research evidence
+
+`scripts/research_dataset.py` runs on the read plane. It resolves a perp from public metadata, requests a bounded closed UTC candle window and optionally pages hourly funding. Each new `data/<name>/` bundle stores captured request/response records, normalized observed CSVs and a manifest with source identity, file hashes, coverage gaps and `complete`, `incomplete` or `unavailable` status. Existing bundles are never overwritten.
+
+The Market Analyst hands the complete bundle to the Strategist, who runs offline `--verify` before analysis. Verification replays responses and checks files and claimed coverage; it cannot authenticate an exchange response or prove historical universe membership. A missing hour stays missing. Run records cite the bundle and manifest hash so changed data cannot silently replace a prior experiment. See [Research datasets](RESEARCH_DATASETS.md) for the contract and limitations.
+
+Data completeness, statistical evidence, Risk PASS and a user's exact ticket approval are separate decisions. The dataset tool does not supply historical oracle prices, reconstruct intrabar fills, read an account or touch an exchange write path.
+
 ## Trust boundaries
 
 **Read plane.** Six Bots read: `POST /info` and public web pages. Plenty of judgement, no keys.
@@ -65,4 +73,4 @@ Separating the person who wants the trade from the one who sizes it, the one who
 
 ## Other runtimes
 
-The plugin manifests (`plugin.json`, `.grok-plugin/plugin.json`, `.cursor-plugin/plugin.json`, `.claude-plugin/plugin.json`) supply skills and agents to Grok Build, Cursor and Claude Code. Cursor and Claude Code also load `rules/`. Grok Build installs with `grok plugin install galleonlabs/hypergrok-trading-desk@v1.5.0 --trust` (tested with Grok Build 1.0.30); its CLI reports skills and agents directories, while loading `rules/` is not verified. `.grok-plugin/marketplace.json` uses this repository’s remote URL and release ref because Grok Build rejects a source path pointing at the marketplace root. Claude Code resolves the repository through `.claude-plugin/marketplace.json`, so it installs with `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. Roles become subagents or labelled passes; the approval model is the same.
+The plugin manifests (`plugin.json`, `.grok-plugin/plugin.json`, `.cursor-plugin/plugin.json`, `.claude-plugin/plugin.json`) supply skills and agents to Grok Build, Cursor and Claude Code. Cursor and Claude Code also load `rules/`. The pending candidate's Grok Build install command is `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.0 --trust`, usable after publication. The format was tested with Grok Build 1.0.30 for an earlier release; the candidate has no native install proof, and loading `rules/` in Grok Build is not verified. `.grok-plugin/marketplace.json` uses this repository’s remote URL and release ref because Grok Build rejects a source path pointing at the marketplace root. Claude Code resolves the repository through `.claude-plugin/marketplace.json`, so it installs with `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. Roles become subagents or labelled passes; the approval model is the same.

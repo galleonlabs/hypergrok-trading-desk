@@ -3,7 +3,7 @@ name: desk-strategy-lab
 description: How the Strategist works with the user to turn their own trading idea into explicit rules, backtest it honestly on Hyperliquid candle and funding history, and paper-trade it on testnet through the desk lifecycle. Method only - the desk ships no strategies and makes no return claims. Use when the user wants to design, test, compare or paper-trade an idea.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   author: Galleon Labs
   category: desk
 ---
@@ -17,11 +17,11 @@ The lab exists so the user can find out whether their idea holds up before riski
 ```
 /workspace/trading-desk/strategies/<name>/
   RULES.md          the rules, in words, agreed with the user before any code
-  data.md           exact data requests used (coin, interval, start, end, fetched at)
+  data.md           bundle paths, manifest hashes, requests, coverage and verification
   backtest.py       readable, single-file backtest
   runs/YYYY-MM-DD-HHMM.md   one file per run: parameters, results, caveats
   POSTMORTEM.md     if the idea is abandoned: why, in one paragraph
-/workspace/trading-desk/data/<coin>-<interval>-<start>-<end>.csv   fetched by the Market Analyst or the Strategist
+/workspace/trading-desk/data/<unique-name>/   immutable research bundle: manifest, sources and CSVs
 ```
 
 ## 1. Rules first
@@ -63,14 +63,18 @@ Anything the source does not supply is missing, not implied. If the source canno
 
 ## 2. Data
 
-Candles via `candleSnapshot` (`hyperliquid-market-data`). Only the most recent 5000 candles per interval exist, so the interval sets the lookback: about 208 days of `1h`, 2.3 years of `4h`, 13 years of `1d`. Funding via `fundingHistory` (hourly, paginate by `startTime`). Save to CSV under `data/` with the request recorded in `data.md`, and check gaps and duplicated timestamps before using the file. Newer markets have shorter histories still.
+Use `scripts/research_dataset.py` from the pinned checkout, following `hyperliquid-market-data` and [Research datasets](../../docs/RESEARCH_DATASETS.md). Freeze an aligned UTC `[start,end)` range and interval before fetching; pass `--with-funding` whenever the experiment needs funding. The tool stores requests and decoded source responses, observed candles and funding, file hashes and coverage gaps. It never creates missing observations. A valid request within 5,000 candle slots can still reach outside exchange retention or precede listing; current metadata is not a historical universe.
+
+Before analysis, run `python3 scripts/research_dataset.py --verify <bundle> --json` offline. In `data.md`, record the bundle path, manifest SHA-256, canonical coin/DEX, origin/network, range, collection times, `result.status`, coverage and verification result. Cite the same bundle and manifest hash in each run. Only `complete` coverage with successful verification supports the experiment's claimed period. Consistently replayed incomplete data remains incomplete.
+
+If the required history is incomplete or unavailable, report the missing ranges and stop that experiment. Do not silently shorten it, forward-fill candles, invent zero funding or drop a failed market. A narrower test needs an explicit revised rule and new bundle before viewing results; keep the original evidence. A `complete` dataset is not a strategy PASS, Risk PASS or proof of an unbiased universe.
 
 ## 3. Backtest honestly
 
 Keep it simple and readable; a single Python file the user can follow beats a framework. Requirements:
 
 - **No look-ahead.** Signals at bar `t` use only data up to and including `t`; execution at `t+1` open (or `t` close, stated).
-- **Costs.** Taker and maker fees at the account's tier (`userFees` or the published schedule), funding paid or received each hour the position is open, and slippage per side (default a few bps, or from the Market Analyst's depth read for the intended size).
+- **Costs.** Taker and maker fees at the account's tier (`userFees` or the published schedule), funding paid or received each hour the position is open, and slippage per side (default a few bps, or from the Market Analyst's depth read for the intended size). Rates and candle closes alone do not prove exact funding dollars: payments use oracle price and position size at payment time. Record any price proxy and cost sensitivity explicitly. Today's depth is not observed historical slippage, and candles do not resolve intrabar execution order.
 - **Out-of-sample.** Hold back the most recent 15-25% of the period untouched until the rules and parameters are frozen. Report in-sample and out-of-sample separately.
 - **Looking at the holdout spends it.** Once the out-of-sample result has been seen, that data is no longer out of sample, whatever it said. A rule that fails and is then adjusted and re-run on the same window has no honest out-of-sample evidence left: the failed run is discovery data, and the next test needs a window nobody has looked at, or fresh forward data. Record in the run file how many times the holdout has been read. If the answer is more than once, the strategy is in-sample only and the run file says so.
 - **Parameters and multiplicity.** Record every parameter and how it was chosen, and keep every variant that was run, including the ones that failed. The number that matters is how many distinct rules, parameter sets, assets and timeframes were tried in total before this one was reported, and it includes the trials the idea's original source ran. Search hard enough over a fixed history and something will look profitable by chance. State the trial count next to the result; when it is more than a handful, treat a marginal edge as unproven rather than small, and expect the best-looking variant to be the luckiest rather than the best.

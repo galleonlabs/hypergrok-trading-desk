@@ -3,7 +3,7 @@ name: hyperliquid-market-data
 description: Read live Hyperliquid market data from the desk computer with curl or the Python SDK - mid, mark and oracle prices, order book depth, funding (current, predicted, historical), open interest, volume, candles, perp and spot metadata, margin tiers, and how to save datasets for the strategy lab. Read-only, no key. Use for any market brief, depth read, funding question or data pull.
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.2.0"
   author: Galleon Labs
   category: hyperliquid
   network-default: mainnet-for-reads
@@ -113,32 +113,22 @@ hl "{\"type\":\"candleSnapshot\",\"req\":{\"coin\":\"ETH\",\"interval\":\"1h\",\
 
 Fields: `t` open time ms, `T` close time ms, `o h l c` strings, `v` base volume, `n` trade count. Intervals: `1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M`. **Only the most recent 5000 candles per market and interval exist on the API**, so history depth depends on the interval: about 3.5 days of `1m`, 208 days of `1h`, 2.3 years of `4h`, 13 years of `1d`. Choose the interval to fit the history you need; requests for older candles return nothing. Python: `info.candles_snapshot(coin, interval, start_ms, end_ms)`.
 
-Saving a dataset for the strategy lab (walks back until the API runs out):
+For the strategy lab, use a research bundle instead of saving an unverified CSV:
 
-```python
-import csv, time
-from hyperliquid.info import Info
-from hyperliquid.utils import constants
-info = Info(constants.MAINNET_API_URL, skip_ws=True)
-coin, interval, days = "ETH", "4h", 365            # 4h keeps a year inside the 5000-candle ceiling
-end = int(time.time() * 1000); start = end - days * 86_400_000
-rows = {}
-cursor_end = end
-while cursor_end > start:
-    batch = info.candles_snapshot(coin, interval, start, cursor_end)
-    if not batch: break
-    for c in batch: rows[c["t"]] = c
-    oldest = min(c["t"] for c in batch)
-    if oldest <= start or len(batch) < 2: break
-    cursor_end = oldest - 1
-path = f"/workspace/trading-desk/data/{coin}-{interval}-{days}d.csv"
-with open(path, "w", newline="") as f:
-    w = csv.writer(f); w.writerow(["t","T","o","h","l","c","v","n"])
-    for t in sorted(rows): c = rows[t]; w.writerow([c["t"],c["T"],c["o"],c["h"],c["l"],c["c"],c["v"],c["n"]])
-print(path, len(rows), "candles", "fetched", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+```bash
+cd /workspace/hypergrok
+python3 scripts/research_dataset.py --schema
+python3 scripts/research_dataset.py --coin ETH --interval 4h \
+  --start 2026-09-01T00:00:00Z --end 2026-10-01T00:00:00Z \
+  --with-funding --output /workspace/trading-desk/data/eth-september --json
+python3 scripts/research_dataset.py --verify /workspace/trading-desk/data/eth-september --json
 ```
 
-Record the exact request (coin, interval, start, end, fetched-at, network) next to the file.
+Choose explicit aligned UTC boundaries for the question, with end no later than collection time. The tool uses `[start,end)`, closed candles only, at most 5,000 requested slots and fixed intervals from `1m` through `1d` (excluding `3d`, `1w`, `1M`). With funding, boundaries must also be whole hours. It records canonical perp/DEX identity, origin/network, requests, decoded responses and retrieval times in `sources.json`; saves observed CSV rows; and writes a hashed manifest with `complete`, `incomplete` or `unavailable` coverage. It refuses an existing output directory. `--schema` and `--verify` do not use the network.
+
+Return the bundle path, manifest hash, requested range, coverage gaps and offline verification result. Exit zero requires complete coverage, including funding if requested; an intact incomplete bundle still exits nonzero. No gap is filled, no absent rate becomes zero, and conflicting duplicates fail. Current metadata may include a delisted perp for historical research, flagged in the bundle; this does not enable trading it. A selected HIP-3 prefix/`--dex`, testnet or custom origin remains explicit. Spot is not supported by this collector.
+
+See [Research datasets](../../docs/RESEARCH_DATASETS.md) for request bounds, pagination and handoff details. Replay and hashes establish internal consistency, not source authenticity, historical universe completeness, strategy edge or Risk PASS. Never describe a requested year as a collected year until the coverage proves it.
 
 ## Funding history and predictions
 
@@ -149,11 +139,13 @@ hl "{\"type\":\"fundingHistory\",\"coin\":\"ETH\",\"startTime\":$START}" | jq -r
 hl '{"type":"predictedFundings"}' | jq -r '.[] | select(.[0]=="ETH") | .[1][] | select(.[1]) | [.[0], .[1].fundingRate, (.[1].fundingIntervalHours // "?"), (if .[1].fundingIntervalHours then (.[1].fundingRate|tonumber) / .[1].fundingIntervalHours else "?" end), .[1].nextFundingTime] | @tsv'
 ```
 
-`fundingHistory` returns hourly rates (up to 500 per call; paginate by `startTime`).
+`fundingHistory` returns hourly rates (up to 500 per call; paginate from the last returned timestamp, retaining overlap and checking duplicates). For research, use `research_dataset.py --with-funding`: actual millisecond timestamps are preserved and coverage is checked by UTC hour bucket. Requests are paced; `--max-pages` bounds funding collection (default 100, range 1-250). A page limit, missing hour or failed read is not a complete dataset.
 
 `predictedFundings` compares venues, and the venue rates are over **different periods**, so never compare them raw. Every coin carries the same three slots in the same order - `BinPerp`, `HlPerp`, `BybitPerp` - but match on the venue name rather than the position, and each slot is either a payload or `null` when the coin is not listed on that venue. Divide `fundingRate` by the payload's own `fundingIntervalHours` to get a per-hour rate. `HlPerp` is always 1; the CEX venues are **4 or 8 depending on the coin**, not a fixed 8: on mainnet on 2026-08-28, BinPerp was 4h for 126 coins and 8h for 63, BybitPerp 4h for 118 and 8h for 69. BTC, ETH and DOGE are all 8h, so an assumed 8 looks right on the majors and is wrong by 2x across most alts. A few BinPerp payloads (19 that day, including `TON`, `MKR` and `IP`) omit `fundingIntervalHours` entirely; treat the interval as unknown and say so rather than defaulting it.
 
 Funding is paid every hour at `size x oracle price x hourly rate`; longs pay shorts when positive. Python: `info.funding_history(coin, start_ms)`.
+
+Rates plus candle closes do not reconstruct exact historical USD payments: that needs oracle prices and the position at payment time. Label a candle-price proxy as an assumption, never an observed funding cash flow.
 
 ## Spot markets
 

@@ -1,6 +1,6 @@
 {
   "name": "hypergrok-trading-desk",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "HyperGrok instructions, seventeen skills, seven role profiles and read-only Python tools for a user-approved Hyperliquid trading desk.",
   "license": "MIT",
   "author": {
@@ -50,6 +50,7 @@
     "docs/FORK_REVIEW.md",
     "docs/GROK_BOT_TEMPLATE.md",
     "docs/PROVENANCE.md",
+    "docs/RESEARCH_DATASETS.md",
     "plugin.json",
     "rules/hypergrok-team.mdc",
     "scripts/check.sh",
@@ -60,6 +61,7 @@
     "scripts/cli_contract.py",
     "scripts/desk_doctor.py",
     "scripts/opening_bell.py",
+    "scripts/research_dataset.py",
     "scripts/test_check_grok_template.py",
     "scripts/test_check_manifests.py",
     "scripts/test_check_npm_package.py",
@@ -67,6 +69,7 @@
     "scripts/test_desk_doctor.py",
     "scripts/test_opening_bell.py",
     "scripts/test_order_rounding.py",
+    "scripts/test_research_dataset.py",
     "skills/README.md",
     "skills/desk-execution-protocol/ATTRIBUTION.md",
     "skills/desk-execution-protocol/LICENSE",

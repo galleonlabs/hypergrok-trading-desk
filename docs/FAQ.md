@@ -4,7 +4,7 @@
 Seven Bots in your Grok Bot workspace, one Trading Floor group chat, seventeen shared skills, a live zero-key Opening Bell and a written way of working. Ask for a market brief, a sized trade, a backtest or a review, and the right Bot answers with live data and sources.
 
 **What do I need to start?**
-Use the [public HyperGrok Desk Lead template](https://x.ai/bot/-c_oDxnkrXbWhBz-u4qu5), then send **Start the desk.** Its v1.5.0 bootstrap verifies the complete skill pack and native instructions. The [pinned bootstrap in the README](../README.md#start) is also available. The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise (the testnet faucet funds any address that has ever deposited on mainnet); add a mainnet one when you decide to trade real money.
+The [public HyperGrok Desk Lead template](https://x.ai/bot/-c_oDxnkrXbWhBz-u4qu5) was published for 1.5.0. Send **Start the desk.** to install that release. This checkout prepares the unpublished v1.6.0 candidate; its dataset tool can be reviewed locally, while the [candidate bootstrap pins](../README.md#start) wait for publication. The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise; add a mainnet one when you decide to trade real money.
 
 **What does the desk doctor inspect?**
 The release version and tag pin, all agent and skill files, the desk folders and record, and a public Hyperliquid `allMids` response. It never reads environment variables, keys or account state, and never calls the exchange write endpoint.
@@ -17,6 +17,9 @@ The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `appr
 
 **Where do the ideas come from?**
 From you. The Strategist turns your idea into rules and tests it on Hyperliquid history with fees, funding and an out-of-sample split; the desk then paper-trades it on testnet if you like. The Market and Research Analysts give you the picture; you decide.
+
+**Can I verify the history behind a backtest?**
+Yes. The candidate's [research dataset tool](RESEARCH_DATASETS.md) saves requests, decoded responses, CSVs and a manifest with file hashes and coverage gaps. `--verify` replays that bundle offline. A missing candle or funding hour prevents complete coverage; absent funding is never assumed to be zero. Integrity and coverage do not prove source authenticity, strategy edge or exact USD funding costs without historical oracle prices.
 
 **Why do the Bots use a "computer"?**
 That is Grok Bot's name for the cloud VM every account gets. Reads are plain `curl` against `/info`; the Execution Trader runs the official SDK there to sign orders with the API wallet. The browser is only used for reading pages.
@@ -40,7 +43,7 @@ It never resends. It checks the exchange by client order id, and if the order is
 Settings, General, Auto-review: add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Require Approval wins over Always Allow.
 
 **Does it work outside Grok Bot?**
-Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.5.0 --trust` (tested with Grok Build 1.0.30); the CLI reports skills and agents directories, while loading `rules/` is not verified. In Claude Code, run `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`.
+Yes. The plugin supplies the same skills and agents. After candidate publication, the Grok Build command is `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.0 --trust`. The format was tested with Grok Build 1.0.30 on an earlier release, not on this candidate; loading `rules/` there is not verified. In Claude Code, use `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`.
 
 **Is this financial advice?**
 It is documentation and instructions. Perpetual futures can liquidate an account.

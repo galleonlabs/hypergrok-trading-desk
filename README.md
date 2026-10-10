@@ -12,11 +12,13 @@ Set up the Desk Lead in Grok Bot using the pinned bootstrap below. It opens with
 
 ## Start
 
-Add the [public HyperGrok Desk Lead template](https://x.ai/bot/-c_oDxnkrXbWhBz-u4qu5), then send **Start the desk.** Its v1.5.0 bootstrap installs the complete seventeen-skill release and verifies native role and skill instructions. The pinned bootstrap below is also available.
+**Source candidate: v1.6.0, unpublished as of 2026-10-10.** The release pins below prepare one consistent candidate; the tag, npm package and public template have not been published for it. Reviewers can run the read-only tools from this checkout. Use the pinned install commands only after that release is published.
 
-Alternatively, open Grok Bot and paste this to a Bot:
+The existing [public HyperGrok Desk Lead template](https://x.ai/bot/-c_oDxnkrXbWhBz-u4qu5) was published for **1.5.0**. Send **Start the desk.** to install that release's seventeen skills and verify native instructions. It does not carry this candidate's research dataset workflow. [Publication evidence](docs/GROK_BOT_TEMPLATE.md#publication-verification---2026-10-08) remains recorded separately.
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.5.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.5.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
+Once the candidate is released, its pinned bootstrap instruction will be:
+
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.6.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.6.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 The desk starts in research mode. The first demo uses only Hyperliquid's public `/info` endpoint: no wallet, account read or order. Add a testnet API wallet when you want to practise with play money, and a mainnet one when you are ready.
 
@@ -39,6 +41,19 @@ python3 scripts/desk_doctor.py --offline --json
 ```
 
 `--testnet` explicitly selects testnet. A custom API origin is labelled `custom`. HIP-3 discovery stays read-only; execution remains opt-in under the desk's normal ticket rules.
+
+### History you can check
+
+Before a backtest, collect the exact period into a research bundle:
+
+```bash
+python3 scripts/research_dataset.py --coin ETH --interval 4h \
+  --start 2026-09-01T00:00:00Z --end 2026-10-01T00:00:00Z \
+  --with-funding --output /workspace/trading-desk/data/eth-september --json
+python3 scripts/research_dataset.py --verify /workspace/trading-desk/data/eth-september --json
+```
+
+The bundle keeps requests, captured responses, observed CSV rows and a hashed manifest. Closed UTC windows, explicit missing ranges and bounded funding pagination distinguish `complete`, `incomplete` and `unavailable` history. Offline verification replays the saved responses; it checks consistency, not source authenticity or strategy quality. The tool needs no key and never fills a gap with synthetic data. See [Research datasets](docs/RESEARCH_DATASETS.md) for the supported intervals, market selection, exit codes and analyst handoff.
 
 ## Meet the desk
 
@@ -75,7 +90,7 @@ approve with: "approve HG-20260816-01"
 
 You type `approve HG-20260816-01`. The Execution Trader sends entry and stop in one grouped order, reads the exchange response, confirms it on the book, and reports the order ids. When it closes, the Trade Reviewer tells you what it cost, whether the process was clean, and one thing worth keeping.
 
-**"Can we test whether funding extremes mean-revert?"** The Strategist writes the rules with you, pulls a year of candles and funding, runs a backtest with fees and an out-of-sample split, and reports the trade distribution, not a headline number. Like it? Paper-trade it on testnet through the same desk.
+**"Can we test whether funding extremes mean-revert?"** The Strategist writes the rules with you, requests the agreed candle and funding history, and verifies its coverage before running the backtest. Missing history stays visible. Results include fees, funding assumptions, an out-of-sample split and the trade distribution. Like it? Paper-trade it on testnet through the same desk.
 
 **"Watch ETH and tell me if funding flips negative."** A routine on the desk computer watches the WebSocket feed and pings you when it happens.
 
@@ -121,10 +136,10 @@ In Claude Code, install it from this repository:
 /plugin install hypergrok@hypergrok
 ```
 
-In Grok Build, install the reviewed release (tested with Grok Build 1.0.30):
+After publication, install the candidate in Grok Build using the pinned command below. The installation format was tested with Grok Build 1.0.30 for an earlier release; this candidate has no native installation proof yet.
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.5.0 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.0 --trust
 ```
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified.
@@ -135,7 +150,7 @@ grok plugin marketplace add galleonlabs/hypergrok-trading-desk
 grok plugin install hypergrok --trust
 ```
 
-The marketplace index on `main` pins the same reviewed release.
+This candidate's marketplace index pins the same pending release tag.
 In Cursor, open the repository and enable the plugin.
 
 The same pack installs as a skill:
@@ -144,10 +159,10 @@ The same pack installs as a skill:
 npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-desk
 ```
 
-The complete reviewed resources also ship on npm:
+After publication, the complete candidate resources will also install from npm:
 
 ```bash
-npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.5.0
+npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.6.0
 python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
 ```
 
@@ -164,7 +179,7 @@ SETUP.md     what your Grok Bot follows to build the desk
 agents/      seven roles: Bot profile card + full system prompt
 skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
 template/    exact public Grok Bot profile and skill hashes
-scripts/     zero-key Opening Bell, desk doctor and release checks
+scripts/     zero-key market/history reads, offline verification and release checks
 docs/        how it works, FAQ, provenance
 assets/      the mascot - use it as your Bots' avatar
 ```
@@ -173,6 +188,7 @@ assets/      the mascot - use it as your Bots' avatar
 | --- | --- |
 | [How the desk works](docs/ARCHITECTURE.md) | roles, files, trust boundaries |
 | [FAQ](docs/FAQ.md) | keys, approvals, testnet, customising the team |
+| [Research datasets](docs/RESEARCH_DATASETS.md) | collect, verify and hand off historical evidence |
 | [Skills index](skills/README.md) | every skill and who uses it |
 | [Grok Bot template](docs/GROK_BOT_TEMPLATE.md) | public profile, publish contract and clean-install evaluation |
 | [Provenance](docs/PROVENANCE.md) | sources and licences |

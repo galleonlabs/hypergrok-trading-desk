@@ -43,7 +43,7 @@ It never resends. It checks the exchange by client order id, and if the order is
 Settings, General, Auto-review: add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Require Approval wins over Always Allow.
 
 **Does it work outside Grok Bot?**
-Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.0 --trust`. The format was tested with Grok Build 1.0.30 on an earlier release, not on 1.6.0; loading `rules/` there is not verified. In Claude Code, use `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`.
+Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.0 --trust`. The format was tested with Grok Build 1.0.30 on an earlier release, not on 1.6.0; loading `rules/` there is not verified. In Claude Code, use `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`. In Codex, use `codex plugin marketplace add galleonlabs/hypergrok-trading-desk` then `codex plugin add hypergrok@hypergrok`. In Gemini CLI, use `gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk`; Gemini support first ships in the release after 1.6.0. Codex and Gemini CLI load the skills only, so the roles run as labelled passes.
 
 **Is this financial advice?**
 It is documentation and instructions. Perpetual futures can liquidate an account.

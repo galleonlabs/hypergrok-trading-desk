@@ -123,7 +123,7 @@ Neither is required to use HyperGrok. Installing instructions does not connect a
 
 Perpetual futures can liquidate an account. HyperGrok is documentation and instructions, not financial advice.
 
-## Also runs in Grok Build, Cursor and Claude Code
+## Also runs in Grok Build, Cursor, Claude Code, Codex and Gemini CLI
 
 The plugin supplies seventeen skills and seven roles as subagents. Cursor and Claude Code load `agents/`, `skills/` and `rules/`.
 
@@ -134,7 +134,7 @@ In Claude Code, install it from this repository:
 /plugin install hypergrok@hypergrok
 ```
 
-In Claude Code the plugin adds a hook that asks you to confirm any command that looks like a Hyperliquid exchange write, even in auto mode. It is a backstop: approval still happens by ticket id.
+In Claude Code the plugin adds a hook that asks you to confirm any command that looks like a Hyperliquid exchange write, even in auto mode. It is a backstop: approval still happens by ticket id. Codex and Gemini CLI do not load it.
 
 In Grok Build, install the reviewed release. The installation format was tested with Grok Build 1.0.30 for an earlier release; 1.6.0 has no native installation proof yet.
 
@@ -153,6 +153,23 @@ grok plugin install hypergrok --trust
 The marketplace index on `main` pins the same reviewed release.
 In Cursor, open the repository and enable the plugin.
 
+In Codex, add this repository's marketplace and install by name:
+
+```bash
+codex plugin marketplace add galleonlabs/hypergrok-trading-desk
+codex plugin add hypergrok@hypergrok
+```
+
+Codex reads `.agents/plugins/marketplace.json`, which pins the same reviewed release as the Grok index. It loads the seventeen skills but has no subagent component, so the roles run as labelled passes. Codex CLI 0.160.0 installed 1.6.0 through this index and listed all seventeen skills.
+
+In Gemini CLI, install the extension:
+
+```bash
+gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk
+```
+
+Gemini CLI installs the latest GitHub release and loads the seventeen skills and `GEMINI.md`, which repeats the desk's approval rule. Its subagent schema does not accept the role files' frontmatter, so the roles run as labelled passes there too. `gemini-extension.json` follows the official extension format, first ships in the release after 1.6.0 and has no native installation proof yet.
+
 The same pack installs as a skill:
 
 ```
@@ -170,7 +187,7 @@ The package contains the instructions, role profiles, plugin manifests and read-
 
 Live listings: [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk) · [cursor.directory](https://cursor.directory/plugins/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
 
-Either way, run `/desk-operating-model` to begin.
+Either way, start with the `desk-operating-model` skill; where skills are slash commands, run `/desk-operating-model`.
 
 ## Inside the repository
 

@@ -39,6 +39,9 @@ class PackageContractTests(unittest.TestCase):
         errors, expected = check(ROOT)
         self.assertEqual(errors, [])
         self.assertIn(".grok-plugin/marketplace.json", expected)
+        self.assertIn(".agents/plugins/marketplace.json", expected)
+        self.assertIn("gemini-extension.json", expected)
+        self.assertIn("GEMINI.md", expected)
         self.assertIn("scripts/test_check_npm_package.py", expected)
 
     def test_wrong_name(self):

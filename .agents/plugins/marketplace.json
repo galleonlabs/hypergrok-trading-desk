@@ -1,0 +1,21 @@
+{
+  "name": "hypergrok",
+  "interface": {
+    "displayName": "HyperGrok"
+  },
+  "plugins": [
+    {
+      "name": "hypergrok",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/galleonlabs/hypergrok-trading-desk.git",
+        "ref": "v1.6.0"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Finance"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "hypergrok",
+  "version": "1.6.0",
+  "description": "Hyperliquid trading desk skills for research, risk, execution and review: seventeen skills and the desk approval rule. Starts on public market data; a trade needs a Risk PASS and your approval by ticket id.",
+  "contextFileName": "GEMINI.md"
+}

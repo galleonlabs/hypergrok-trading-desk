@@ -145,6 +145,9 @@ def documented_pin_lags_the_release(root):
                     d["plugins"][0].update(version="9.9.9")))
     edit(root, ".grok-plugin/marketplace.json",
          lambda d: d["plugins"][0].update(version="9.9.9"))
+    edit(root, "gemini-extension.json", lambda d: d.update(version="9.9.9"))
+    for rel in (".grok-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
+        edit(root, rel, lambda d: d["plugins"][0]["source"].update(ref="v9.9.9"))
     return "SETUP.md", "expected v9.9.9"
 
 
@@ -217,7 +220,98 @@ def grok_documented_missing_ref(root):
     return "docs/FAQ.md", "grok plugin install"
 
 
+def gemini_version_mismatch(root):
+    edit(root, "gemini-extension.json", lambda d: d.update(version="9.9.9"))
+    return "gemini-extension.json", "version"
+
+
+def gemini_missing_context_file(root):
+    os.remove(os.path.join(root, "GEMINI.md"))
+    return "gemini-extension.json", "contextFileName"
+
+
+def gemini_context_drops_approval_rule(root):
+    """The Gemini context file paraphrases the desk rule instead of repeating it."""
+    replace(root, "GEMINI.md", "with the ticket id, after the ticket was shown",
+            "after the ticket was shown")
+    return "GEMINI.md", "rules/hypergrok-team.mdc"
+
+
+def gemini_documented_wrong_repository(root):
+    replace(root, "README.md",
+            "gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk",
+            "gemini extensions install https://github.com/galleonlabs/hypergrok")
+    return "README.md", "gemini extensions install"
+
+
+def gemini_documented_moving_ref(root):
+    with open(os.path.join(root, "docs", "FAQ.md"), "a", encoding="utf-8") as fh:
+        fh.write("\ngemini extensions install "
+                 "https://github.com/galleonlabs/hypergrok-trading-desk --ref main\n")
+    return "docs/FAQ.md", "--ref main"
+
+
+def codex_marketplace_root_source(root):
+    edit(root, ".agents/plugins/marketplace.json",
+         lambda d: d["plugins"][0].update(source={"source": "local", "path": "./"}))
+    return ".agents/plugins/marketplace.json", "source"
+
+
+def codex_marketplace_stale_ref(root):
+    edit(root, ".agents/plugins/marketplace.json",
+         lambda d: d["plugins"][0]["source"].update(ref="v0.9.0"))
+    return ".agents/plugins/marketplace.json", "ref"
+
+
+def codex_marketplace_missing_policy(root):
+    edit(root, ".agents/plugins/marketplace.json", lambda d: d["plugins"][0].pop("policy"))
+    return ".agents/plugins/marketplace.json", "policy"
+
+
+def codex_marketplace_missing_category(root):
+    edit(root, ".agents/plugins/marketplace.json", lambda d: d["plugins"][0].pop("category"))
+    return ".agents/plugins/marketplace.json", "category"
+
+
+def codex_documented_marketplace_typo(root):
+    replace(root, "README.md",
+            "codex plugin marketplace add galleonlabs/hypergrok-trading-desk",
+            "codex plugin marketplace add galleonlabs/hypergrok")
+    return "README.md", "codex plugin marketplace add"
+
+
+def codex_documented_install_id_typo(root):
+    replace(root, "README.md", "codex plugin add hypergrok@hypergrok",
+            "codex plugin add hypergrok@galleonlabs")
+    return "README.md", "codex plugin add"
+
+
+def codex_marketplace_renamed(root):
+    """The Codex index changes its marketplace name; the documented install id goes stale."""
+    edit(root, ".agents/plugins/marketplace.json", lambda d: d.update(name="galleonlabs"))
+    return "README.md", "codex plugin add"
+
+
+def codex_documented_moving_ref(root):
+    with open(os.path.join(root, "docs", "FAQ.md"), "a", encoding="utf-8") as fh:
+        fh.write("\ncodex plugin marketplace add galleonlabs/hypergrok-trading-desk --ref main\n")
+    return "docs/FAQ.md", "--ref main"
+
+
 FIXTURES = [
+    gemini_version_mismatch,
+    gemini_missing_context_file,
+    gemini_context_drops_approval_rule,
+    gemini_documented_wrong_repository,
+    gemini_documented_moving_ref,
+    codex_marketplace_root_source,
+    codex_marketplace_stale_ref,
+    codex_marketplace_missing_policy,
+    codex_marketplace_missing_category,
+    codex_documented_marketplace_typo,
+    codex_documented_install_id_typo,
+    codex_marketplace_renamed,
+    codex_documented_moving_ref,
     grok_marketplace_root_source,
     grok_marketplace_stale_ref,
     grok_marketplace_missing_ref,

@@ -17,13 +17,14 @@ import tarfile
 NAME = "hypergrok-trading-desk"
 REPOSITORY = "https://github.com/galleonlabs/hypergrok-trading-desk"
 ROOT_FILES = (
-    "AGENTS.md", "ATTRIBUTION.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE",
-    "README.md", "SECURITY.md", "SETUP.md", "plugin.json", "skills/README.md",
+    "AGENTS.md", "ATTRIBUTION.md", "CHANGELOG.md", "CONTRIBUTING.md", "GEMINI.md",
+    "LICENSE", "README.md", "SECURITY.md", "SETUP.md", "plugin.json", "skills/README.md",
 )
 MANIFESTS = (
     ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
     ".cursor-plugin/plugin.json", ".grok-plugin/plugin.json",
-    ".grok-plugin/marketplace.json",
+    ".grok-plugin/marketplace.json", ".agents/plugins/marketplace.json",
+    "gemini-extension.json",
 )
 RESOURCES = (
     "assets/mascot.jpg", "assets/mascot-320.jpg", "rules/hypergrok-team.mdc",

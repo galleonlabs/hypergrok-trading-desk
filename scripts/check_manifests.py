@@ -24,17 +24,35 @@ MANIFESTS = [
     ".cursor-plugin/plugin.json",
     ".grok-plugin/plugin.json",
     ".grok-plugin/marketplace.json",
+    "gemini-extension.json",
+    ".agents/plugins/marketplace.json",
 ]
 
 # Manifest keys whose value is a path into this repository.
-PATH_KEYS = ("source", "logo", "skills", "agents", "rules", "hooks")
+PATH_KEYS = ("source", "logo", "skills", "agents", "rules", "hooks", "contextFileName")
 
 # The marketplace manifest Claude Code resolves `/plugin marketplace add` against.
 MARKETPLACE_MANIFEST = ".claude-plugin/marketplace.json"
 GROK_MARKETPLACE_MANIFEST = ".grok-plugin/marketplace.json"
+# Codex reads a repository marketplace from `.agents/plugins/marketplace.json`
+# in preference to the Claude-compatible one.
+CODEX_MARKETPLACE_MANIFEST = ".agents/plugins/marketplace.json"
+# Marketplaces whose plugin entry is this repository at its release tag.
+PINNED_SOURCE_MANIFESTS = (GROK_MARKETPLACE_MANIFEST, CODEX_MARKETPLACE_MANIFEST)
+CODEX_INSTALL_POLICIES = ("AVAILABLE", "INSTALLED_BY_DEFAULT", "NOT_AVAILABLE")
+CODEX_AUTH_POLICIES = ("ON_INSTALL", "ON_USE")
+GEMINI_MANIFEST = "gemini-extension.json"
+# Gemini CLI loads the context file on every session, so it must carry the
+# desk rule's approval paragraph word for word rather than a paraphrase.
+DESK_RULE = "rules/hypergrok-team.mdc"
+APPROVAL_PARAGRAPH_START = "Analysis is not approval."
 GROK_INSTALL_RE = re.compile(r"\bgrok plugin install\s+([^\s`]+)")
 MARKETPLACE_ADD_RE = re.compile(r"/plugin marketplace add\s+([^\s`]+)")
 PLUGIN_INSTALL_RE = re.compile(r"/plugin install\s+([^\s`]+)")
+GEMINI_INSTALL_RE = re.compile(r"\bgemini extensions install\s+([^\s`]+)([^\n`]*)")
+CODEX_MARKETPLACE_ADD_RE = re.compile(r"\bcodex plugin marketplace add\s+([^\s`]+)([^\n`]*)")
+CODEX_PLUGIN_ADD_RE = re.compile(r"\bcodex plugin add\s+([^\s`]+)")
+REF_OPTION_RE = re.compile(r"--ref(?:=|\s+)([^\s`]+)")
 # skills.sh indexes skill directories, not the plugin id. A trailing /hypergrok
 # is therefore a listing that does not exist.
 SKILLS_SH_RE = re.compile(
@@ -95,29 +113,39 @@ def check_paths(root, rel, prefix, entry, errors):
         if key not in entry:
             continue
         value = entry[key]
-        if rel == GROK_MARKETPLACE_MANIFEST and key == "source":
-            continue  # checked as a pinned remote source by check_grok_source
+        if rel in PINNED_SOURCE_MANIFESTS and key == "source":
+            continue  # checked as a pinned remote source by check_pinned_source
         if isinstance(value, dict):
             if value.get("type") not in (None, "local"):
                 continue  # a remote source is not this repository's tree
             value = value.get("path")
-        if not isinstance(value, str) or not value:
-            errors.append(f"{rel}: {prefix}{key} is not a path")
-            continue
-        if value.startswith(("http://", "https://")):
-            errors.append(f"{rel}: {prefix}{key} must be a repository path, not a URL")
-            continue
-        resolved = os.path.normpath(os.path.join(root, value))
-        inside = os.path.normpath(root)
-        if os.path.relpath(resolved, inside).startswith(".."):
-            errors.append(f"{rel}: {prefix}{key} '{value}' resolves outside the repository")
-            continue
-        if not os.path.exists(resolved):
-            errors.append(f"{rel}: {prefix}{key} '{value}' does not exist")
+        # Gemini CLI accepts one context file name or a list of them.
+        for item in value if key == "contextFileName" and isinstance(value, list) else [value]:
+            check_path(root, rel, prefix, key, item, errors)
 
 
-def check_grok_source(rel, prefix, entry, version, errors):
-    """Grok rejects a marketplace-root path; use this repository at its release tag."""
+def check_path(root, rel, prefix, key, value, errors):
+    if not isinstance(value, str) or not value:
+        errors.append(f"{rel}: {prefix}{key} is not a path")
+        return
+    if value.startswith(("http://", "https://")):
+        errors.append(f"{rel}: {prefix}{key} must be a repository path, not a URL")
+        return
+    resolved = os.path.normpath(os.path.join(root, value))
+    inside = os.path.normpath(root)
+    if os.path.relpath(resolved, inside).startswith(".."):
+        errors.append(f"{rel}: {prefix}{key} '{value}' resolves outside the repository")
+        return
+    if not os.path.exists(resolved):
+        errors.append(f"{rel}: {prefix}{key} '{value}' does not exist")
+
+
+def check_pinned_source(rel, prefix, entry, version, errors):
+    """Install this repository at its release tag, not a moving marketplace root.
+
+    Grok rejects a marketplace-root path. Codex would accept one, but it would
+    then install whatever ref the marketplace was added at, usually `main`.
+    """
     source = entry.get("source")
     if not isinstance(source, dict) or source.get("source") != "url":
         errors.append(f"{rel}: {prefix}source must use the pinned remote URL form")
@@ -126,6 +154,53 @@ def check_grok_source(rel, prefix, entry, version, errors):
         errors.append(f"{rel}: {prefix}source.url must be '{REPOSITORY}.git'")
     if version is not None and source.get("ref") != f"v{version}":
         errors.append(f"{rel}: {prefix}source.ref must pin v{version}")
+
+
+def check_codex_entry(rel, prefix, entry, errors):
+    """Codex's marketplace format requires an install policy and a category per entry."""
+    policy = entry.get("policy")
+    if not isinstance(policy, dict):
+        errors.append(f"{rel}: {prefix}policy is required")
+        return
+    if policy.get("installation") not in CODEX_INSTALL_POLICIES:
+        errors.append(
+            f"{rel}: {prefix}policy.installation must be one of {list(CODEX_INSTALL_POLICIES)}"
+        )
+    if policy.get("authentication") not in CODEX_AUTH_POLICIES:
+        errors.append(
+            f"{rel}: {prefix}policy.authentication must be one of {list(CODEX_AUTH_POLICIES)}"
+        )
+    if not isinstance(entry.get("category"), str) or not entry["category"]:
+        errors.append(f"{rel}: {prefix}category is required")
+
+
+def check_gemini_context(root, manifest, errors):
+    """Each Gemini context file repeats the desk rule's approval paragraph verbatim."""
+    if not isinstance(manifest, dict):
+        return
+    try:
+        with open(os.path.join(root, DESK_RULE), encoding="utf-8") as fh:
+            rule = fh.read()
+    except OSError as exc:
+        errors.append(f"{DESK_RULE}: cannot read the desk rule: {exc}")
+        return
+    paragraph = next(
+        (p.strip() for p in rule.split("\n\n") if p.startswith(APPROVAL_PARAGRAPH_START)),
+        None,
+    )
+    if paragraph is None:
+        errors.append(f"{DESK_RULE}: no paragraph starts '{APPROVAL_PARAGRAPH_START}'")
+        return
+    names = manifest.get("contextFileName", "GEMINI.md")
+    for name in names if isinstance(names, list) else [names]:
+        path = os.path.join(root, name) if isinstance(name, str) else None
+        if path is None or not os.path.isfile(path):
+            continue  # reported by the path check
+        with open(path, encoding="utf-8") as fh:
+            if paragraph not in fh.read():
+                errors.append(
+                    f"{name}: must repeat the approval paragraph of {DESK_RULE} verbatim"
+                )
 
 
 def declared_counts(value, found):
@@ -270,6 +345,63 @@ def check_documented_install(root, marketplace, skill_names, errors):
             )
 
 
+def check_documented_ref(rel, command, options, expected, errors):
+    found = REF_OPTION_RE.search(options)
+    if found and found.group(1) != expected:
+        errors.append(
+            f"{rel}: '{command} --ref {found.group(1)}' must pin {expected} or omit --ref"
+        )
+
+
+def check_documented_cli_installs(root, codex_marketplace, version, errors):
+    """Gemini CLI and Codex install commands must name this repository and its ids.
+
+    Gemini CLI installs the latest GitHub release when no ref is given, and the
+    Codex marketplace index pins the release itself, so neither command needs a
+    ref. A ref that is given must be the release the manifests declare.
+    """
+    shorthand = REPOSITORY.removeprefix("https://github.com/")
+    expected = f"v{version}" if version is not None else None
+    market = codex_marketplace if isinstance(codex_marketplace, dict) else {}
+    install_ids = {
+        f"{p.get('name')}@{market.get('name')}"
+        for p in (market.get("plugins") or [])
+        if isinstance(p, dict)
+    }
+    for rel in markdown_files(root):
+        with open(os.path.join(root, rel), encoding="utf-8") as fh:
+            text = fh.read()
+        pin_checked = expected is not None and rel not in RELEASE_HISTORY_DOCS
+        for source, options in GEMINI_INSTALL_RE.findall(text):
+            if source not in (REPOSITORY, REPOSITORY + ".git"):
+                errors.append(
+                    f"{rel}: 'gemini extensions install {source}' should install '{REPOSITORY}'"
+                )
+            if pin_checked:
+                check_documented_ref(
+                    rel, f"gemini extensions install {source}", options, expected, errors
+                )
+        for source, options in CODEX_MARKETPLACE_ADD_RE.findall(text):
+            if source.startswith(shorthand + "@"):
+                # `owner/repo@ref` is Codex shorthand for `owner/repo --ref ref`.
+                source, ref = source.split("@", 1)
+                options = f" --ref {ref}{options}"
+            if source != shorthand:
+                errors.append(
+                    f"{rel}: 'codex plugin marketplace add {source}' should add '{shorthand}'"
+                )
+            if pin_checked:
+                check_documented_ref(
+                    rel, f"codex plugin marketplace add {source}", options, expected, errors
+                )
+        for arg in CODEX_PLUGIN_ADD_RE.findall(text):
+            if arg not in install_ids:
+                errors.append(
+                    f"{rel}: 'codex plugin add {arg}' is not declared by "
+                    f"{CODEX_MARKETPLACE_MANIFEST} (expected one of {sorted(install_ids)})"
+                )
+
+
 def main(root):
     errors = []
     skills = sorted(
@@ -289,13 +421,17 @@ def main(root):
         errors.append(f"{MANIFESTS[0]}: version '{version}' is not a semantic version")
         version = None
 
-    marketplace = None
+    marketplace = codex_marketplace = gemini = None
     for rel in MANIFESTS:
         data = root_manifest if rel == MANIFESTS[0] else load(root, rel, errors)
         if data is None:
             continue
         if rel == MARKETPLACE_MANIFEST:
             marketplace = data
+        elif rel == CODEX_MARKETPLACE_MANIFEST:
+            codex_marketplace = data
+        elif rel == GEMINI_MANIFEST:
+            gemini = data
         for prefix, entry in entries(data):
             name = entry.get("name")
             if name != CANONICAL_NAME:
@@ -310,8 +446,10 @@ def main(root):
                 if key in entry and entry[key] != REPOSITORY:
                     errors.append(f"{rel}: {prefix}{key} '{entry[key]}' should be '{REPOSITORY}'")
             check_paths(root, rel, prefix, entry, errors)
-            if rel == GROK_MARKETPLACE_MANIFEST and prefix:
-                check_grok_source(rel, prefix, entry, version, errors)
+            if rel in PINNED_SOURCE_MANIFESTS and prefix:
+                check_pinned_source(rel, prefix, entry, version, errors)
+            if rel == CODEX_MARKETPLACE_MANIFEST and prefix:
+                check_codex_entry(rel, prefix, entry, errors)
 
         counts = []
         declared_counts(data, counts)
@@ -322,7 +460,9 @@ def main(root):
                 )
 
     check_documented_install(root, marketplace, set(skills), errors)
+    check_documented_cli_installs(root, codex_marketplace, version, errors)
     check_documented_pin(root, version, errors)
+    check_gemini_context(root, gemini, errors)
 
     if errors:
         print("\n".join(errors))

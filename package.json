@@ -23,6 +23,7 @@
     "agent-skills"
   ],
   "files": [
+    ".agents/plugins/marketplace.json",
     ".claude-plugin/marketplace.json",
     ".claude-plugin/plugin.json",
     ".cursor-plugin/plugin.json",
@@ -32,6 +33,7 @@
     "ATTRIBUTION.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
+    "GEMINI.md",
     "LICENSE",
     "README.md",
     "SECURITY.md",
@@ -51,6 +53,7 @@
     "docs/GROK_BOT_TEMPLATE.md",
     "docs/PROVENANCE.md",
     "docs/RESEARCH_DATASETS.md",
+    "gemini-extension.json",
     "hooks/exchange-write-gate.json",
     "hooks/exchange_write_gate.py",
     "plugin.json",

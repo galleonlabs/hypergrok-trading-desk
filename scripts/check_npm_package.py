@@ -38,9 +38,10 @@ RESOURCES = (
 SCRIPTS = (
     "check.sh", "check_grok_template.py", "check_manifests.py",
     "check_npm_package.py", "check_public_template.py", "cli_contract.py", "desk_doctor.py",
-    "opening_bell.py", "research_dataset.py", "stop_cost.py", "test_research_dataset.py", "test_check_grok_template.py", "test_check_manifests.py",
+    "opening_bell.py", "release_bump.py", "research_dataset.py", "stop_cost.py", "test_research_dataset.py", "test_check_grok_template.py", "test_check_manifests.py",
     "test_check_npm_package.py", "test_check_public_template.py",
     "test_desk_doctor.py", "test_exchange_write_gate.py", "test_opening_bell.py", "test_order_rounding.py",
+    "test_release_bump.py",
     "test_stop_cost.py",
 )
 SAFE_SCRIPTS = {"test": "bash scripts/check.sh", "prepack": "bash scripts/check.sh"}

@@ -17,17 +17,25 @@ import re
 import sys
 
 # Signed actions from the Python SDK `Exchange` class and the TypeScript
-# `ExchangeClient` that the order, position and advanced skills use.
+# `ExchangeClient`: orders, transfers, margin modes, nonces and account changes.
 WRITE_METHODS = (
     "order", "bulk_orders", "market_open", "market_close", "cancel", "bulk_cancel",
     "cancel_by_cloid", "bulk_cancel_by_cloid", "modify_order", "bulk_modify_orders_new",
     "update_leverage", "update_isolated_margin", "schedule_cancel", "usd_transfer",
     "spot_transfer", "usd_class_transfer", "sub_account_transfer", "vault_usd_transfer",
-    "withdraw_from_bridge", "approve_agent", "approve_builder_fee",
+    "withdraw_from_bridge", "approve_agent", "approve_builder_fee", "send_asset",
+    "sub_account_spot_transfer", "token_delegate", "create_sub_account", "user_set_abstraction",
+    "agent_set_abstraction", "user_dex_abstraction", "agent_enable_dex_abstraction",
+    "convert_to_multi_sig_user", "multi_sig", "use_big_blocks", "set_referrer", "noop",
     "batchModify", "cancelByCloid", "modify", "scheduleCancel", "twapOrder", "twapCancel",
     "updateLeverage", "updateIsolatedMargin", "usdSend", "spotSend", "withdraw3",
     "usdClassTransfer", "subAccountTransfer", "vaultTransfer", "approveAgent",
-    "approveBuilderFee",
+    "approveBuilderFee", "sendAsset", "agentSendAsset", "subAccountSpotTransfer", "tokenDelegate",
+    "createSubAccount", "userSetAbstraction", "agentSetAbstraction", "userDexAbstraction",
+    "agentEnableDexAbstraction", "topUpIsolatedOnlyMargin", "reserveRequestWeight", "cDeposit",
+    "cWithdraw", "borrowLend", "sendToEvmWithData", "userPortfolioMargin", "convertToMultiSigUser",
+    "setReferrer", "userOutcome", "claimRewards", "createVault", "vaultDistribute", "vaultModify",
+    "subAccountModify", "hip3LiquidatorTransfer",
 )
 SDK_WRITE_RE = re.compile(
     r"\b\w*exch\w*\s*\.\s*(" + "|".join(WRITE_METHODS) + r")\s*\(",

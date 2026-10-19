@@ -123,7 +123,7 @@ Neither is required to use HyperGrok. Installing instructions does not connect a
 
 ## Built for real money
 
-- **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in Grok Bot's own Require Approval rule, because a Bot that can read an approval could also write one.
+- **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one.
 - **A trade-only API wallet**, provisioned through Grok Bot's secure secret store, is the only key the desk ever holds. It can trade; it cannot withdraw.
 - **Sized on a stressed stop.** A triggered stop is a market order: it slips past the trigger and pays the taker fee. The desk sizes on what the stop will actually cost, not its trigger price, and charges the entry at the taker rate too, so your risk budget means what it says. [See what a stop costs](docs/STOP_COST.md).
 - **Ceilings you cannot trade through.** Your limits file may only tighten the desk's own caps, never loosen them.

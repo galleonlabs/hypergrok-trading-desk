@@ -26,7 +26,7 @@ WRITE_METHODS = (
     "withdraw_from_bridge", "approve_agent", "approve_builder_fee", "send_asset",
     "sub_account_spot_transfer", "token_delegate", "create_sub_account", "user_set_abstraction",
     "agent_set_abstraction", "user_dex_abstraction", "agent_enable_dex_abstraction",
-    "convert_to_multi_sig_user", "set_referrer", "noop",
+    "convert_to_multi_sig_user", "multi_sig", "use_big_blocks", "set_referrer", "noop",
     "batchModify", "cancelByCloid", "modify", "scheduleCancel", "twapOrder", "twapCancel",
     "updateLeverage", "updateIsolatedMargin", "usdSend", "spotSend", "withdraw3",
     "usdClassTransfer", "subAccountTransfer", "vaultTransfer", "approveAgent",
@@ -34,7 +34,8 @@ WRITE_METHODS = (
     "createSubAccount", "userSetAbstraction", "agentSetAbstraction", "userDexAbstraction",
     "agentEnableDexAbstraction", "topUpIsolatedOnlyMargin", "reserveRequestWeight", "cDeposit",
     "cWithdraw", "borrowLend", "sendToEvmWithData", "userPortfolioMargin", "convertToMultiSigUser",
-    "setReferrer", "noop",
+    "setReferrer", "userOutcome", "claimRewards", "createVault", "vaultDistribute", "vaultModify",
+    "subAccountModify", "hip3LiquidatorTransfer",
 )
 SDK_WRITE_RE = re.compile(
     r"\b\w*exch\w*\s*\.\s*(" + "|".join(WRITE_METHODS) + r")\s*\(",

@@ -39,6 +39,7 @@ class ExchangeWriteGateTest(unittest.TestCase):
             'exchange.send_asset(dest, "", "spot", "USDC", 10.0)',
             "exchange.agent_set_abstraction('u')",
             "exchange.noop(nonce)",
+            "exchange.multi_sig(multi_sig_user, inner_action, signatures, nonce)",
         ):
             with self.subTest(call=call):
                 self.assertAsks(bash(f"python3 - <<'PY'\n{call}\nPY"))
@@ -51,6 +52,7 @@ class ExchangeWriteGateTest(unittest.TestCase):
             "await exchange.sendAsset({ destination, token, amount })",
             "await exchangeClient.topUpIsolatedOnlyMargin({ asset: a, leverage: 3 })",
             "await exchange.reserveRequestWeight({ weight: 10 })",
+            "await exchange.userOutcome({ outcome, action })",
         ):
             with self.subTest(call=call):
                 self.assertAsks(bash(f'node -e "{call}"'))

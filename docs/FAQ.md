@@ -13,7 +13,7 @@ The release version and tag pin, all agent and skill files, the desk folders and
 Through a Hyperliquid API (agent) wallet you create in the Hyperliquid app and hand over through Grok Bot's secure secret card. It can place, modify and cancel orders. Withdrawals, transfers and bridging stay in the app with your main wallet.
 
 **How do I approve a trade?**
-The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `approve HG-20260816-01`. That exact phrase, after seeing that exact ticket, is the desk's record that you agreed, and without it nothing is sent. It is deliberately not the only thing standing in the way: the Bots write the floor's messages, so the enforcing gate is Grok Bot's own Require Approval rule on the exchange write path, outside the conversation. Set it up during setup. No Bot may type, quote forward or infer your approval.
+The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `approve HG-20260816-01`. That exact phrase, after seeing that exact ticket, is the desk's record that you agreed, and without it nothing is sent. It is deliberately not the only thing standing in the way: the Bots write the floor's messages, so the enforcing gate is a Grok Bot Auto-review **Ask first** rule on the exchange write path, outside the conversation. Set it up during setup. No Bot may type, quote forward or infer your approval.
 
 **Where do the ideas come from?**
 From you. The Strategist turns your idea into rules and tests it on Hyperliquid history with fees, funding and an out-of-sample split; the desk then paper-trades it on testnet if you like. The Market and Research Analysts give you the picture; you decide.
@@ -40,7 +40,7 @@ Mainnet, even when you trade on testnet, because testnet books are thin. Every n
 It never resends. It checks the exchange by client order id, and if the order is not there it still does not assume it failed, because a delayed send can land minutes later. Every send carries an expiry, so the desk waits for that deadline to pass, checks once more, and only then tells you the send is dead and asks for a fresh approval. You will be told which of those two happened.
 
 **How do I set Grok Bot's own approvals?**
-Settings, General, Auto-review: add a Require Approval rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Require Approval wins over Always Allow.
+Settings, General, Auto-review: add an **Ask first** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. **Ask first** wins over **Allow automatically**.
 
 **Does it work outside Grok Bot?**
 Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.1 --trust`. The format was tested with Grok Build 1.0.30 on an earlier release, not on 1.6.1; loading `rules/` there is not verified. In Claude Code, use `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`. In Codex, use `codex plugin marketplace add galleonlabs/hypergrok-trading-desk` then `codex plugin add hypergrok@hypergrok`. In Gemini CLI, use `gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk`. Gemini support first ships in 1.6.1. Codex and Gemini CLI load the skills only, so the roles run as labelled passes.

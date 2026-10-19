@@ -43,7 +43,7 @@ LINE_LIMIT = 160
 
 
 def doc_files(root):
-    # A symlinked doc is an alias; its target is rewritten under its own path.
+    # A symlinked doc is an alias; it is never read or rewritten through the link.
     return [
         rel for rel in markdown_files(root)
         if rel not in RELEASE_HISTORY_DOCS and not os.path.islink(os.path.join(root, rel))

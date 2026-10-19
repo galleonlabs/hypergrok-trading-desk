@@ -96,7 +96,7 @@ class ReleaseBumpTest(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.baseline = os.path.join(cls.temp.name, "baseline")
         shutil.copytree(
-            ROOT, cls.baseline,
+            ROOT, cls.baseline, symlinks=True,
             ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules"),
         )
         with open(os.path.join(cls.baseline, "scripts", "check.sh"), "w") as handle:
@@ -112,7 +112,7 @@ class ReleaseBumpTest(unittest.TestCase):
 
     def case_named(self, suffix):
         path = os.path.join(self.temp.name, self.id().rsplit(".", 1)[-1] + suffix)
-        shutil.copytree(self.baseline, path)
+        shutil.copytree(self.baseline, path, symlinks=True)
         return path
 
     def safe_case(self):
@@ -282,6 +282,27 @@ class ReleaseBumpTest(unittest.TestCase):
                     self.assertNotIn(STUB_MARK, output)
                     self.assertEqual(tree_digest(root), before)
                     self.assertEqual(read(self.temp.name, variant + "-outside"), outside_before)
+
+    def test_git_checkout_with_contained_symlink(self):
+        root = self.safe_case()
+        link = os.path.join(root, "CLAUDE.md")
+        if not os.path.islink(link):
+            os.symlink("AGENTS.md", link)
+        git = ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        for args in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "x"]):
+            subprocess.run([*git, *args], check=True, capture_output=True)
+        tracked = subprocess.run([*git, "ls-files", "-s", "CLAUDE.md"], check=True,
+                                 capture_output=True, text=True).stdout
+        self.assertTrue(tracked.startswith("120000 "), tracked)
+        before = tree_digest(root)
+        code, output = bump(root, NEW, "--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(tree_digest(root), before)
+        code, output = bump(root, NEW)
+        self.assertEqual(code, 0, output)
+        self.assertIn(STUB_MARK, output)
+        self.assertEqual(os.readlink(link), "AGENTS.md")
+        self.assertEqual(load(root, "plugin.json")["version"], NEW)
 
     def test_bump_rewrites_pins_and_syncs_hashes(self):
         root = self.safe_case()

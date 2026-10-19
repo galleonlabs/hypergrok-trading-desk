@@ -43,7 +43,11 @@ LINE_LIMIT = 160
 
 
 def doc_files(root):
-    return [rel for rel in markdown_files(root) if rel not in RELEASE_HISTORY_DOCS]
+    # A symlinked doc is an alias; its target is rewritten under its own path.
+    return [
+        rel for rel in markdown_files(root)
+        if rel not in RELEASE_HISTORY_DOCS and not os.path.islink(os.path.join(root, rel))
+    ]
 
 
 def safe_path(root, rel):
@@ -73,7 +77,12 @@ def preflight(root):
     for directory, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = [d for d in dirs if d != ".git"]
         for name in dirs + [f for f in files if f != ".git"]:
-            safe_path(root, os.path.relpath(os.path.join(directory, name), root))
+            path = os.path.join(directory, name)
+            rel = os.path.relpath(path, root)
+            if not os.path.islink(path):
+                safe_path(root, rel)
+            elif os.path.commonpath([root, os.path.realpath(path)]) != root:
+                raise ValueError(f"symlink escapes root: {rel}")
     for rel in [*MANIFESTS, "package.json", TEMPLATE, "scripts/check.sh"]:
         safe_path(root, rel)
     for entry in json.loads(read(root, TEMPLATE)).get("skills") or []:

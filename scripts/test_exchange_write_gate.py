@@ -36,6 +36,9 @@ class ExchangeWriteGateTest(unittest.TestCase):
             'exchange.update_leverage(3, "ETH", is_cross=True)',
             "exchange.schedule_cancel(None)",
             "hl_exchange.bulk_orders(orders, grouping='normalTpsl')",
+            'exchange.send_asset(dest, "", "spot", "USDC", 10.0)',
+            "exchange.agent_set_abstraction('u')",
+            "exchange.noop(nonce)",
         ):
             with self.subTest(call=call):
                 self.assertAsks(bash(f"python3 - <<'PY'\n{call}\nPY"))
@@ -45,6 +48,9 @@ class ExchangeWriteGateTest(unittest.TestCase):
             "await exchange.order({ orders: [order], grouping: 'na' })",
             "await exchangeClient.cancelByCloid({ cancels })",
             "await exchange.updateLeverage({ asset: a, isCross: true, leverage: 3 })",
+            "await exchange.sendAsset({ destination, token, amount })",
+            "await exchangeClient.topUpIsolatedOnlyMargin({ asset: a, leverage: 3 })",
+            "await exchange.reserveRequestWeight({ weight: 10 })",
         ):
             with self.subTest(call=call):
                 self.assertAsks(bash(f'node -e "{call}"'))

@@ -2,7 +2,7 @@
 
 `template/grok-bot.json` is the release contract for the public **HyperGrok Desk Lead** template. It records the exact public profile, source release, avatar, exported bootstrap skill and complete reviewed release inventory. `templateSkillNames` lists the skills carried by the share; `skills` contains all seventeen files and hashes that setup must install and verify.
 
-**Release preparation — 2026-10-25:** The 1.7.0 source and template contract are under review. The public template remains at release 1.6.1 until a fresh share has been published and verified. Earlier publication receipts below apply only to their named releases.
+**Release state — 2026-10-25:** The [1.7.0 public template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ) is published. Its complete exported bootstrap was independently read back in the native UI and matched the reviewed source. Source and package checks are recorded separately. Earlier receipts below apply only to their named releases.
 
 The public template carries one `hypergrok-bootstrap` skill. **Add to Grok Bot** imports the Desk Lead and bootstrap; **Start the desk.** fetches the pinned release and installs the full seventeen-skill desk. Grok Bot's share helper limits its inline recipe to 100,000 characters; the full reviewed pack exceeds that limit. Keep the complete instructions in the release instead of shortening them to fit the share.
 
@@ -73,6 +73,14 @@ The Desk Lead follows `hypergrok-bootstrap`. A passing result has:
 8. this sentence: **Setup stayed read-only: no key requested and no order created or sent.**
 
 Do not describe the template as a zero-interaction installer. **Add to Grok Bot** creates the Desk Lead; **Start the desk.** runs the reviewed setup. The public path is one click and one message.
+
+## Publication verification - 2026-10-25
+
+The [1.7.0 public template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ) was authored from reviewed candidate commit `57bfd65be33b3a5eeee43dbd66c1daa2ee560ae5`. The publishing Bot has the manifest name, title and description, the default geometric avatar and one exported `hypergrok-bootstrap` skill. Its Context panel contains the public description and that skill; no plugins, memories or routines are exported. The native Publish action returned **Your Bot was successfully published** and its card showed **Published**. The publishing Bot is retained for future updates.
+
+Independent native readback opened **View Details → Context → hypergrok-bootstrap**, selected its complete rendered content and compared the returned accessibility text with the reviewed source. The exact source name and description matched. The complete normalized Markdown body appeared unchanged: 9,450 UTF-8 bytes, SHA-256 `ed0e123a011a9837c285b207da3daccd4bd7497fa1426d1c9a2d85e40f1d06d7`. The complete source file is SHA-256 `423d4897673b04965e5ac697135470422e0e52b55525e48654eda87c7b5fc2a8`, matching the release manifest. Grok rebuilds the frontmatter wrapper; this proves the exported body and profile, not full-file byte identity or a fresh desk's readiness.
+
+A fresh public import and **Start the desk.** round trip has not been performed for this release. The source gate and clean pinned installation do not establish native seven-Bot acceptance. No account read, key provisioning, routine activation or exchange action was used for publication.
 
 ## Publication verification - 2026-10-13
 

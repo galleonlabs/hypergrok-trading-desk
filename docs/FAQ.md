@@ -4,7 +4,7 @@
 The release contains seven role profiles, seventeen skills and read-only Python tools. In Grok Bot, setup builds seven Bots, a six-Bot Trading Floor and a desk record. Other runtimes load the roles as subagents or labelled passes. Ask for a market brief, a sized ticket, a backtest or a review; each role reports its evidence.
 
 **What do I need to start?**
-For a terminal demo, run the [keyless Opening Bell](../README.md#try-it-now-no-keys) with Python 3. For the Grok Bot desk, use the [pinned bootstrap in the README](../README.md#start). The refreshed public template is being prepared; see [publication evidence](GROK_BOT_TEMPLATE.md). The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise; add a mainnet one when you decide to trade real money.
+For a terminal demo, run the [keyless Opening Bell](../README.md#try-it-now-no-keys) with Python 3. For the Grok Bot desk, add the [public HyperGrok Desk Lead template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ), then send **Start the desk.** It carries the 1.7.0 bootstrap. The [pinned bootstrap in the README](../README.md#start) is also available; see [publication evidence](GROK_BOT_TEMPLATE.md). The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise; add a mainnet one when you decide to trade real money.
 
 **What does the desk doctor inspect?**
 The release version and tag pin, all agent and skill files, the desk folders and record, and a public Hyperliquid `allMids` response. It never reads environment variables, keys or account state, and never calls the exchange write endpoint.

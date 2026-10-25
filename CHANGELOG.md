@@ -7,6 +7,7 @@
 + Fix close-position IOC examples to preserve approved price bounds with Decimal input and directional rounding. Require the correct account mapping and unexpired named-agent approval in the readiness example. Offline regressions exercise both paths without signing or sending.
 + Describe stressed stop costs as assumptions and clarify that the daily loss stop pauses new risk rather than capping losses on existing positions. Numeric ceilings and ticket controls are unchanged.
 + Refresh the public fork review: 43 listed forks, 42 accessible, 51 branches. Record inaccessible content explicitly. Release automation contributed by forks is already integrated; broker ports and simulated strategy products remain outside this desk.
++ Publish and independently inspect the refreshed native Grok Bot template. Retain its publishing Bot so future releases can update the share.
 + Include the release-pin helper and its regression suite, contributed through the fork network and hardened in upstream review. Sync release manifests, bootstrap and skill hashes together.
 
 

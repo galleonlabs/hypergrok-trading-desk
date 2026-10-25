@@ -32,7 +32,7 @@ For the seven-Bot desk with a shared Trading Floor, open Grok Bot and paste:
 
 > Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
-The refreshed public template is being prepared for release. Use the pinned bootstrap above; [publication evidence](docs/GROK_BOT_TEMPLATE.md) separates native publication from source validation.
+Or add the [public HyperGrok Desk Lead template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ), then send **Start the desk.** Its 1.7.0 bootstrap installs the complete seventeen-skill release. See the [publication and native content checks](docs/GROK_BOT_TEMPLATE.md#publication-verification---2026-10-25).
 
 The Desk Lead runs Opening Bell, installs the shared skills, prepares the team and returns a setup receipt. The desk starts in research mode. Add a testnet API wallet when you want to practise with play money; mainnet uses the same ticket process after its approval controls are verified. See the [full setup runbook](SETUP.md) for each step.
 
@@ -131,7 +131,7 @@ Neither is required to use HyperGrok. Installing instructions does not connect a
 
 - **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one.
 - **A trade-only API wallet**, provisioned through Grok Bot's secure secret store, is the only key the desk ever holds. It can trade; it cannot withdraw.
-- **Sized on a stressed stop.** A triggered stop is a market order: it slips past the trigger and pays the taker fee. The desk sizes on what the stop will actually cost, not its trigger price, and charges the entry at the taker rate too, so your risk budget means what it says. [See what a stop costs](docs/STOP_COST.md).
+- **Sized on a stressed stop.** The desk includes assumed adverse stop fills and taker fees on both legs when sizing. Actual losses can exceed that assumption. [See what a stop costs](docs/STOP_COST.md).
 - **Ceilings you cannot trade through.** Your limits file may only tighten the desk's own caps, never loosen them.
 - **Testnet first.** Every new kind of action is rehearsed with play money before it touches mainnet.
 - **One writer.** Six Bots read; one Bot sends, once per approval, and reconciles by client order id.
@@ -170,7 +170,7 @@ The package contains the instructions, role profiles, plugin manifests and read-
 
 Live listings: [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk) · [cursor.directory](https://cursor.directory/plugins/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
 
-After installation, load `desk-operating-model`; where skills are slash commands, run `/desk-operating-model`.
+After installation, load `desk-operating-model` using the command or context mechanism in your runtime guide.
 
 ## Inside the repository
 

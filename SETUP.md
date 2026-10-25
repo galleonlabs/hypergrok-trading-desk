@@ -2,15 +2,15 @@
 
 You are a Grok Bot building the user's Hyperliquid trading desk from this repository. Follow this file top to bottom. When you finish, the user has seven specialist Bots (six on a **Trading Floor** group chat, one reviewer by DM), seventeen shared skills, a prepared desk computer and a written desk record. Setup is read-only: no keys, no orders.
 
-If your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`: it performs this runbook, rings a live zero-key Opening Bell first, and returns the same receipt. This file remains the complete manual path and source of truth.
+In Grok Bot, if your runtime loaded this repository as a plugin, invoke `hypergrok-bootstrap`: it performs this runbook, rings a live zero-key Opening Bell first, and returns the same receipt. This file remains the complete manual path and source of truth.
 
 ## 1. Get the repository onto the desk computer
 
-If `/workspace/hypergrok` already contains a Git checkout, preserve it. Its `plugin.json` must name version `1.6.1`, and `git rev-parse HEAD` must equal `git rev-parse 'refs/tags/v1.6.1^{commit}'`. If the tag is unavailable or either comparison fails, report the existing version and commit and stop dependent setup without overwriting, resetting or switching the checkout. An older release passing its own structural check is insufficient. For a matching existing checkout, run only the final `cd`, commit and structural-check line below; otherwise clone:
+If `/workspace/hypergrok` already contains a Git checkout, preserve it. Its `plugin.json` must name version `1.7.0`, and `git rev-parse HEAD` must equal `git rev-parse 'refs/tags/v1.7.0^{commit}'`. If the tag is unavailable or either comparison fails, report the existing version and commit and stop dependent setup without overwriting, resetting or switching the checkout. An older release passing its own structural check is insufficient. For a matching existing checkout, run only the final `cd`, commit and structural-check line below; otherwise clone:
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok && git rev-parse HEAD && bash scripts/check.sh
 ```
 
@@ -20,11 +20,11 @@ That pin is a release tag, not a moving branch: the desk you build is the desk t
 
 `scripts/check.sh` is the desk's own structural check: it runs offline, touches no keys and no network, and confirms the skills, agents and manifests are intact and internally consistent. If it fails, stop and tell the user; do not build a desk from a tree that does not check out.
 
-Before using any agent profile or System prompt, run `git diff --exit-code refs/tags/v1.6.1 -- agents/` in the checkout. HEAD matching the tag does not prove the working files are unchanged. If the command reports differences or fails, name the affected paths, stop dependent setup and preserve the user's files.
+Before using any agent profile or System prompt, run `git diff --exit-code refs/tags/v1.7.0 -- agents/` in the checkout. HEAD matching the tag does not prove the working files are unchanged. If the command reports differences or fails, name the affected paths, stop dependent setup and preserve the user's files.
 
 Record the commit `git rev-parse HEAD` printed. It goes into `desk.md` in section 8 as `instructions commit`, so the desk can always say which version of these rules it is running and the user can diff it later.
 
-If the clone fails, do not fall back to downloading a loose archive over plain HTTP and unpacking it. An unverified tarball is exactly the thing a trading desk should refuse: nothing in it can be checked against the repository it claims to come from. Instead ask the user to attach the archive to the conversation, unpack it to `/workspace/hypergrok`, and run `bash scripts/check.sh` before going further.
+If the clone fails, report the error and keep setup pending. Do not switch to plain HTTP or unpack an archive with unverified provenance. Structural checks establish internal consistency, not that an archive came from this release; a user-supplied archive still needs trusted release provenance before setup continues.
 
 ## 2. Read the desk
 
@@ -71,9 +71,9 @@ For each Bot:
 - **Avatar:** the desk mascot at `/workspace/hypergrok/assets/mascot.jpg` (attach it from the computer, or let the user pick their own).
 - Then send the new Bot its full **System prompt** section as its first message, prefixed with: "These are your standing instructions. Confirm you have read them and state your job in one sentence." Ask it to keep the instructions in memory and to re-read its file at `/workspace/hypergrok/agents/<name>.md` whenever it is unsure.
 
-Read back the native Name, Job and Description and compare them exactly with the profile. Before reuse or after creation, verify the complete standing System prompt through supported native readback. If a full persistent instruction field is not exposed, acceptable separate evidence is readback of the exact full System prompt delivered as a standing-instructions message, the Bot's acknowledgement that it follows the pinned agent file, and that local file's hash matching the expected bytes from `git show 'refs/tags/v1.6.1:agents/<name>.md'`. Hashing an arbitrary local file is insufficient. Record this as `delivery-and-pointer`, with the limitation that delivery and the checked target do not establish byte-identical persistent memory. A matching Description, summarized memory or file pointer alone is insufficient.
+Read back the native Name, Job and Description and compare them exactly with the profile. Before reuse or after creation, verify the complete standing System prompt through supported native readback. If a full persistent instruction field is not exposed, acceptable separate evidence is readback of the exact full System prompt delivered as a standing-instructions message, the Bot's acknowledgement that it follows the pinned agent file, and that local file's hash matching the expected bytes from `git show 'refs/tags/v1.7.0:agents/<name>.md'`. Hashing an arbitrary local file is insufficient. Record this as `delivery-and-pointer`, with the limitation that delivery and the checked target do not establish byte-identical persistent memory. A matching Description, summarized memory or file pointer alone is insufficient.
 
-If an existing seat differs, is missing or lacks both proof methods, create a separate Bot and verify it. Preserve the existing Bots and unrelated desks' profiles, prompts and memories. Record the selected native Bot IDs; names alone do not identify the intended seats. Grok Bot lets existing Bots create focused Bots. If a needed creation step or both supported verification methods are unavailable, give the user the exact profile card and full standing prompt for each affected role as labelled copy-and-paste blocks, and keep readiness pending until verified. Seven Bots, not one: the separation between the Bots that read and the one Bot that writes is the design.
+If an existing seat differs, is missing or lacks both proof methods, create a separate Bot and verify it. Preserve the existing Bots and unrelated desks' profiles, prompts and memories. Record the selected native Bot IDs; names alone do not identify the intended seats. Grok Bot lets existing Bots create focused Bots. If a needed creation step or both supported verification methods are unavailable, give the user the exact profile card and full standing prompt for each affected role as labelled copy-and-paste blocks, and keep readiness pending until verified. The Grok Bot desk uses seven separate Bots, with one designated exchange writer.
 
 ## 5. Install the skills
 
@@ -113,7 +113,7 @@ Post this as the first message in the group:
 
 Ask the user to open **Settings, General, Auto-review** and add an **Ask first** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. Verify that the native control covers SDK calls, scripts and direct HTTP through the supported settings or a non-sending approval preview; do not submit a live order to test it. Record the coverage evidence in `desk.md`. If coverage cannot be established, keep the desk research-only, do not provision an API wallet key, and report the exact missing control. Chat approval and a command-matching hook cannot substitute for this gate.
 
-That rule is the gate. The approval phrase in chat is the desk's record that the user agreed, but the Bots write the floor's messages, so it cannot be the only thing standing in the way of a send. Set the rule up here, not later.
+The native rule enforces approval outside Bot-authored messages. The phrase in chat records the exact ticket the user approved; it cannot substitute for that control.
 
 Then ask the user one question: **may the desk place a protective stop for a position that has none, without waiting for approval?** It is reduce-only, so it can only reduce exposure, and the alternative is a naked position waiting on someone to read a message. If yes, record it in `desk.md` under `standing approvals` with the date. If no, record that too, along with how long the desk should chase them before telling them to fix it in the Hyperliquid app themselves.
 
@@ -182,24 +182,12 @@ Only after the required native and role checks pass, say: "The desk is ready. As
 
 ## If you are not Grok Bot
 
-The plugin supplies the same skills and agents to Grok Build, Cursor and Claude Code. Cursor and Claude Code also load `rules/`. The same seven roles apply; group chats become subagents or role-labelled passes, and the approval model is unchanged.
+Use the guide for your runtime:
 
-In Claude Code, add this repository as a marketplace and install the plugin:
+- [Claude Code](docs/hyperliquid-claude-code.md): plugin skills, subagents and the exchange-write confirmation hook. Invoke `/hypergrok:desk-operating-model` explicitly; `rules/` is not a Claude Code plugin component.
+- [Cursor](docs/hyperliquid-cursor.md): skills, role profiles and the declared desk rules.
+- [Grok Build](docs/hyperliquid-grok-build.md): skills and agent directories; rule loading remains unverified.
+- [Codex](docs/hyperliquid-codex.md): skills, with role prompts run as labelled passes.
+- [Gemini CLI](docs/hyperliquid-gemini-cli.md): skills and `GEMINI.md`, with role prompts run as labelled passes.
 
-```
-/plugin marketplace add galleonlabs/hypergrok-trading-desk
-/plugin install hypergrok@hypergrok
-```
-
-The Claude Code plugin also registers a `PreToolUse` hook that asks you to confirm any Bash command, or script it names, that looks like a Hyperliquid exchange write, including in auto mode. It never approves a send and does not replace the ticket protocol or native approval coverage in section 7.
-
-In Grok Build, install the reviewed release. Its format was tested with Grok Build 1.0.30 for an earlier release; 1.6.1 has no native installation proof yet.
-
-```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.1 --trust
-```
-
-Grok Build reports the skills and agents directories; loading `rules/` is not verified.
-In Cursor, open the repository and enable the plugin.
-
-Either way, run `/desk-operating-model` to begin.
+Grok Bot's cloud paths, native Bot creation and Trading Floor steps do not describe these runtimes. Use their supported workspace and role mechanisms, and report what actually loaded. Preserve the desk's evidence standard, Risk PASS, exact ticket approval, expiry, single writer, single send and reconciliation. Verify native approval coverage for the actual SDK, script and HTTP routes before provisioning a key; a command-matching hook alone is insufficient. If coverage is unavailable, remain in research mode.

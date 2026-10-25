@@ -9,14 +9,14 @@ codex plugin marketplace add galleonlabs/hypergrok-trading-desk
 codex plugin add hypergrok@hypergrok
 ```
 
-Codex reads `.agents/plugins/marketplace.json`, which pins the reviewed release. Codex CLI 0.160.0 installed 1.6.1 through it and listed all seventeen skills.
+Codex reads `.agents/plugins/marketplace.json`, which pins the reviewed release. The [release history](../CHANGELOG.md#161---2026-10-13) records Codex CLI 0.160.0 installing the preceding release and listing all seventeen skills. That test does not establish native acceptance of a later release.
 
-Start with the `desk-operating-model` skill, the desk's constitution.
+Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
 + **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
-+ **Roles as labelled passes.** Codex has no subagent component, so the seven roles in `agents/` run as labelled passes using each role's system prompt. Only the Execution Trader pass writes to the exchange.
++ **Roles as labelled passes.** This plugin's Codex entry installs skills without registering `agents/` as native subagents. Run the seven roles as labelled passes using each role's system prompt. Only the Execution Trader pass writes to the exchange.
 
 The Claude Code exchange-write hook does not load in Codex. The desk's approval by ticket id still applies.
 
@@ -25,7 +25,7 @@ The Claude Code exchange-write hook does not load in Codex. The desk's approval 
 Ask for a market brief, for example "Brief me on ETH". The reads use Hyperliquid's public `/info` endpoint, with no wallet or account. The same read works from a terminal:
 
 ```bash
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```

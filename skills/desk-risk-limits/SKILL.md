@@ -3,7 +3,7 @@ name: desk-risk-limits
 description: How the Risk Manager writes the desk's risk limits with the user, sizes every proposed trade from live account state and Hyperliquid's real constraints, checks the book, and issues a PASS or REJECT with exact ticket fields. Use for setting up or changing limits, sizing any trade, and answering "how's the book".
 license: MIT
 metadata:
-  version: "1.1.2"
+  version: "1.1.3"
   author: Galleon Labs
   category: desk
 ---
@@ -14,7 +14,7 @@ The user sets the desk's limits, in writing, once; the Risk Manager enforces the
 
 ## 0. Desk ceilings
 
-The desk holds a few ceilings of its own. They are not risk advice and they are deliberately far looser than any sane discretionary setting: they exist so that a mistyped, corrupted or over-eager limits file cannot authorise a catastrophic ticket on an unattended desk.
+These ceilings reject limits files that exceed the desk's bounds. They are maximum permitted settings, not recommended risk levels; the user chooses stricter limits below.
 
 | Ceiling | Value |
 | --- | --- |
@@ -100,11 +100,11 @@ check             market in allowed list ; stop present ; daily loss stop not hi
 
 `R` for the ticket is `stop_distance` in USD per unit, and targets are quoted in R by the user, never invented by the desk. Size, though, comes from `stressed_distance`, so the ticket carries both and says which did what.
 
-**Why the stress.** A stop is a trigger order: when it fires it becomes a market or IOC order and fills at whatever is there, which is worse than the trigger price and worse still on thin depth, in a gap, or in a liquidation cascade. Both legs also pay fees. Sizing from the nominal `stop_distance` therefore prices a loss that cannot happen and quietly overshoots `max_risk_pct` on every trade. Size from the stressed distance and the budget means what it says. `slip_stop` is an assumption: state the number used and where it came from in the PASS, and widen it rather than narrow it when the depth read is stale or the size is large relative to the book.
+**Why the stress.** A triggered stop can fill beyond its trigger price, partially fill or leave a remainder when liquidity does not reach its price bound. Fees and adverse fills increase the loss beyond the nominal `stop_distance`. Size from the stressed distance and state the `slip_stop` assumption and its source in the PASS. Stale depth cannot justify a smaller stress; refresh the evidence before sizing.
 
-Worked, on the numbers from `agents/risk-manager.md`: equity $10,200, 0.5% budget, ETH long at 3,000 with the stop at 2,900, 3.00 of slippage on the triggered stop (10 bps of the 3,000 ticket price, the desk's convention in `desk-trade-lifecycle`) and 0.045% taker on both legs. Stressed distance is 105.65, not 100, so the size is 0.4827 ETH rather than 0.51, and the worst case comes to exactly the $51.00 budgeted. Sized the naive way at 0.51 ETH, the same stop costs $53.88, which is 0.528% of equity: the budget was 0.5% and the desk quietly spent more, on every trade, in the same direction.
+Worked example from `agents/risk-manager.md`: equity $10,200, 0.5% budget, ETH long at 3,000 with the stop at 2,900, assumed stop slippage 3.00 (10 bps of the 3,000 ticket price) and 0.045% taker fees on both legs. Stressed distance is 105.65365 USD/ETH, displayed as 105.65. Rounding size down gives 0.4827 ETH and an assumed loss of $50.9990, displayed as $51.00. Sizing on the nominal 100-point stop gives 0.51 ETH and an assumed loss of $53.88, or 0.528% of equity.
 
-The stress is a sizing input, not a promise. A gap through the stop can still exceed it; that is the residual the user carries, and the daily loss stop is what bounds it.
+Stress is a sizing assumption, not a maximum loss. A gap, partial fill or unfilled stop can exceed it. The daily loss stop pauses new risk after a loss threshold; it does not cap losses on existing positions.
 
 **Reserve capacity before the fill.** `pending_risk` and `pending_margin` cover other live ticket reservations, resting entry remainders, and sends whose outcomes are unknown, across this account and network. The Risk Manager allocates capacity in order and records the ticket revision, reserved risk and margin under `## risk` before issuing a PASS; the next ticket includes that reservation. Do not let two parallel proposals each spend the same free capacity. Exclude this candidate's own reservation from the `pending_*` sums, then include its risk and margin once in the checks above.
 

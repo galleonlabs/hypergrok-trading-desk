@@ -9,7 +9,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/galleonlabs/hypergrok-trading-desk.git",
-        "ref": "v1.6.1"
+        "ref": "v1.7.0"
       },
       "policy": {
         "installation": "AVAILABLE",

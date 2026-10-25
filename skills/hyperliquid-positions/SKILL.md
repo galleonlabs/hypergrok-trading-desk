@@ -3,7 +3,7 @@ name: hyperliquid-positions
 description: Manage Hyperliquid perp positions and margin from the desk computer - read positions and margin, set leverage and cross/isolated mode, add isolated margin, understand margin tiers and liquidation price, close a position with a reduce-only IOC, and clean up orphaned orders. Write actions are Execution Trader only, on an approved ticket. Use for leverage changes, closes, protection checks and margin questions.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -81,15 +81,15 @@ Read the size live seconds before sending; the ticket states the slippage bound.
 coin, slippage = "ETH", 0.003                                  # 30 bps bound
 pos = next((p["position"] for p in info.user_state(ACCOUNT)["assetPositions"] if p["position"]["coin"] == coin), None)
 if not pos: raise SystemExit("no open position")
-szi = float(pos["szi"]); is_buy = szi < 0                      # closing a short buys
+szi = Decimal(pos["szi"]); is_buy = szi < 0                    # closing a short buys
 sz = round_sz(coin, abs(szi))
-mid = float(info.all_mids()[coin])
-px = round_px(coin, mid * (1 + slippage) if is_buy else mid * (1 - slippage))
+mid = info.all_mids()[coin]
+px = bounded_px(coin, mid, slippage, is_buy)
 cloid = new_cloid(); print("cloid", cloid.to_raw(), "bound", px, "size", sz)
 res = exchange.order(coin, is_buy, sz, px, {"limit": {"tif": "Ioc"}}, reduce_only=True, cloid=cloid)
 print(res)
-# SDK shortcut with the same semantics: exchange.market_close(coin, sz=None, px=None, slippage=0.003, cloid=cloid)
-# It returns None (not an error) when there is no position, and it does not round a caller-supplied sz.
+# exchange.market_close also sends a reduce-only IOC, but its nearest price rounding can widen a ticket bound.
+# Use bounded_px above for an exact approved floor/ceiling; an IOC can partially fill or leave a remainder.
 ```
 
 Partial close: pass the reduced size. The position still exists afterwards and **still needs a stop**.

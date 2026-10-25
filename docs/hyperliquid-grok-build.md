@@ -7,7 +7,7 @@ HyperGrok turns Grok Build into a Hyperliquid trading desk: seven roles and seve
 Install the reviewed release:
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.1 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.7.0 --trust
 ```
 
 Or register this repository's Grok marketplace, which pins the same release, and install by name:
@@ -19,7 +19,7 @@ grok plugin install hypergrok --trust
 
 The installation format was tested with Grok Build 1.0.30 for an earlier release; 1.6.1 has no native installation proof yet.
 
-Start with the `desk-operating-model` skill, the desk's constitution.
+Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
@@ -33,7 +33,7 @@ Grok Build reports the skills and agents directories; loading `rules/` is not ve
 Ask for a market brief, for example "Brief me on ETH". The reads use Hyperliquid's public `/info` endpoint, with no wallet or account. The same read works from a terminal:
 
 ```bash
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```

@@ -3,7 +3,7 @@ name: hyperliquid-account
 description: Read a Hyperliquid account from the desk computer - positions and margin, spot balances, open orders including trigger details, fills, funding paid, ledger updates, order status by oid or cloid, historical orders, portfolio history, fee tier and rate-limit budget - with curl and Python SDK examples. Read-only, needs only the account address. Use for sizing inputs, book checks, reconciliation and reviews.
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -79,7 +79,7 @@ START=$(( $(date +%s000) - 86400000 ))
 hl "{\"type\":\"userFillsByTime\",\"user\":\"$ADDR\",\"startTime\":$START}" | jq 'length'
 ```
 
-`crossed: true` means taker; `fee` includes any builder fee and is negative for a rebate; `dir` reads like `Open Long`, `Close Short`; `startPosition` is the size before the fill; `closedPnl` is realised on that fill. `userFills` returns the most recent 2000; `userFillsByTime` returns up to 2000 per call from the last 10,000. Paginate with `startTime` = the last `time` you received (inclusive, because many fills share one millisecond) and de-duplicate by `tid`. Python: `info.user_fills(ADDR)`, `info.user_fills_by_time(ADDR, start_ms, end_ms)`.
+`crossed: true` means taker; `fee` includes any builder fee and is negative for a rebate; `dir` reads like `Open Long`, `Close Short`; `startPosition` is the size before the fill; `closedPnl` is realised on that fill. `userFills` returns the most recent 2000; `userFillsByTime` returns up to 2000 per call from the last 10,000. Paginate with `startTime` = the last `time` you received (inclusive, because many fills share one millisecond) and de-duplicate by account/network plus `(time, coin, tid)`. A full page that cannot advance beyond a shared timestamp is incomplete coverage; never skip that boundary to force progress. Python: `info.user_fills(ADDR)`, `info.user_fills_by_time(ADDR, start_ms, end_ms)`.
 
 ## Funding paid and ledger
 
@@ -97,7 +97,7 @@ hl "{\"type\":\"historicalOrders\",\"user\":\"$ADDR\"}" | jq '.[:20][] | {status
 hl "{\"type\":\"userTwapSliceFills\",\"user\":\"$ADDR\"}" | jq '.[:5]'
 ```
 
-Up to 2000 recent orders with their final status; the Trade Reviewer's source for "was the stop on the exchange the whole time". Python: `info.historical_orders(ADDR)`, `info.user_twap_slice_fills(ADDR)`.
+Up to 2000 recent orders with their current/final status. This bounded history helps reconstruct protection; proving that a stop covered the position throughout also needs the journal and contemporaneous order/position evidence. Python: `info.historical_orders(ADDR)`, `info.user_twap_slice_fills(ADDR)`.
 
 ## Portfolio history, fees, rate limit, role
 
@@ -109,7 +109,7 @@ hl "{\"type\":\"userRole\",\"user\":\"$ADDR\"}" | jq .
 hl "{\"type\":\"extraAgents\",\"user\":\"$ADDR\"}" | jq '.[] | {address, name, validUntil}'
 ```
 
-`portfolio` gives PnL and account-value history per period (`day`, `week`, `month`, `allTime`, and perp-only variants); `userFees` gives the effective taker (`userCrossRate`) and maker (`userAddRate`) rates for the strategy lab and reviews; `userRateLimit` shows the address's action budget (`nRequestsUsed`, `nRequestsCap`, `cumVlm`); `userRole` classifies an address (`user`, `agent`, `vault`, `subAccount`, `missing`); `extraAgents` lists approved API wallets with expiry. Python: `info.portfolio(ADDR)`, `info.user_fees(ADDR)`, `info.user_rate_limit(ADDR)`, `info.user_role(ADDR)`, `info.extra_agents(ADDR)`.
+`portfolio` gives PnL and account-value history per period (`day`, `week`, `month`, `allTime`, and perp-only variants); `userFees` gives the account's base taker (`userCrossRate`) and maker (`userAddRate`) rates; apply the documented referral, collateral, stable-pair and HIP-3 deployer/growth modifiers for the chosen market before estimating costs, then reconcile actual `fee` and `feeToken` from fills; `userRateLimit` shows the address's action budget (`nRequestsUsed`, `nRequestsCap`, `cumVlm`); `userRole` classifies an address (`user`, `agent`, `vault`, `subAccount`, `missing`); `extraAgents` lists approved API wallets with expiry. Python: `info.portfolio(ADDR)`, `info.user_fees(ADDR)`, `info.user_rate_limit(ADDR)`, `info.user_role(ADDR)`, `info.extra_agents(ADDR)`.
 
 Per-market account data (leverage setting, available to trade, max trade sizes) without opening a position: `hl "{\"type\":\"activeAssetData\",\"user\":\"$ADDR\",\"coin\":\"ETH\"}"`.
 
@@ -134,5 +134,5 @@ Report per `desk-risk-limits` section 3.
 - Querying the API wallet's address. Everything comes back empty and looks like "no positions".
 - Assuming `openOrders` shows trigger details; it does not. Use `frontendOpenOrders`.
 - Reading `userFills` and forgetting the 2000-item window; use `userFillsByTime` with pagination for reviews.
-- Treating `withdrawable` as free margin for new positions; use `accountValue - totalMarginUsed` with headroom, and check the tier.
+- Treating `withdrawable`, spot balances or `accountValue - totalMarginUsed` as universal trading capacity. Verify the abstraction mode, use its documented margin basis with headroom, and check `activeAssetData` and the notional tier.
 - Mixing networks: a mainnet address on the testnet endpoint is a different (probably empty) account.

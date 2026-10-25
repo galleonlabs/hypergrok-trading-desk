@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 - 2026-10-25
 
-Docs and read-only tools only. No skill, role, rule, template hash or install pin changed.
++ Simplify onboarding across the README, setup, role profiles and five runtime guides. Show a real dated Opening Bell capture, put the worked ticket beside its example, and document each runtime's actual roles, rules and hook support. Add release-watching, Discussions and contribution routes with community guidelines.
++ Recheck the current official Python SDK 0.24.0 and TypeScript SDK 0.33.3. Pin reviewed installations in a persistent Python virtual environment and local TypeScript project. Correct native ESM Decimal imports, account fee modifiers, account-mode capacity, history pagination and request weights.
++ Fix close-position IOC examples to preserve approved price bounds with Decimal input and directional rounding. Require the correct account mapping and unexpired named-agent approval in the readiness example. Offline regressions exercise both paths without signing or sending.
++ Describe stressed stop costs as assumptions and clarify that the daily loss stop pauses new risk rather than capping losses on existing positions. Numeric ceilings and ticket controls are unchanged.
++ Refresh the public fork review: 43 listed forks, 42 accessible, 51 branches. Record inaccessible content explicitly. Release automation contributed by forks is already integrated; broker ports and simulated strategy products remain outside this desk.
++ Include the release-pin helper and its regression suite, contributed through the fork network and hardened in upstream review. Sync release manifests, bootstrap and skill hashes together.
+
 
 + Add `scripts/stop_cost.py`, a zero-key check of what a stop really costs. It sizes one trade on the drawn stop and on the desk's stressed stop (`desk-risk-limits` section 2.2) and prints what a triggered stop would cost each way. Stop slippage is the largest of a 10 bps floor, the current spread and the live book's impact for the drawn-stop size; fees are charged at the taker rate on both legs, as the desk does. A book read that does not hold the size is reported as a floor with the budget unproven. It reproduces ticket `HG-20260816-01`, reads only public `/info`, and shares the Opening Bell's `--schema`, `--json` and error contract, adding `unpriceable_stop` for a stop the live book cannot price. HIP-3 markets need an explicit `--taker-fee`. Documented in `docs/STOP_COST.md`.
 + Share coin and DEX validation (`cli_contract.market_selection`) and the metadata read (`opening_bell.read_market`) between the Opening Bell and the stop-cost check; each script keeps its own user agent.

@@ -1,9 +1,9 @@
 ---
 name: hyperliquid-api-reference
-description: Compact reference for the Hyperliquid API as the desk uses it - endpoints and envelopes, every /info request type, every /exchange action with its signing scheme, order and status vocabularies, asset ids, tick and lot rules, rate limits, WebSocket subscription list, error strings, and where the official docs are. Use to look up an exact field, request type or limit before writing a call, and to map an error string to its cause.
+description: Compact reference for the Hyperliquid API as the desk uses it - endpoints and envelopes, desk-used /info request types and /exchange actions with their signing schemes, order and status vocabularies, asset ids, tick and lot rules, rate limits, WebSocket subscription list, error strings, and where the official docs are. Use to look up an exact field, request type or limit before writing a call, and to map an error string to its cause.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
   author: Galleon Labs
   category: hyperliquid
   docs: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api
@@ -11,7 +11,7 @@ metadata:
 
 # Hyperliquid API reference (desk edition)
 
-Verified against the official docs on 2026-08-16. When in doubt, fetch the page: append `.md` to any docs URL for raw markdown, for example `https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md`.
+Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 ([scope and evidence](../../docs/PROVENANCE.md#hyperliquid-compatibility-review---2026-10-25)). This is a scoped reference, not an exhaustive inventory of the exchange's growing API. When in doubt, fetch the page: append `.md` to any docs URL for raw markdown, for example `https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md`.
 
 ## Endpoints
 
@@ -118,12 +118,12 @@ Order status vocabulary (`orderStatus`, `historicalOrders`, WS `orderUpdates`): 
 ## Rate limits
 
 - Per IP: 1200 weight per minute across REST. `/exchange` weight `1 + floor(n/40)`. `/info` weight 2 for `l2Book, allMids, clearinghouseState, orderStatus, spotClearinghouseState, exchangeStatus`; 60 for `userRole`; 20 for the rest; +1 per 20 items for list queries; `candleSnapshot` +1 per 60 candles.
-- Per address (actions): 10,000 buffer + 1 per 1 USDC cumulative volume; when exhausted, 1 action per 10 s; cancels get `min(limit + 100000, 2 x limit)`. Stale `expiresAfter` rejections cost 5x. Unified/portfolio-margin accounts capped at 50k actions per day.
+- Per address (actions): 10,000 buffer + 1 per 1 USDC cumulative volume; when exhausted, 1 action per 10 s; cancels get `min(limit + 100000, 2 x limit)`. Stale `expiresAfter` rejections cost 5x. Check the live limit reference for mode-specific constraints.
 - WebSocket per IP: 10 connections, 30 new per minute, 1000 subscriptions, 10 distinct users, 2000 messages per minute, 100 in-flight posts.
 
 ## WebSocket
 
-`{"method":"subscribe","subscription":{...}}`; heartbeat `{"method":"ping"}` / `{"channel":"pong"}`; idle connections closed after 60 s. Types: `allMids, notification, webData3, candle, l2Book, trades, orderUpdates, userEvents (channel "user"), userFills, userFundings, userNonFundingLedgerUpdates, activeAssetCtx, activeAssetData, userTwapSliceFills, userTwapHistory, twapStates, bbo, clearinghouseState, openOrders, spotState, allDexsClearinghouseState, allDexsAssetCtxs, fastAssetCtxs`. Post `/info` or signed actions over the socket with `{"method":"post","id":n,"request":{"type":"info"|"action","payload":{...}}}`.
+`{"method":"subscribe","subscription":{...}}`; heartbeat `{"method":"ping"}` / `{"channel":"pong"}`; idle connections closed after 60 s. Types: `allMids, notification, webData3, candle, l2Book, trades, orderUpdates, userEvents (channel "user"), userFills, userFundings, userNonFundingLedgerUpdates, activeAssetCtx, activeAssetData, userTwapSliceFills, userTwapHistory, twapStates, bbo, clearinghouseState, openOrders, spotState, allDexsClearinghouseState, allDexsAssetCtxs, outcomeMetaUpdates, fastAssetCtxs`. Post `/info` or signed actions over the socket with `{"method":"post","id":n,"request":{"type":"info"|"action","payload":{...}}}`.
 
 ## Error strings
 
@@ -134,7 +134,7 @@ Order status vocabulary (`orderStatus`, `historicalOrders`, WS `orderUpdates`): 
 - Funding: hourly, peer to peer, computed from an 8h formula paid 1/8 each hour, capped 4%/h, paid on **oracle** price; API rates are hourly.
 - Mark price (median of oracle-adjusted mid, book mid and CEX perp mids) drives margining, liquidation and TP/SL triggers.
 - Maintenance margin = half the initial margin at the tier's max leverage; partial liquidations first for large positions; cross liquidation price ignores the leverage setting.
-- Fees: base taker 0.045% / maker 0.015% perps, 0.07% / 0.04% spot, tiered by 14-day volume, staking and referral discounts; effective rates via `userFees`.
+- Fees: base taker 0.045% / maker 0.015% perps, 0.07% / 0.04% spot, tiered by 14-day volume, staking and referral discounts; account base rates via `userFees`; apply referral, aligned-quote, stable-pair and HIP-3 deployer/growth modifiers for the market. Actual fill fees remain the reconciliation source.
 - Testnet: same API; faucet at `app.hyperliquid-testnet.xyz/drip` (needs an address that has deposited on mainnet); much tighter margin tiers; asset ids differ.
 
 ## Official pages worth fetching

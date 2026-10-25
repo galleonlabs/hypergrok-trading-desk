@@ -3,7 +3,7 @@ name: hyperliquid-setup
 description: Prepare the desk computer to work with Hyperliquid - install the SDKs, pick testnet or mainnet, verify connectivity, and (only when the user asks) provision a trade-only API wallet through the secure secret store and verify it is approved. Use during desk setup, when moving between research, testnet and mainnet levels, when a key is rotated, or when any Hyperliquid call fails with an environment problem.
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -32,10 +32,13 @@ Python (used by most snippets on the desk):
 
 ```bash
 python3 --version                                  # 3.9+ required, 3.11+ preferred
-python3 -m pip install --user --upgrade "hyperliquid-python-sdk>=0.24,<1" \
-  || python3 -m pip install --break-system-packages --upgrade "hyperliquid-python-sdk>=0.24,<1"
+python3 -m venv ~/.hypergrok/venv
+source ~/.hypergrok/venv/bin/activate
+python3 -m pip install "hyperliquid-python-sdk==0.24.0"
 python3 -c "import hyperliquid, eth_account; print('ok', hyperliquid.__name__)"
 ```
+
+Activate the same environment with `source ~/.hypergrok/venv/bin/activate` in each new shell before SDK snippets. The public Python tools shipped here need no SDK or activation. These are the versions reviewed on 2026-10-25; review API and snippet compatibility before upgrading them.
 
 Optional TypeScript (if the user prefers TS or wants the WebSocket client from `@nktkas/hyperliquid`):
 
@@ -44,7 +47,7 @@ node --version                                      # 22.12+ required by @nktkas
 mkdir -p /workspace/trading-desk/ts && cd /workspace/trading-desk/ts
 [ -f package.json ] || npm init -y >/dev/null
 npm pkg set type=module >/dev/null                  # so .js files can use import and top-level await
-npm i @nktkas/hyperliquid viem
+npm i @nktkas/hyperliquid@0.33.3 viem@2.57.11 decimal.js@10.6.0
 node -e "import('@nktkas/hyperliquid').then(m=>console.log('ok', Object.keys(m).length))"
 ```
 
@@ -123,7 +126,7 @@ The account address is public. Reads use it; the Execution Trader passes it as `
 Run by the Execution Trader; read-only; proves the key belongs to the account on this network without sending anything.
 
 ```python
-import os
+import os, time
 import eth_account
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
@@ -146,9 +149,10 @@ agent_addr = eth_account.Account.from_key(load_key()).address   # derived locall
 info = Info(base, skip_ws=True)
 role = info.user_role(agent_addr)                       # {"role": "agent", "data": {"user": "0x..."}} when approved
 agents = info.extra_agents(account)                     # named agents: [{"address","name","validUntil"}, ...]
-listed = any(a["address"].lower() == agent_addr.lower() for a in agents)
+named = next((a for a in agents if a["address"].lower() == agent_addr.lower()), None)
 acts_for_account = role.get("role") == "agent" and role.get("data", {}).get("user", "").lower() == account.lower()
-approved = acts_for_account or listed                   # an unnamed agent is valid but may not appear in extraAgents
+unexpired = named is None or named["validUntil"] > time.time() * 1000
+approved = acts_for_account and unexpired               # an unnamed agent is proved by userRole alone
 state = info.user_state(account)
 
 print(f"network={network} account={account}")
@@ -171,6 +175,6 @@ Ready means: `role=agent`, `approved_for_account=True`, `validUntil` in the futu
 
 - Using the API wallet's address as `HYPERLIQUID_ACCOUNT_ADDRESS`. Reads on the agent's address show an empty account; the account is the main wallet's address.
 - Signing for mainnet with a testnet key or vice versa. The signature encodes the network; the exchange rejects the mismatch, but the desk should never get that far.
-- Installing the SDK into a temporary environment that does not survive a computer refresh. Prefer `--user`; re-run section 2 if imports fail after a restart.
+- Installing the SDK into a temporary environment or forgetting to activate it in a new shell. Keep `~/.hypergrok/venv`; re-run section 2 if that directory is lost after a computer refresh.
 - `Info(...)` performs network calls on construction; pass `skip_ws=True` unless you want the WebSocket thread.
 - Printing environment variables while debugging. Redact anything that could be the key.

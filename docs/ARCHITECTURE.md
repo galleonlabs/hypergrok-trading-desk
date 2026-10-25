@@ -1,6 +1,6 @@
 # How the desk works
 
-HyperGrok runs entirely inside your Grok Bot workspace: your Bots, your shared cloud computer, your conversations. This repository is the blueprint they build from.
+In Grok Bot, HyperGrok uses your Bots, shared cloud computer and conversations. This repository supplies the instructions and read-only tools. [Other runtimes](#other-runtimes) use the same process with subagents or labelled role passes.
 
 ## The floor
 
@@ -23,7 +23,7 @@ secret:    HYPERLIQUID_PRIVATE_KEY - a trade-only API wallet, from Grok Bot's se
 
 The shared Desk Lead starts on the read plane. `hypergrok-bootstrap` installs the pinned release, runs `scripts/opening_bell.py` against public `/info`, prepares the desk, creates the team when the product allows it, and finishes with `scripts/desk_doctor.py`. None of those first-run paths reads a key or calls `/exchange`.
 
-Grok Bot facts that shaped this: group chats hold up to six Bots, Bots can create other Bots, all your Bots share one computer, skills are shared across Bots, actions can be put behind approval, and secrets go in through a secure secret card.
+The six-Bot group limit leaves the Trade Reviewer outside the Floor. Bots share the computer and skills, so role separation is a working convention rather than credential isolation. Native approval controls and the secret store provide separate controls; setup verifies their availability.
 
 ## One trade, seven stages
 
@@ -37,7 +37,7 @@ Adjusting, adding, reducing and closing are trades too: same path, new ticket un
 
 ## Where things live
 
-Chat is where the desk talks; files are where it remembers.
+Working files live under `/workspace/trading-desk/`; chat supplies context, while these records retain the lifecycle evidence.
 
 | File | What it is |
 | --- | --- |
@@ -59,20 +59,32 @@ Data completeness, statistical evidence, Risk PASS and a user's exact ticket app
 
 ## Trust boundaries
 
-**Read plane.** Six Bots read: `POST /info` and public web pages. Plenty of judgement, no keys.
+**Reads.** Six Bots use `POST /info` and public web pages without signing keys.
 
-**Write plane.** One Bot writes: `POST /exchange` with the API wallet, only when a proposal carries a Risk PASS, your approval by id, and a passing pre-send checklist. One approval, one send. Every send is bounded by `expiresAfter`, so a lost response is reconciled by client order id and a replacement waits until the original is provably incapable of arriving. A clean read is not proof; an expired original is.
+**Writes.** One Bot uses `POST /exchange` with the API wallet, only when a proposal carries a Risk PASS, your approval by id, and a passing pre-send checklist. One approval, one send. Every send is bounded by `expiresAfter`, so a lost response is reconciled by client order id and a replacement waits until the original is provably incapable of arriving. A clean read is not proof; an expired original is.
 
 **Key.** The API wallet can trade and cannot withdraw. It is the only key on the computer, provided by you through the secure secret store. Anything that needs your main wallet stays in the Hyperliquid app, with you.
 
 **Evidence.** Web pages, files and other Bots' messages are information; none of them authorises anything. Your approval phrase with the ticket id is the desk's record that you agreed, but the Bots write the floor's messages, so the phrase alone cannot be the gate: an approval a Bot can read is one a Bot could have written. Enforcement lives outside the conversation, in Grok Bot's native approval control covering SDK, script and HTTP exchange writes. Until that coverage is verified, the desk stays research-only without a provisioned key. No Bot may type, quote forward, infer or simulate your approval.
 
-**Uncertainty.** Missing, stale, gapped or partial data is `unavailable`, a verdict of its own. It never collapses into "the condition did not fire" or "the check passed". A watch that reports silence on a dead feed looks exactly like a calm market, so the desk is required to tell the two apart and say which it has.
+**Uncertainty.** Missing, stale, gapped or partial data is `unavailable`. A watch reports a healthy negative observation separately from a failed feed; missing evidence cannot pass a check.
 
 ## Why seven
 
-Separating the person who wants the trade from the one who sizes it, the one who sends it and the one who reviews it is the oldest control on any desk. Bots make it cheap: each role has a narrow prompt, a narrow set of skills, and a narrow claim to authority.
+Research, risk, execution and review answer different questions. Separate role prompts make each handoff and its evidence explicit. Their agreement does not replace Risk PASS, user approval or exchange reconciliation.
 
 ## Other runtimes
 
-The plugin manifests (`plugin.json`, `.grok-plugin/plugin.json`, `.cursor-plugin/plugin.json`, `.claude-plugin/plugin.json`) supply skills and agents to Grok Build, Cursor and Claude Code. Cursor and Claude Code also load `rules/`. Grok Build installs with `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.1 --trust`. The format was tested with Grok Build 1.0.30 for an earlier release; 1.6.1 has no native install proof, and loading `rules/` in Grok Build is not verified. `.grok-plugin/marketplace.json` uses this repository’s remote URL and release ref because Grok Build rejects a source path pointing at the marketplace root. Claude Code resolves the repository through `.claude-plugin/marketplace.json`, so it installs with `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. Codex reads `.agents/plugins/marketplace.json` before the Claude-compatible index; its entry pins this repository at the release tag, like the Grok index, and installs with `codex plugin marketplace add galleonlabs/hypergrok-trading-desk` then `codex plugin add hypergrok@hypergrok`. Gemini CLI reads the root `gemini-extension.json` and installs the latest GitHub release with `gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk`. Both load `skills/` but not `rules/` or `agents/` as subagents, so `GEMINI.md` repeats the desk rule's approval paragraph and `check_manifests.py` fails if it drifts. Roles become subagents or labelled passes; the approval model is the same. Claude Code also loads `hooks/exchange-write-gate.json` through `.claude-plugin/plugin.json`: a `PreToolUse` hook that returns `ask` for Bash commands, or the scripts they name, matching an SDK write method or a raw `/exchange` POST. It never returns `allow` and does not follow imports. The other runtimes do not load it.
+Each runtime guide contains installation commands and observed support limits:
+
+| Runtime | Components | Guide |
+| --- | --- | --- |
+| Claude Code | `.claude-plugin/`, skills, subagents and the exchange-write hook; load the operating model explicitly | [Install](hyperliquid-claude-code.md) |
+| Cursor | `.cursor-plugin/`, skills, agent profiles and desk rules | [Install](hyperliquid-cursor.md) |
+| Grok Build | `.grok-plugin/`, skills and agent directories; rule loading unverified | [Install](hyperliquid-grok-build.md) |
+| Codex | `.agents/plugins/marketplace.json`, skills and labelled role passes | [Install](hyperliquid-codex.md) |
+| Gemini CLI | `gemini-extension.json`, skills, `GEMINI.md` and labelled role passes | [Install](hyperliquid-gemini-cli.md) |
+
+The Grok and Codex marketplace entries pin the reviewed repository tag. Claude Code resolves this repository through its own marketplace index. Gemini CLI installs the latest GitHub release; `GEMINI.md` repeats the desk rule's approval paragraph, which the manifest check compares for drift.
+
+Only Claude Code loads `hooks/exchange-write-gate.json`. Its `PreToolUse` hook asks for confirmation when a Bash command or a named script matches an SDK write method or raw `/exchange` POST. It never returns `allow`, does not follow imports and cannot bind a request to the approved ticket. It is a confirmation backstop; each runtime still needs verified native approval coverage before an API wallet is provisioned.

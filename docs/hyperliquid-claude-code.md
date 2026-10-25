@@ -14,22 +14,22 @@ In Claude Code:
 Then start with the desk's operating model:
 
 ```
-/desk-operating-model
+/hypergrok:desk-operating-model
 ```
 
 ## What loads
 
 + **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **Seven roles as subagents** from `agents/`: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader and Trade Reviewer. Only the Execution Trader writes to the exchange.
-+ **The desk rule** from `rules/`: analysis is not approval, and a send needs your exact approval phrase with the ticket id.
-+ **An exchange-write hook.** Before any Bash command, or a script it names, that looks like a Hyperliquid exchange write, Claude Code asks you to confirm, even in auto mode. It is a backstop: the desk's approval still happens by ticket id.
++ **The desk process** from `desk-operating-model`: load it before delegating work. The repository's `rules/` directory is declared for Cursor; Claude Code does not automatically load it as a plugin component.
++ **An exchange-write hook.** Claude Code asks for confirmation when a Bash command or a named script matches a Hyperliquid write. The hook does not follow imports or cover every possible route, and it cannot bind a send to a ticket. It supplements the ticket process and verified native approval coverage.
 
 ## First run, no keys
 
 Ask the desk for a market brief, for example "Brief me on ETH". The reads use Hyperliquid's public `/info` endpoint, with no wallet or account. The same read works from a terminal:
 
 ```bash
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
@@ -45,3 +45,4 @@ Perpetual futures can liquidate an account. HyperGrok is documentation and instr
 + [README](../README.md) and [how the desk works](ARCHITECTURE.md)
 + Other tools: [Cursor](hyperliquid-cursor.md) · [Codex](hyperliquid-codex.md) · [Gemini CLI](hyperliquid-gemini-cli.md) · [Grok Build](hyperliquid-grok-build.md) · Grok Bot: [README Start](../README.md#start)
 + [FAQ](FAQ.md)
++ [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference)

@@ -1,6 +1,6 @@
 {
   "name": "hypergrok-trading-desk",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "HyperGrok instructions, seventeen skills, seven role profiles and read-only Python tools for a user-approved Hyperliquid trading desk.",
   "license": "MIT",
   "author": {
@@ -32,6 +32,7 @@
     "AGENTS.md",
     "ATTRIBUTION.md",
     "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "GEMINI.md",
     "LICENSE",
@@ -47,6 +48,7 @@
     "agents/trade-reviewer.md",
     "assets/mascot-320.jpg",
     "assets/mascot.jpg",
+    "assets/opening-bell.gif",
     "assets/ticket-hg-20260816-01.png",
     "docs/ARCHITECTURE.md",
     "docs/FAQ.md",

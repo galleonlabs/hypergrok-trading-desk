@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Setup help and questions
+    url: https://github.com/galleonlabs/hypergrok-trading-desk/discussions
+    about: Ask about installation, runtime support or desk setup
   - name: Security vulnerability
     url: https://github.com/galleonlabs/hypergrok-trading-desk/security/advisories/new
     about: Report exploitable details privately

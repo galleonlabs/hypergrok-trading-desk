@@ -17,7 +17,7 @@ import tarfile
 NAME = "hypergrok-trading-desk"
 REPOSITORY = "https://github.com/galleonlabs/hypergrok-trading-desk"
 ROOT_FILES = (
-    "AGENTS.md", "ATTRIBUTION.md", "CHANGELOG.md", "CONTRIBUTING.md", "GEMINI.md",
+    "AGENTS.md", "ATTRIBUTION.md", "CHANGELOG.md", "CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "GEMINI.md",
     "LICENSE", "README.md", "SECURITY.md", "SETUP.md", "plugin.json", "skills/README.md",
 )
 MANIFESTS = (
@@ -27,7 +27,7 @@ MANIFESTS = (
     "gemini-extension.json",
 )
 RESOURCES = (
-    "assets/mascot.jpg", "assets/mascot-320.jpg", "rules/hypergrok-team.mdc",
+    "assets/mascot.jpg", "assets/mascot-320.jpg", "assets/opening-bell.gif", "rules/hypergrok-team.mdc",
     "template/grok-bot.json", "docs/ARCHITECTURE.md", "docs/FAQ.md",
     "docs/FORK_REVIEW.md", "docs/GROK_BOT_TEMPLATE.md", "docs/PROVENANCE.md",
     "docs/RESEARCH_DATASETS.md", "docs/STOP_COST.md", "docs/hyperliquid-claude-code.md",

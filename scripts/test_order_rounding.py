@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Run the published Decimal helpers without importing a wallet or contacting a venue."""
 import ast
+from contextlib import redirect_stdout
+from io import StringIO
+from types import SimpleNamespace
 from decimal import Decimal, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 from pathlib import Path
 import re
@@ -29,6 +32,66 @@ exec(compile(spot_helpers, '<published spot helpers>', 'exec'), spot_namespace)
 
 
 class OrderRoundingTest(unittest.TestCase):
+    def test_published_close_keeps_ticket_bound_for_longs_and_shorts(self):
+        positions = (ROOT / 'skills/hyperliquid-positions/SKILL.md').read_text()
+        snippet = re.search(r'## Close a position.*?```python\n(.*?)\n```', positions, re.S).group(1)
+        for signed_size, reference in (('0.1234', '3000.04'), ('-0.1234', '3000.06')):
+            with self.subTest(size=signed_size):
+                sent = []
+                info = SimpleNamespace(
+                    user_state=lambda _: {'assetPositions': [{'position': {'coin': 'ETH', 'szi': signed_size}}]},
+                    all_mids=lambda: {'ETH': reference},
+                )
+                exchange = SimpleNamespace(order=lambda *args, **kwargs: sent.append((args, kwargs)))
+                scope = dict(namespace, info=info, exchange=exchange, ACCOUNT='offline-fixture',
+                             new_cloid=lambda: SimpleNamespace(to_raw=lambda: 'offline-cloid'))
+                with redirect_stdout(StringIO()):
+                    exec(compile(snippet, '<published close>', 'exec'), scope)
+                self.assertEqual(len(sent), 1)
+                (coin, buy, size, price, order_type), options = sent[0]
+                self.assertEqual(coin, 'ETH')
+                self.assertEqual(buy, Decimal(signed_size) < 0)
+                self.assertEqual(Decimal(str(size)), abs(Decimal(signed_size)))
+                self.assertEqual(order_type, {'limit': {'tif': 'Ioc'}})
+                self.assertTrue(options['reduce_only'])
+                bound = Decimal(reference) * (1 + Decimal('0.003') if buy else 1 - Decimal('0.003'))
+                encoded_price = Decimal(format(price, '.8f'))
+                self.assertTrue(encoded_price <= bound if buy else encoded_price >= bound)
+
+    def test_published_readiness_requires_matching_role_and_unexpired_agent(self):
+        setup = (ROOT / 'skills/hyperliquid-setup/SKILL.md').read_text()
+        snippet = re.search(r'## 5\. Readiness check.*?```python\n(.*?)\n```', setup, re.S).group(1)
+        tree = ast.parse(snippet)
+        # Inject offline substitutes instead of importing an SDK or reading host secrets.
+        tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
+        code = compile(tree, '<published readiness>', 'exec')
+        for role, acts_for, expiry, expected in (
+            ('agent', 'account', 1000001, True),
+            ('agent', 'account', 999999, False),
+            ('missing', 'account', 1000001, False),
+            ('agent', 'different-account', 1000001, False),
+            ('agent', 'account', None, True),
+        ):
+            with self.subTest(role=role, account=acts_for, expiry=expiry):
+                agents = [] if expiry is None else [{'address': 'agent', 'validUntil': expiry, 'name': 'desk'}]
+                info = SimpleNamespace(
+                    user_role=lambda _: {'role': role, 'data': {'user': acts_for}},
+                    extra_agents=lambda _: agents,
+                    user_state=lambda _: {'marginSummary': {'accountValue': '1000'}, 'assetPositions': []},
+                )
+                scope = dict(
+                    os=SimpleNamespace(environ={'HYPERLIQUID_NETWORK': 'testnet',
+                                                'HYPERLIQUID_ACCOUNT_ADDRESS': 'account',
+                                                'HYPERLIQUID_PRIVATE_KEY': 'offline-fixture'}),
+                    time=SimpleNamespace(time=lambda: 1000),
+                    eth_account=SimpleNamespace(Account=SimpleNamespace(from_key=lambda _: SimpleNamespace(address='agent'))),
+                    Info=lambda *args, **kwargs: info,
+                    constants=SimpleNamespace(MAINNET_API_URL='mainnet-fixture', TESTNET_API_URL='testnet-fixture'),
+                )
+                with redirect_stdout(StringIO()):
+                    exec(code, scope)
+                self.assertEqual(scope['approved'], expected)
+
     def test_typescript_trigger_bounds(self):
         # Inspect the published grouped-order arguments without running a wallet or SDK.
         ts = text.split('## TypeScript (`@nktkas/hyperliquid`)', 1)[1].split('## Raw wire format', 1)[0]

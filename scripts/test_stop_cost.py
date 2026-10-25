@@ -72,8 +72,8 @@ class StopCostTest(unittest.TestCase):
         self.assertIn("risk $51.00 = 0.5% of equity $10,200", readme)
         with open(os.path.join(ROOT, "skills", "desk-risk-limits", "SKILL.md"), encoding="utf-8") as handle:
             limits = handle.read()
-        self.assertIn("Stressed distance is 105.65, not 100, so the size is 0.4827 ETH rather than 0.51", limits)
-        self.assertIn("the same stop costs $53.88, which is 0.528% of equity", limits)
+        self.assertIn("Stressed distance is 105.65365 USD/ETH, displayed as 105.65", limits)
+        self.assertIn("an assumed loss of $53.88, or 0.528% of equity", limits)
 
     def test_short_stop_fills_above_and_pays_fees_on_both_legs(self):
         priced = stop_cost.price_stop(Decimal("3000"), Decimal("3100"), Decimal("10200"), Decimal("0.5"),

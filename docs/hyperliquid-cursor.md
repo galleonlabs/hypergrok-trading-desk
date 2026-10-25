@@ -7,12 +7,12 @@ HyperGrok turns Cursor into a Hyperliquid trading desk: seven roles and seventee
 Clone the reviewed release:
 
 ```bash
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 ```
 
 Open the `hypergrok-trading-desk` folder in Cursor and enable the plugin; `.cursor-plugin/plugin.json` points it at the skills, roles and rules. The plugin is also listed on [cursor.directory](https://cursor.directory/plugins/hypergrok).
 
-Then ask the agent to load the `desk-operating-model` skill, the desk's constitution, before anything else.
+Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 

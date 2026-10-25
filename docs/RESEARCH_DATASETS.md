@@ -4,7 +4,7 @@
 
 ## Fetch a bounded period
 
-From the repository checkout:
+From the repository checkout, save the bundle outside the source tree:
 
 ```bash
 python3 scripts/research_dataset.py --schema
@@ -12,8 +12,10 @@ python3 scripts/research_dataset.py \
   --coin ETH --interval 4h \
   --start 2026-09-01T00:00:00Z --end 2026-10-01T00:00:00Z \
   --with-funding \
-  --output /workspace/trading-desk/data/eth-september --json
+  --output ../hypergrok-data/eth-september --json
 ```
+
+The example writes to a sibling `hypergrok-data/` directory. On the Grok Bot desk, use a new directory under `/workspace/trading-desk/data/` instead.
 
 The example requests September 2026, not a rolling window. Choose dates for the actual research question. Both boundaries must be explicit UTC times aligned to the candle interval. The range is **[start, end)**: start is included and end is excluded. End cannot be later than the time observed when collection starts; an open candle is never a finished observation. With `--with-funding`, both boundaries must also fall on whole UTC hours.
 
@@ -46,7 +48,7 @@ Funding records can arrive milliseconds after a UTC hour boundary. The CSV retai
 
 ```bash
 python3 scripts/research_dataset.py \
-  --verify /workspace/trading-desk/data/eth-september --json
+  --verify ../hypergrok-data/eth-september --json
 ```
 
 `--schema` and `--verify` are offline. Verification checks the saved file hashes and replays captured responses to reproduce normalized files and coverage. A manifest edited to claim completeness must agree with that replay. The verifier does not refresh data or contact the exchange.

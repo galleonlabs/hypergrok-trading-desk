@@ -2,7 +2,7 @@
 
 `template/grok-bot.json` is the release contract for the public **HyperGrok Desk Lead** template. It records the exact public profile, source release, avatar, exported bootstrap skill and complete reviewed release inventory. `templateSkillNames` lists the skills carried by the share; `skills` contains all seventeen files and hashes that setup must install and verify.
 
-**Release state — 2026-10-13:** v1.6.1 is tagged, published to npm and shared as the [public HyperGrok Desk Lead template](https://x.ai/bot/3Fjt0kR65RoGjj5JNZJWp); see [Publication verification - 2026-10-13](#publication-verification---2026-10-13). 1.6.0 was released without a template refresh. The earlier 1.4.8 and 1.5.0 shares remain online and install those releases; their records below are evidence for those releases only.
+**Release preparation — 2026-10-25:** The 1.7.0 source and template contract are under review. The public template remains at release 1.6.1 until a fresh share has been published and verified. Earlier publication receipts below apply only to their named releases.
 
 The public template carries one `hypergrok-bootstrap` skill. **Add to Grok Bot** imports the Desk Lead and bootstrap; **Start the desk.** fetches the pinned release and installs the full seventeen-skill desk. Grok Bot's share helper limits its inline recipe to 100,000 characters; the full reviewed pack exceeds that limit. Keep the complete instructions in the release instead of shortening them to fit the share.
 
@@ -78,7 +78,7 @@ Do not describe the template as a zero-interaction installer. **Add to Grok Bot*
 
 The [1.6.1 public template](https://x.ai/bot/3Fjt0kR65RoGjj5JNZJWp) was published from source commit `3328e9357032748345cebfa6ad0348d1fd3816da`. The Grok Products Bot updated the shared `hypergrok-bootstrap` skill and read it back from native storage: name and description unchanged from the source, normalized Markdown body 9,450 bytes, SHA-256 `60a2f86da3646d16db57adee3f2691a71225d17263ed4d5988f3345f6830e687`, matching the body recomputed from the tag; the full source file is SHA-256 `9613570ce8f7fb45a4727f4327b2b3b31e60b1a6dbab1510897a26ee793e6b3a`, as in the manifest. The Bot that published the 1.5.0 share was not visible to the publishing account, so a fresh **HyperGrok Desk Lead** Bot was created with the manifest name, title and description, the default avatar and no plugins, memories or routines; the share stages only `hypergrok-bootstrap`. Andrew confirmed the native publish card, which then showed **Published**.
 
-The logged-out preview returns **HyperGrok Desk Lead by Andrew** with the v1.6.1 description, and `check_public_template.py --live` passes against this manifest. The new share has a new link, so the 1.5.0 link did not update in place; the 1.4.8 and 1.5.0 shares remain public. A fresh public import and **Start the desk.** round trip was not performed for this release.
+The logged-out preview returns **HyperGrok Desk Lead by Andrew** with the 1.6.1 description, and `check_public_template.py --live` passes against this manifest. The new share has a new link, so the 1.5.0 link did not update in place; the 1.4.8 and 1.5.0 shares remain public. A fresh public import and **Start the desk.** round trip was not performed for this release.
 
 ## Publication verification - 2026-10-08
 

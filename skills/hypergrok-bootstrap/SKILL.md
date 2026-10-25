@@ -3,7 +3,7 @@ name: hypergrok-bootstrap
 description: Build and verify a HyperGrok trading desk from the pinned public release. Use for first-run setup, repair, or a readiness check. Starts with a live zero-key Opening Bell, installs the seven role profiles and seventeen shared skills, prepares the Trading Floor, and returns an evidence receipt. Read-only by default; never requests a wallet or places an order.
 license: MIT
 metadata:
-  version: "1.0.11"
+  version: "1.0.12"
   author: Galleon Labs
   category: desk
 ---
@@ -25,11 +25,11 @@ Bootstrap is research-only.
 
 ## 1. Install the reviewed release
 
-If `/workspace/hypergrok` is already a Git checkout, preserve it. Verify that `plugin.json` names version `1.6.1` and that `git rev-parse HEAD` equals `git rev-parse 'refs/tags/v1.6.1^{commit}'`. If the tag is unavailable, the version differs or the commits differ, report the existing version and commit and stop dependent setup. A structural pass from an older release is insufficient; do not overwrite, reset or switch the existing checkout. Otherwise clone the pinned release:
+If `/workspace/hypergrok` is already a Git checkout, preserve it. Verify that `plugin.json` names version `1.7.0` and that `git rev-parse HEAD` equals `git rev-parse 'refs/tags/v1.7.0^{commit}'`. If the tag is unavailable, the version differs or the commits differ, report the existing version and commit and stop dependent setup. A structural pass from an older release is insufficient; do not overwrite, reset or switch the existing checkout. Otherwise clone the pinned release:
 
 ```bash
 mkdir -p /workspace && cd /workspace
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git hypergrok
 cd /workspace/hypergrok
 git rev-parse HEAD
 bash scripts/check.sh
@@ -37,7 +37,7 @@ bash scripts/check.sh
 
 Run `bash scripts/check.sh` for an existing verified checkout too. Stop if the structural check fails. Record the printed commit for `desk.md`.
 
-Before using any agent profile or System prompt, run `git diff --exit-code refs/tags/v1.6.1 -- agents/` in the checkout. A matching HEAD can still have changed working files. If the command reports differences or fails, name the affected paths, stop dependent setup and preserve the user's files.
+Before using any agent profile or System prompt, run `git diff --exit-code refs/tags/v1.7.0 -- agents/` in the checkout. A matching HEAD can still have changed working files. If the command reports differences or fails, name the affected paths, stop dependent setup and preserve the user's files.
 
 ## 2. Ring the Opening Bell
 
@@ -74,7 +74,7 @@ Select one Bot for each agent file's **Bot profile** and **System prompt**:
 6. Execution Trader
 7. Trade Reviewer
 
-Read back each selected Bot's native Name, Job and Description and compare them exactly with its profile. Verify its standing instructions before reuse or after creation. Supported evidence is either the complete stored System prompt matching this release, or readback of the exact full System prompt delivered as a standing-instructions message, the Bot's acknowledgement that it follows the pinned agent file, and that local file's hash matching the expected bytes from `git show 'refs/tags/v1.6.1:agents/<name>.md'`. Hashing an arbitrary local file is insufficient. Label the latter `delivery-and-pointer`: it proves delivery and the checked target, not byte-identical persistent memory. A matching Description, summary or path alone is insufficient.
+Read back each selected Bot's native Name, Job and Description and compare them exactly with its profile. Verify its standing instructions before reuse or after creation. Supported evidence is either the complete stored System prompt matching this release, or readback of the exact full System prompt delivered as a standing-instructions message, the Bot's acknowledgement that it follows the pinned agent file, and that local file's hash matching the expected bytes from `git show 'refs/tags/v1.7.0:agents/<name>.md'`. Hashing an arbitrary local file is insufficient. Label the latter `delivery-and-pointer`: it proves delivery and the checked target, not byte-identical persistent memory. A matching Description, summary or path alone is insufficient.
 
 If an existing seat differs, is missing or cannot be verified, create a separate Bot from the reviewed profile and deliver its full System prompt as directed in `SETUP.md` section 4. Preserve existing Bots; reuse does not authorize replacing an unrelated desk's profiles, prompts or memories. If a needed creation step or both supported verification methods are unavailable, return that role's exact manual card and keep its readiness pending. Record the native Bot ID for every verified seat.
 

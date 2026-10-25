@@ -3,7 +3,7 @@ name: hyperliquid-orders
 description: Place, cancel and modify Hyperliquid orders correctly from the desk computer - limit and IOC (market-style) orders, take-profit and stop-loss trigger orders with grouping, client order ids, reduce-only, batch actions, price and size rounding, and how to read every response status. Write path - Execution Trader only, on an approved ticket. Use for any order action and for reconciling by cloid.
 license: MIT
 metadata:
-  version: "1.1.2"
+  version: "1.1.3"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -115,9 +115,8 @@ px = bounded_px(coin, mid, slippage, is_buy)
 cloid = new_cloid(); print("cloid", cloid.to_raw(), "bound px", px)
 res = exchange.order(coin, is_buy, sz, px, {"limit": {"tif": "Ioc"}}, reduce_only=False, cloid=cloid)
 print(res)
-# The SDK also offers exchange.market_open(coin, is_buy, sz, px=None, slippage=0.01, cloid=cloid): same semantics,
-# it rounds the PRICE for you but not the size (pass round_sz), and its default slippage is 5% if you omit it.
-# State the final encoded bound in the report; SDK convenience rounding must not widen the ticket limit.
+# exchange.market_open also sends an IOC; its default slippage is 5% and nearest price rounding can widen a bound.
+# Use bounded_px above to preserve the approved ceiling/floor; the SDK does not round a caller-supplied size.
 ```
 
 Rounding must tighten an approved bound: buy prices round down, sell prices round up. Nearest rounding can exceed a buy ceiling (for example 3000.06 to 3000.1) or undercut a sell floor. Keep the reference and slippage decimal until the SDK boundary; recheck the final encoded price against the ticket before signing. A tighter IOC may not fill; never widen it automatically.
@@ -148,7 +147,7 @@ The children come back as `waitingForFill` while the entry rests; they are place
 ```python
 coin, bound = "ETH", 0.05                        # 5% worst-acceptable bound for a stop-loss
 pos = next(p["position"] for p in info.user_state(ACCOUNT)["assetPositions"] if p["position"]["coin"] == coin)
-szi = float(pos["szi"])                          # positive long, negative short
+szi = Decimal(pos["szi"])                        # preserve the exchange's decimal size
 sz, is_buy_close = round_sz(coin, abs(szi)), szi < 0
 trigger = round_px(coin, 2900)
 worst = bounded_px(coin, trigger, bound, is_buy_close)
@@ -203,7 +202,7 @@ Then reconcile: `info.query_order_by_cloid(ACCOUNT, cloid)`, `info.open_orders(A
 ```ts
 import { ExchangeClient, HttpTransport, InfoClient } from "@nktkas/hyperliquid";
 import { formatPrice, formatSize, SymbolConverter } from "@nktkas/hyperliquid/utils";
-import Decimal from "decimal.js"; // npm install decimal.js@10.6.0; exact decimal ticket bounds
+import { Decimal } from "decimal.js"; // npm install decimal.js@10.6.0; exact decimal ticket bounds
 import { privateKeyToAccount } from "viem/accounts";
 import { randomBytes } from "node:crypto";
 

@@ -1,6 +1,6 @@
 # Skills
 
-Seventeen skills in the portable `SKILL.md` format (`name` and `description` frontmatter, body under 320 lines). Grok Bot reads them from `/workspace/hypergrok/skills/<name>/SKILL.md` and saves each as a shared skill; Grok Build, Cursor and Claude Code load the directory as a plugin.
+Seventeen skills in the portable `SKILL.md` format (`name` and `description` frontmatter, body under 320 lines). Grok Bot installs them as shared skills from the pinned checkout. The [runtime guides](../README.md#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli) cover plugin and extension installation in Grok Build, Cursor, Claude Code, Codex and Gemini CLI. Start with `desk-operating-model`; install `hypergrok-bootstrap` to build the native Grok Bot desk.
 
 ## Bootstrap
 
@@ -19,7 +19,7 @@ Seventeen skills in the portable `SKILL.md` format (`name` and `description` fro
 | [hyperliquid-positions](hyperliquid-positions/SKILL.md) | Leverage and margin mode, isolated margin, margin tiers, liquidation, closing, protection checks | **yes** (leverage, closes) | Execution Trader, Risk Manager (reads) |
 | [hyperliquid-websocket](hyperliquid-websocket/SKILL.md) | Live subscriptions, watch processes, heartbeat and supervision | no | Market Analyst, Execution Trader, Strategist |
 | [hyperliquid-advanced](hyperliquid-advanced/SKILL.md) | Dead-man's switch, TWAP, spot orders, expiresAfter, agent approval from code, sub-accounts, HIP-3, what the desk does not do | **yes** (some) | Execution Trader |
-| [hyperliquid-api-reference](hyperliquid-api-reference/SKILL.md) | Every request type and action, statuses, asset ids, tick/lot, rate limits, WS types, error strings, docs links | no | everyone |
+| [hyperliquid-api-reference](hyperliquid-api-reference/SKILL.md) | Request and action reference, statuses, asset ids, tick/lot, rate limits, WS types, error strings, docs links | no | everyone |
 
 ## Desk skills (how the team works)
 
@@ -39,4 +39,4 @@ Seventeen skills in the portable `SKILL.md` format (`name` and `description` fro
 - Frontmatter: `name` (matches the directory), `description` (what and when, under 1024 characters), `license`, `metadata` (`version`, `author`, `category`, and `network-default` for Hyperliquid skills).
 - Bodies: purpose, concepts, copy-pasteable commands (`curl` for reads, Python SDK first and TypeScript second for writes), procedure, pitfalls. No strategy content, no return claims, no emoji.
 - Every write path says who may use it and under what approval. Every read says which address to use.
-- Snippets are self-contained: each includes its own environment and key loading so a Bot can copy one block and run it.
+- Examples state their required environment and key loading. An example that signs still requires the full ticket protocol and native approval coverage; copying a block does not authorize a send.

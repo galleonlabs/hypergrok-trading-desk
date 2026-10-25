@@ -1,10 +1,10 @@
 # FAQ
 
 **What do I actually get?**
-Seven Bots in your Grok Bot workspace, one Trading Floor group chat, seventeen shared skills, a live zero-key Opening Bell and a written way of working. Ask for a market brief, a sized trade, a backtest or a review, and the right Bot answers with live data and sources.
+The release contains seven role profiles, seventeen skills and read-only Python tools. In Grok Bot, setup builds seven Bots, a six-Bot Trading Floor and a desk record. Other runtimes load the roles as subagents or labelled passes. Ask for a market brief, a sized ticket, a backtest or a review; each role reports its evidence.
 
 **What do I need to start?**
-Use the [public HyperGrok Desk Lead template](https://x.ai/bot/3Fjt0kR65RoGjj5JNZJWp), then send **Start the desk.** Its v1.6.1 bootstrap verifies the complete skill pack and native instructions. The [pinned bootstrap in the README](../README.md#start) is also available. The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise; add a mainnet one when you decide to trade real money.
+For a terminal demo, run the [keyless Opening Bell](../README.md#try-it-now-no-keys) with Python 3. For the Grok Bot desk, use the [pinned bootstrap in the README](../README.md#start). The refreshed public template is being prepared; see [publication evidence](GROK_BOT_TEMPLATE.md). The desk starts in research mode and proves public market access without asking for a key. Add a testnet API wallet only when you want to practise; add a mainnet one when you decide to trade real money.
 
 **What does the desk doctor inspect?**
 The release version and tag pin, all agent and skill files, the desk folders and record, and a public Hyperliquid `allMids` response. It never reads environment variables, keys or account state, and never calls the exchange write endpoint.
@@ -13,7 +13,7 @@ The release version and tag pin, all agent and skill files, the desk folders and
 Through a Hyperliquid API (agent) wallet you create in the Hyperliquid app and hand over through Grok Bot's secure secret card. It can place, modify and cancel orders. Withdrawals, transfers and bridging stay in the app with your main wallet.
 
 **How do I approve a trade?**
-The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `approve HG-20260816-01`. That exact phrase, after seeing that exact ticket, is the desk's record that you agreed, and without it nothing is sent. It is deliberately not the only thing standing in the way: the Bots write the floor's messages, so the enforcing gate is a Grok Bot Auto-review **Ask first** rule on the exchange write path, outside the conversation. Set it up during setup. No Bot may type, quote forward or infer your approval.
+The Risk Manager posts a ticket with an id like `HG-20260816-01`. You type `approve HG-20260816-01`. The phrase records your approval of that exact ticket. A separate Grok Bot Auto-review **Ask first** rule must cover the exchange write path, because Bots can also write chat messages. Setup verifies that control before provisioning an API wallet. No Bot may type, quote forward or infer your approval.
 
 **Where do the ideas come from?**
 From you. The Strategist turns your idea into rules and tests it on Hyperliquid history with fees, funding and an out-of-sample split; the desk then paper-trades it on testnet if you like. The Market and Research Analysts give you the picture; you decide.
@@ -22,10 +22,10 @@ From you. The Strategist turns your idea into rules and tests it on Hyperliquid 
 Yes. The [research dataset tool](RESEARCH_DATASETS.md) saves requests, decoded responses, CSVs and a manifest with file hashes and coverage gaps. `--verify` replays that bundle offline. A missing candle or funding hour prevents complete coverage; absent funding is never assumed to be zero. Integrity and coverage do not prove source authenticity, strategy edge or exact USD funding costs without historical oracle prices.
 
 **Why do the Bots use a "computer"?**
-That is Grok Bot's name for the cloud VM every account gets. Reads are plain `curl` against `/info`; the Execution Trader runs the official SDK there to sign orders with the API wallet. The browser is only used for reading pages.
+That is Grok Bot's cloud VM, shared by your Bots. Public reads use `/info`; the Execution Trader uses an SDK there to sign approved orders with the API wallet. The browser reads pages; it does not execute trades.
 
 **Why six on the floor and one off it?**
-Grok Bot group chats hold six Bots, and reviews are calmer after the noise. The Trade Reviewer works from its own conversation and by DM.
+Grok Bot group chats hold six Bots. The Trade Reviewer receives execution reports by DM and reviews them from the journal and exchange records.
 
 **Can I rename the Bots or add my own?**
 Yes. Names and avatars are yours. To add a role, copy the shape of a file in `agents/`. Keep one writer: only one Bot has the exchange write skills.
@@ -34,19 +34,22 @@ Yes. Names and avatars are yours. To add a role, copy the shape of a file in `ag
 Routines can brief you, watch prices and funding, check the book and alert you. Sending always waits for your approval by id.
 
 **Which network does market data come from?**
-Mainnet, even when you trade on testnet, because testnet books are thin. Every number says which network it came from.
+The default public research source is mainnet, even when execution uses testnet. The Python tools accept `--testnet` for an explicit testnet read. Every report names its source network; testnet data never substitutes for mainnet execution checks.
 
 **What if a send times out?**
-It never resends. It checks the exchange by client order id, and if the order is not there it still does not assume it failed, because a delayed send can land minutes later. Every send carries an expiry, so the desk waits for that deadline to pass, checks once more, and only then tells you the send is dead and asks for a fresh approval. You will be told which of those two happened.
+The Execution Trader treats the result as unknown and does not resend. It checks by client order id; a missing order is insufficient because the original request may still arrive. It waits until the send's `expiresAfter` deadline has passed, checks again and reports whether execution is confirmed or remains unconfirmed. Any replacement requires fresh approval. Without an expiry, it cannot prove the original is incapable of arriving.
 
 **How do I set Grok Bot's own approvals?**
 Settings, General, Auto-review: add an **Ask first** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. **Ask first** wins over **Allow automatically**.
 
 **Does it work outside Grok Bot?**
-Yes. The plugin supplies the same skills and agents. In Grok Build, run `grok plugin install galleonlabs/hypergrok-trading-desk@v1.6.1 --trust`. The format was tested with Grok Build 1.0.30 on an earlier release, not on 1.6.1; loading `rules/` there is not verified. In Claude Code, use `/plugin marketplace add galleonlabs/hypergrok-trading-desk` then `/plugin install hypergrok@hypergrok`. In Cursor, open the repository and enable the plugin. Cursor and Claude Code also load `rules/`. In Codex, use `codex plugin marketplace add galleonlabs/hypergrok-trading-desk` then `codex plugin add hypergrok@hypergrok`. In Gemini CLI, use `gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk`. Gemini support first ships in 1.6.1. Codex and Gemini CLI load the skills only, so the roles run as labelled passes.
+Yes. Use the guide for [Claude Code](hyperliquid-claude-code.md), [Cursor](hyperliquid-cursor.md), [Grok Build](hyperliquid-grok-build.md), [Codex](hyperliquid-codex.md) or [Gemini CLI](hyperliquid-gemini-cli.md). The [runtime table](../README.md#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli) shows which roles, rules and hooks each loads. The ticket process and verified native approval requirement apply in all runtimes. Skills alone do not enforce exchange permissions.
 
 **<a id="token"></a>Does HyperGrok have a token?**
 HyperGrok has no token and will not launch one. Coins using the name were launched by third parties and are not part of this project.
+
+**Where can I get help or report a bug?**
+Check the runtime guide and run `python3 scripts/desk_doctor.py --offline --json`. [Open an issue](https://github.com/galleonlabs/hypergrok-trading-desk/issues/new/choose) with your release, runtime, failing command and sanitized output. Follow the [security policy](../SECURITY.md) for sensitive reports.
 
 **Is this financial advice?**
 It is documentation and instructions. Perpetual futures can liquidate an account.

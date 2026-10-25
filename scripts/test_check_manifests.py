@@ -92,22 +92,22 @@ def replace(root, rel, old, new):
 
 
 def documented_marketplace_typo(root):
-    replace(root, "README.md",
+    replace(root, "docs/hyperliquid-claude-code.md",
             "/plugin marketplace add galleonlabs/hypergrok-trading-desk",
             "/plugin marketplace add galleonlabs/hypergrok")
-    return "README.md", "/plugin marketplace add"
+    return "docs/hyperliquid-claude-code.md", "/plugin marketplace add"
 
 
 def documented_install_id_typo(root):
-    replace(root, "SETUP.md", "/plugin install hypergrok@hypergrok",
+    replace(root, "docs/hyperliquid-claude-code.md", "/plugin install hypergrok@hypergrok",
             "/plugin install hypergrok@galleonlabs")
-    return "SETUP.md", "/plugin install"
+    return "docs/hyperliquid-claude-code.md", "/plugin install"
 
 
 def marketplace_drops_documented_plugin(root):
     """Drift the other way: the docs still install a plugin the marketplace stopped declaring."""
     edit(root, ".claude-plugin/marketplace.json", lambda d: d.update(plugins=[]))
-    return "README.md", "/plugin install"
+    return "docs/hyperliquid-claude-code.md", "/plugin install"
 
 
 def documented_skills_sh_plugin_slug(root):
@@ -238,10 +238,10 @@ def gemini_context_drops_approval_rule(root):
 
 
 def gemini_documented_wrong_repository(root):
-    replace(root, "README.md",
+    replace(root, "docs/hyperliquid-gemini-cli.md",
             "gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk",
             "gemini extensions install https://github.com/galleonlabs/hypergrok")
-    return "README.md", "gemini extensions install"
+    return "docs/hyperliquid-gemini-cli.md", "gemini extensions install"
 
 
 def gemini_documented_moving_ref(root):
@@ -274,22 +274,22 @@ def codex_marketplace_missing_category(root):
 
 
 def codex_documented_marketplace_typo(root):
-    replace(root, "README.md",
+    replace(root, "docs/hyperliquid-codex.md",
             "codex plugin marketplace add galleonlabs/hypergrok-trading-desk",
             "codex plugin marketplace add galleonlabs/hypergrok")
-    return "README.md", "codex plugin marketplace add"
+    return "docs/hyperliquid-codex.md", "codex plugin marketplace add"
 
 
 def codex_documented_install_id_typo(root):
-    replace(root, "README.md", "codex plugin add hypergrok@hypergrok",
+    replace(root, "docs/hyperliquid-codex.md", "codex plugin add hypergrok@hypergrok",
             "codex plugin add hypergrok@galleonlabs")
-    return "README.md", "codex plugin add"
+    return "docs/hyperliquid-codex.md", "codex plugin add"
 
 
 def codex_marketplace_renamed(root):
     """The Codex index changes its marketplace name; the documented install id goes stale."""
     edit(root, ".agents/plugins/marketplace.json", lambda d: d.update(name="galleonlabs"))
-    return "README.md", "codex plugin add"
+    return "docs/hyperliquid-codex.md", "codex plugin add"
 
 
 def codex_documented_moving_ref(root):

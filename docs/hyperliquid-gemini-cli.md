@@ -8,15 +8,15 @@ HyperGrok is a Gemini CLI extension for Hyperliquid: seventeen agent skills for 
 gemini extensions install https://github.com/galleonlabs/hypergrok-trading-desk
 ```
 
-Gemini CLI installs the latest GitHub release. The extension manifest, `gemini-extension.json`, follows the official extension format and first ships in 1.6.1; it has no native installation proof yet.
+Gemini CLI installs the latest GitHub release. The extension manifest is `gemini-extension.json`. Manifest validation is covered by the repository checks; a native installation of the current release has not been verified.
 
-Start with the `desk-operating-model` skill, the desk's constitution.
+Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
 + **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **`GEMINI.md`**, loaded every session. It names the roles and repeats the desk rule's approval paragraph word for word: analysis is not approval, and a send needs your exact approval phrase with the ticket id.
-+ **Roles as labelled passes.** Gemini CLI's subagent schema does not accept the role files' frontmatter, so the seven roles in `agents/` run as labelled passes. Only the Execution Trader pass writes to the exchange.
++ **Roles as labelled passes.** This extension does not register the role files as native subagents. Run the seven roles in `agents/` as labelled passes using their system prompts. Only the Execution Trader pass writes to the exchange.
 
 The Claude Code exchange-write hook does not load in Gemini CLI.
 
@@ -25,7 +25,7 @@ The Claude Code exchange-write hook does not load in Gemini CLI.
 Ask for a market brief, for example "Brief me on ETH". The reads use Hyperliquid's public `/info` endpoint, with no wallet or account. The same read works from a terminal:
 
 ```bash
-git clone --depth 1 --branch v1.6.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```

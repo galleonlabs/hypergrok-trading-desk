@@ -3,7 +3,7 @@ name: hyperliquid-market-data
 description: Read live Hyperliquid market data from the desk computer with curl or the Python SDK - mid, mark and oracle prices, order book depth, funding (current, predicted, historical), open interest, volume, candles, perp and spot metadata, margin tiers, and how to save datasets for the strategy lab. Read-only, no key. Use for any market brief, depth read, funding question or data pull.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: mainnet-for-reads
@@ -166,7 +166,7 @@ Use the block in `agents/market-analyst.md`: sources and time on the first line,
 
 ## Rate limits
 
-`/info` weight per IP is 1200 per minute: `allMids`, `l2Book`, `clearinghouseState`, `orderStatus` cost 2; most others cost 20; `candleSnapshot` adds 1 per 60 candles. Batch questions, do not poll faster than the desk needs, and prefer `hyperliquid-websocket` for anything continuous. HTTP 429 means back off.
+REST shares an IP budget of 1200 weight per minute. `allMids`, `l2Book`, `clearinghouseState`, `orderStatus`, `spotClearinghouseState` and `exchangeStatus` cost 2; `userRole` costs 60; other documented `/info` requests cost 20. History/list endpoints add weight per 20 returned items, and `candleSnapshot` per 60 candles. Batch questions, pace pagination, and prefer `hyperliquid-websocket` for continuous data. HTTP 429 means back off; see the official rate-limit page before sizing a collector.
 
 ## Pitfalls
 

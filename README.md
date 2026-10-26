@@ -8,6 +8,8 @@
 
 <p align="center">Works in <a href="#start">Grok Bot</a> · <a href="docs/hyperliquid-claude-code.md">Claude Code</a> · <a href="docs/hyperliquid-cursor.md">Cursor</a> · <a href="docs/hyperliquid-codex.md">Codex</a> · <a href="docs/hyperliquid-gemini-cli.md">Gemini CLI</a> · <a href="docs/hyperliquid-grok-build.md">Grok Build</a></p>
 
+<p align="center">Listed on the <a href="https://www.hypurr.co/ecosystem-projects/hypergrok">HypurrCollective Hyperliquid Ecosystem Map</a></p>
+
 HyperGrok gives your AI agents a shared process for Hyperliquid research, risk, execution and review. It includes seven role profiles, seventeen skills and read-only Python tools. Start with public market data, then set up the desk in Grok Bot or [your preferred agent tool](#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli). Trading requires your own API wallet, verified approval controls and an exact ticket you approve.
 
 ## Try it now, no keys
@@ -168,7 +170,7 @@ python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
 
 The package contains the instructions, role profiles, plugin manifests and read-only Python tools. It has no JavaScript entry point, runtime dependencies or install hooks; installation does not start a desk or connect a wallet.
 
-Live listings: [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk) · [cursor.directory](https://cursor.directory/plugins/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
+Live listings: [HypurrCollective ecosystem map](https://www.hypurr.co/ecosystem-projects/hypergrok) · [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk) · [cursor.directory](https://cursor.directory/plugins/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
 
 After installation, load `desk-operating-model` using the command or context mechanism in your runtime guide.
 

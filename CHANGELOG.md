@@ -2,11 +2,7 @@
 
 ## Unreleased
 
-+ Replace the README banner and trade path diagram with animated SVGs: an isometric trading floor where a ticket moves from the analysts through risk and your approval to the single writer and Hyperliquid, and a stage diagram lit on the same loop. Both stop under reduced motion, embed their fonts and have stacked phone versions. Change the banner line to "Your trading desk, fully staffed." Fold the Opening Bell automation and research-history detail into expandable sections.
-
-## Unreleased
-
-+ Open the README with a HyperGrok banner, release, npm, licence and ecosystem-map badges and a section index. Replace the ASCII trade path with a diagram of the seven stages and who owns each one. Both graphics are rendered from editable HTML sources in `assets/src/` and ship in the npm resource package.
++ Open the README with release, npm, licence and ecosystem-map badges and animated SVGs generated from `assets/src/build_graphics.py`: an isometric trading floor where a ticket moves from the analysts through risk and your approval to the single writer and Hyperliquid, and a stage diagram lit on the same loop. Both stop under reduced motion, embed their fonts and have stacked phone versions. The banner reads "Your trading desk, fully staffed." Fold the Opening Bell automation and research-history detail into expandable sections.
 
 ## 1.7.0 - 2026-10-25
 

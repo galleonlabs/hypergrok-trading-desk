@@ -10,6 +10,7 @@ import argparse
 import base64
 import io
 import math
+import re
 from pathlib import Path
 
 from fontTools.subset import Options, Subsetter
@@ -43,16 +44,15 @@ class Fonts:
             self.cache[key] = TTFont(self.dir / FONT_FILES[key])
         return self.cache[key]
 
-    def width(self, text, key, size, spacing=0.0):
+    def width(self, text, key, size):
         font = self.font(key)
         cmap, hmtx = font.getBestCmap(), font["hmtx"]
         units = sum(hmtx[cmap.get(ord(ch), cmap[ord("?")])][0] for ch in text)
-        return units * size / font["head"].unitsPerEm + spacing * max(len(text) - 1, 0)
+        return units * size / font["head"].unitsPerEm
 
     def face(self, key, text):
         """A @font-face rule embedding only the glyphs this SVG uses."""
         options = Options()
-        options.flavor = "woff2"
         options.layout_features = ["kern", "liga", "calt"]
         options.name_IDs = []
         font = TTFont(self.dir / FONT_FILES[key])
@@ -75,7 +75,7 @@ class Doc:
         self.fonts = fonts
         self.used = {}
 
-    def text(self, x, y, s, key, size, fill, anchor="start", spacing=0.0, cls="", extra=""):
+    def text(self, x, y, s, key, size, fill, anchor="start", spacing=0.0, cls=""):
         self.used[key] = self.used.get(key, "") + s
         family, weight = key.split("-")
         attrs = [f'x="{x:.1f}"', f'y="{y:.1f}"', f'font-family="HG {family}"',
@@ -86,7 +86,7 @@ class Doc:
             attrs.append(f'letter-spacing="{spacing}"')
         if cls:
             attrs.append(f'class="{cls}"')
-        return f"<text {' '.join(attrs)}{extra}>{esc(s)}</text>"
+        return f"<text {' '.join(attrs)}>{esc(s)}</text>"
 
     def wrap(self, s, key, size, width):
         lines, line = [], ""
@@ -133,25 +133,24 @@ STAGES = [
     ("02", "evidence", "Market Analyst, Research Analyst, Strategist", "", ("MA", "ST")),
     ("03", "risk sign‑off", "Risk Manager sizes it and issues the ticket", "", ("RM", "RM")),
     ("04", "your approval", "You, by ticket id", "you", ("YOU", "YOU")),
-    ("05", "one send", "Execution Trader, the only Bot with the key", "send", ("ET", "HL")),
+    ("05", "one send", "Execution Trader, the one Bot with the keys", "send", ("ET", "HL")),
     ("06", "reconciliation", "Execution Trader confirms it from the exchange record", "", ("ET2", "ET2")),
     ("07", "review", "Trade Reviewer grades process and outcome separately", "", ("TR", "TR")),
 ]
 
 
-def window_keyframes(name, start, end, ramp=0.25, on="1", off="0", prop="opacity"):
-    """Keyframes that hold `on` between start and end seconds and `off` otherwise."""
-    a, b = max(start - ramp, 0), min(end + ramp, LOOP)
-    frames = [("0%", off)] if a > 0 else []
-    frames += [(pct(a), off if a > 0 else on), (pct(start), on), (pct(end), on), (pct(b), off)]
-    if b < LOOP:
-        frames.append(("100%", off))
+def window_keyframes(name, windows, ramp=0.25, on="1", off="0", prop="opacity"):
+    """Keyframes that hold `on` inside each (start, end) window in seconds and `off` otherwise."""
+    frames = [(0, on if windows[0][0] - ramp <= 0 else off)]
+    for start, end in windows:
+        frames += [(max(start - ramp, 0), off if start - ramp > 0 else on), (start, on), (end, on),
+                   (min(end + ramp, LOOP), off)]
+    frames.append((LOOP, off))
     seen, body = set(), ""
     for at, value in frames:
-        if at in seen:
-            continue
-        seen.add(at)
-        body += f"{at}{{{prop}:{value}}}"
+        if pct(at) not in seen:
+            seen.add(pct(at))
+            body += f"{pct(at)}{{{prop}:{value}}}"
     return f"@keyframes {name}{{{body}}}"
 
 
@@ -222,7 +221,7 @@ def desk_at(name):
 
 
 def scene(doc, unit, label_size):
-    """The trading floor: five desks, the writer's plinth, the exchange and the reviewer."""
+    """The trading floor: six desks (the writer's on a plinth), the exchange and the reviewer's island."""
     iso = Iso(unit)
     floor = "#0f2e29"
     iso.box(0, 0, -0.5, FLOOR[0], FLOOR[1], 0.5, floor, layer=0)
@@ -259,7 +258,7 @@ def scene(doc, unit, label_size):
 
     def centre(name):
         if name == "HL":
-            return iso.p(hx + side / 2, hy + side / 2, 2.95)
+            return iso.p(hx + side / 2, hy + side / 2, 3.35)
         if name == "YOU":
             return iso.p(DESKS["ET"][0], 0.9, 2.6)
         x, y, z = desk_at(name)
@@ -273,7 +272,7 @@ def scene(doc, unit, label_size):
         labels.append(doc.text(lx, ly + label_size * 0.35, name, "Mono-600", label_size, fill,
                                anchor="middle"))
     lx, ly = iso.p(hx + side / 2, hy + side / 2, 2.9)
-    labels.append(doc.text(lx, ly - unit * 1.35, "HYPERLIQUID", "Inter-700", label_size * 0.85, C["mint_dim"],
+    labels.append(doc.text(lx, ly - unit * 1.75, "HYPERLIQUID", "Inter-700", label_size * 0.85, C["mint_dim"],
                            anchor="middle", spacing=1.6))
     lx, ly = iso.p(TR_ISLAND[0] + TR_ISLAND[2], TR_ISLAND[1] + 0.2, 0)
     labels.append(doc.text(lx + 8, ly + 4, "BY DM", "Inter-700", label_size * 0.8, C["mint_dim"],
@@ -295,7 +294,7 @@ def scene(doc, unit, label_size):
     r = unit * 0.3
     ticket = ('<g class="ticket"><g class="ticket-body">'
               f'<circle r="{r * 1.7:.1f}" fill="{C["mint"]}" opacity=".16"/>'
-              f'<path d="M0 {-r:.1f}L{r:.1f} 0L0 {r:.1f}L{-r:.1f} 0Z" fill="{C["mint"]}"/>'
+              f'<path d="M0 {-r:.1f}L{r:.1f} 0L0 {r:.1f}L{-r:.1f} 0Z" fill="{C["mint"]}" stroke="{C["ink"]}" stroke-width="1.5"/>'
               f'<path d="M0 {-r * .42:.1f}L{r * .42:.1f} 0L0 {r * .42:.1f}L{-r * .42:.1f} 0Z" fill="{C["ink"]}"/></g></g>')
 
     frames, first = [], None
@@ -307,29 +306,26 @@ def scene(doc, unit, label_size):
     kf += f"100%{{transform:translate({first[0]:.1f}px,{first[1]:.1f}px)}}"
     et = centre("ET")
     css = [f"@keyframes route{{{kf}}}",
-           f"@keyframes fade{{0%{{opacity:0}}{pct(0.25)}{{opacity:1}}{pct(11.8)}{{opacity:1}}{pct(11.95)}{{opacity:0}}100%{{opacity:0}}}}",
+           f"@keyframes fade{{0%{{opacity:0}}{pct(0.25)}{{opacity:1}}{pct(STOPS[-1][2])}{{opacity:1}}"
+           f"{pct(STOPS[-1][2] + 0.15)}{{opacity:0}}100%{{opacity:0}}}}",
            f".ticket{{transform:translate({et[0]:.1f}px,{et[1]:.1f}px);animation:route {LOOP}s ease-in-out infinite}}",
            f".ticket-body{{animation:fade {LOOP}s linear infinite}}",
            ".you-on{opacity:0}"]
     for name in list(DESKS) + ["TR"]:
-        windows = [(a, b) for stop, a, b in STOPS if stop.rstrip("2") == name]
-        for i, (a, b) in enumerate(windows):
-            css.append(window_keyframes(f"glow-{name}-{i}", a, b))
-        css.append(f".mon-{name} .screen{{opacity:0;"
-                   + ("animation:" + ",".join(f"glow-{name}-{i} {LOOP}s linear infinite" for i in range(len(windows))) if windows else "")
-                   + "}")
+        windows = [(a, b) for stop, a, b in STOPS if stop in (name, name + "2")]
+        css.append(window_keyframes(f"glow-{name}", windows))
+        css.append(f".mon-{name} .screen{{opacity:0;animation:glow-{name} {LOOP}s linear infinite}}")
     a, b = STOP_TIMES["YOU"]
-    css.append(window_keyframes("approve", a + 0.35, b))
+    css.append(window_keyframes("approve", [(a + 0.35, b)]))
     css.append(f".you-on{{animation:approve {LOOP}s linear infinite}}")
     a, b = STOP_TIMES["HL"]
-    css.append(window_keyframes("fill", a, b, prop="fill", on=C["mint"], off="#73c6b3"))
+    css.append(window_keyframes("fill", [(a, b)], prop="fill", on=C["mint"], off="#73c6b3"))
     css.append(f".hl-top polygon:last-child{{animation:fill {LOOP}s linear infinite}}")
     css.append("@media (prefers-reduced-motion:reduce){*{animation:none!important}.mon-ET .screen{opacity:1}}")
     return body + "".join(labels) + you + ticket, css
 
 
 def bounds(svg_body):
-    import re
     xs, ys = [], []
     for pts in re.findall(r'points="([^"]+)"', svg_body):
         for pair in pts.split():
@@ -344,7 +340,6 @@ TAGLINE = ("Your trading desk, ", "fully staffed.")
 
 def tagline(doc, x, y, size):
     lead, accent = TAGLINE
-    doc.used["Inter-500"] = doc.used.get("Inter-500", "") + lead
     doc.used["Inter-600"] = doc.used.get("Inter-600", "") + accent
     return (doc.text(x, y, lead, "Inter-500", size, C["muted"])
             .replace("</text>", f'<tspan fill="{C["mint"]}" font-weight="600">{accent}</tspan></text>'))
@@ -362,7 +357,7 @@ def hero(fonts, mobile):
 
     if mobile:
         W = 400
-        body, css = scene(doc, 15.5, 9)
+        body, css = scene(doc, 15.5, 10.5)
         x0, y0, x1, y1 = bounds(body)
         sx, sy = (W - (x1 - x0)) / 2 - x0, 176 - y0
         H = round(sy + y1 + 26)
@@ -395,7 +390,7 @@ def hero(fonts, mobile):
 def stage_css(i, stop_from, stop_to):
     a = STOP_TIMES[stop_from][0]
     b = STOP_TIMES[stop_to][1]
-    return (window_keyframes(f"on{i}", a, b)
+    return (window_keyframes(f"on{i}", [(a, b)])
             + f".on{i}{{opacity:0;animation:on{i} {LOOP}s linear infinite}}")
 
 
@@ -440,7 +435,8 @@ def legend(doc, x, y, stacked):
         f'<rect x="{x}" y="{y - 10}" width="11" height="11" rx="3" fill="none" stroke="{C["mint_dim"]}" stroke-dasharray="2.5 2"/>'
         + doc.text(x + 18, y, "You", "Inter-600", 13.5, C["text"]) + doc.text(x + 18 + doc.fonts.width("You ", "Inter-600", 13.5), y, "decide", "Inter-500", 13.5, C["muted"]),
     ]
-    ox = x if stacked else x + 18 + doc.fonts.width("You decide", "Inter-500", 13.5) + 28
+    ox = x if stacked else (x + 18 + doc.fonts.width("You ", "Inter-600", 13.5)
+                            + doc.fonts.width("decide", "Inter-500", 13.5) + 28)
     oy = y + 24 if stacked else y
     items.append(f'<rect x="{ox}" y="{oy - 10}" width="11" height="11" rx="3" fill="{C["mint"]}"/>'
                  + doc.text(ox + 18, oy, "One writer", "Inter-600", 13.5, C["text"])
@@ -450,7 +446,7 @@ def legend(doc, x, y, stacked):
 
 def flow(fonts, mobile):
     doc = Doc(fonts)
-    css = [f"@media (prefers-reduced-motion:reduce){{*{{animation:none!important}}[class^=on]{{opacity:0}}}}"]
+    css = ["@media (prefers-reduced-motion:reduce){*{animation:none!important}[class^=on]{opacity:0}}"]
     parts = []
     if not mobile:
         W, pad = 800, 28
@@ -518,16 +514,17 @@ def flow(fonts, mobile):
         y += 22
         parts.append(f'<path d="M{pad} {y}H{W - pad}" stroke="{C["line"]}"/>')
         parts.append(legend(doc, pad, y + 28, True))
-        for k, line in enumerate(doc.wrap("Six Bots share the Trading Floor; the Trade Reviewer works by DM", "Inter-500", 13.5, w)):
+        lines = doc.wrap("Six Bots share the Trading Floor; the Trade Reviewer works by DM", "Inter-500", 13.5, w)
+        for k, line in enumerate(lines):
             parts.append(doc.text(pad, y + 80 + 19 * k, line, "Inter-500", 13.5, C["muted"]))
-        H = y + 80 + 19 * k + 22
+        H = y + 80 + 19 * (len(lines) - 1) + 22
     H = round(H)
     bg = (f'<defs><radialGradient id="bg" cx="0.85" cy="0" r="0.9"><stop offset="0" stop-color="#123832"/>'
           f'<stop offset="0.45" stop-color="{C["panel"]}"/><stop offset="1" stop-color="{C["bg"]}"/></radialGradient></defs>'
           f'<rect x=".5" y=".5" width="{W - 1}" height="{H - 1}" rx="18" fill="url(#bg)" stroke="{C["line"]}"/>')
     desc = ("1 idea, from you. 2 evidence, from the Market Analyst, Research Analyst and Strategist. "
             "3 risk sign-off: the Risk Manager sizes the trade and issues the ticket. 4 your approval, by ticket id. "
-            "5 one send, by the Execution Trader, the only Bot with the key. 6 reconciliation: the Execution Trader "
+            "5 one send, by the Execution Trader, the one Bot with the keys. 6 reconciliation: the Execution Trader "
             "confirms it from the exchange record. 7 review: the Trade Reviewer grades process and outcome separately.")
     return svg(W, H, "One trade, seven stages", desc, doc.style("".join(css)), bg + "".join(parts))
 

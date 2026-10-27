@@ -18,20 +18,20 @@
     font-family: Inter, sans-serif; color: var(--text);
   }
   .head { display: flex; justify-content: space-between; align-items: baseline; }
-  .eyebrow { font-weight: 700; font-size: 13px; letter-spacing: .2em; color: var(--mint); text-transform: uppercase; }
-  .note { font-size: 13px; color: var(--mint-dim); }
+  .eyebrow { font-weight: 700; font-size: 15px; letter-spacing: .18em; color: var(--mint); text-transform: uppercase; }
+  .note { font-size: 15px; color: var(--mint-dim); }
   .row { display: grid; gap: 10px; margin-top: 18px; align-items: stretch; }
-  .row.a { grid-template-columns: 1fr 18px 1.35fr 18px 1fr 18px 1fr; }
+  .row.a { grid-template-columns: .8fr 18px 1.2fr 18px 1.2fr 18px 1.2fr; }
   .row.b { grid-template-columns: 1fr 18px 1fr 18px 1fr; margin-top: 10px; }
   .turn { height: 22px; margin: 6px 0 0; position: relative; }
   .turn svg { position: absolute; inset: 0; width: 100%; height: 100%; }
   .stage {
     background: var(--bg); border: 1px solid var(--line-hi); border-radius: 12px;
-    padding: 12px 14px 13px; min-height: 86px;
+    padding: 12px 14px 13px; min-height: 104px;
   }
-  .n { font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 600; color: var(--mint-dim); }
-  .name { font-weight: 700; font-size: 16px; margin-top: 3px; color: #effdf8; }
-  .who { font-size: 12.5px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
+  .n { font-family: "JetBrains Mono", monospace; font-size: 13px; font-weight: 600; color: var(--mint-dim); }
+  .name { white-space: nowrap; font-weight: 700; font-size: 20px; margin-top: 3px; color: #effdf8; }
+  .who { font-size: 15px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
   .stage.you { border-style: dashed; border-color: var(--mint-dim); }
   .stage.you .name { color: var(--mint); }
   .stage.send { background: var(--mint); border-color: var(--mint); }
@@ -40,7 +40,7 @@
   .arr { display: grid; place-items: center; color: var(--mint-dim); font-size: 15px; }
   .foot {
     display: flex; gap: 18px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
-    font-size: 12.5px; color: var(--muted);
+    font-size: 14px; color: var(--muted); flex-wrap: wrap; row-gap: 6px;
   }
   .foot b { color: var(--text); font-weight: 600; }
   .key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
@@ -60,7 +60,7 @@
       <div class="arr">&rarr;</div>
       <div class="stage"><div class="n">02</div><div class="name">evidence</div><div class="who">Market Analyst, Research Analyst, Strategist</div></div>
       <div class="arr">&rarr;</div>
-      <div class="stage"><div class="n">03</div><div class="name">risk sign-off</div><div class="who">Risk Manager sizes it and issues the ticket</div></div>
+      <div class="stage"><div class="n">03</div><div class="name">risk sign&#8209;off</div><div class="who">Risk Manager sizes it and issues the ticket</div></div>
       <div class="arr">&rarr;</div>
       <div class="stage you"><div class="n">04</div><div class="name">your approval</div><div class="who">You, by ticket id</div></div>
     </div>
@@ -68,7 +68,7 @@
     <div class="turn">
       <svg viewBox="0 0 744 22" preserveAspectRatio="none" aria-hidden="true">
         <path d="M 107 17 L 112 22 L 117 17" fill="none" stroke="#73c6b3" stroke-width="1.5"/>
-        <path d="M 670 0 V 11 H 112 V 22" fill="none" stroke="#73c6b3" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+        <path d="M 659 0 V 11 H 112 V 22" fill="none" stroke="#73c6b3" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
       </svg>
     </div>
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/hero.png" width="800" alt="HyperGrok: a Hyperliquid trading desk for Grok Bot. Seven agents, one writer, your approval. Six roles read; the Execution Trader sends the ticket you approved, once.">
+  <img src="assets/hero.png" width="800" alt="HyperGrok, a Hyperliquid trading desk for Grok Bot: seven agents, one writer, your approval.">
 </p>
 
 <p align="center">

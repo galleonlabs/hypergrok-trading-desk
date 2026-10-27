@@ -1,22 +1,19 @@
 # Graphic sources
 
-`hero.html`, `desk-flow.html` and `desk-flow-mobile.html` are the editable sources for `assets/hero.png`, `assets/desk-flow.png` and `assets/desk-flow-mobile.png`. The README serves the stacked mobile diagram to screens up to 600px wide. They share the palette of `assets/ticket-hg-20260816-01.png` and load Inter and JetBrains Mono from Google Fonts, so render with a network connection.
+`build_graphics.py` writes the README's animated graphics from one data model:
 
-Render each at 2x with a transparent background, from the repository root:
+| File | What it shows |
+| --- | --- |
+| `assets/hero.svg`, `assets/hero-mobile.svg` | an isometric trading floor; a ticket moves from the Desk Lead through the analysts and Risk Manager, waits for your approval, goes once to Hyperliquid, then to the Trade Reviewer |
+| `assets/desk-flow.svg`, `assets/desk-flow-mobile.svg` | the seven stages of a trade and who owns each, lit in turn on the same 12-second loop |
+
+The README serves the mobile versions to screens up to 600px wide. Animation is plain CSS inside each SVG and stops under `prefers-reduced-motion`. Text is set in subsets of Inter and JetBrains Mono (SIL Open Font License) embedded as WOFF2, so it renders the same everywhere.
+
+To rebuild, download the static TTFs named in `FONT_FILES` (Inter Medium, SemiBold, Bold and ExtraBold, and JetBrains Mono SemiBold) into one directory, then run from the repository root:
 
 ```bash
-chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-"$chrome" --headless=new --hide-scrollbars --force-device-scale-factor=2 \
-  --default-background-color=00000000 --virtual-time-budget=4000 \
-  --window-size=800,300 --screenshot=assets/hero.png "file://$PWD/assets/src/hero.html"
-"$chrome" --headless=new --hide-scrollbars --force-device-scale-factor=2 \
-  --default-background-color=00000000 --virtual-time-budget=4000 \
-  --window-size=800,600 --screenshot=assets/desk-flow.png "file://$PWD/assets/src/desk-flow.html"
-"$chrome" --headless=new --hide-scrollbars --force-device-scale-factor=2 \
-  --default-background-color=00000000 --virtual-time-budget=4000 \
-  --window-size=400,1100 --screenshot=assets/desk-flow-mobile.png "file://$PWD/assets/src/desk-flow-mobile.html"
+python3 -m venv /tmp/hg-fonts && /tmp/hg-fonts/bin/pip install fonttools brotli
+/tmp/hg-fonts/bin/python assets/src/build_graphics.py --fonts <font-directory>
 ```
 
-Trim the transparent margin below both diagrams, then reduce all three to a 256-colour palette before committing; the full-colour captures are several hundred kilobytes.
-
-The stages, owners and labels in both diagram sources must match the trade path in `README.md` and `docs/ARCHITECTURE.md`. Change them together.
+The stages, owners and timeline live in `STAGES` and `STOPS`, and the banner line in `TAGLINE`. Stages and owners must match the trade path in `README.md` and `docs/ARCHITECTURE.md`; change them together.

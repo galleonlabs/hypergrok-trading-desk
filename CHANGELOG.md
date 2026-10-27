@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
++ Open the README with a HyperGrok banner, release, npm, licence and ecosystem-map badges and a section index. Replace the ASCII trade path with a diagram of the seven stages and who owns each one. Both graphics are rendered from editable HTML sources in `assets/src/` and ship in the npm resource package.
+
 ## 1.7.0 - 2026-10-25
 
 + Simplify onboarding across the README, setup, role profiles and five runtime guides. Show a real dated Opening Bell capture, put the worked ticket beside its example, and document each runtime's actual roles, rules and hook support. Add release-watching, Discussions and contribution routes with community guidelines.

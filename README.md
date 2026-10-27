@@ -85,7 +85,10 @@ You supply the ideas. Each role owns a stage and hands its evidence to the next.
 Six sit together on the **Trading Floor** group chat; the Trade Reviewer works by DM. Every trade follows the same path:
 
 <p align="center">
-  <img src="assets/desk-flow.png" width="800" alt="One trade, seven stages: 1 idea, from you; 2 evidence, from the Market Analyst, Research Analyst and Strategist; 3 risk sign-off, where the Risk Manager sizes the trade and issues the ticket; 4 your approval, by ticket id; 5 one send, by the Execution Trader, the only Bot with the key; 6 reconciliation, where the Execution Trader confirms it from the exchange record; 7 review, where the Trade Reviewer grades process and outcome separately.">
+  <picture>
+    <source media="(max-width: 600px)" srcset="assets/desk-flow-mobile.png">
+    <img src="assets/desk-flow.png" width="800" alt="One trade, seven stages: 1 idea, from you; 2 evidence, from the Market Analyst, Research Analyst and Strategist; 3 risk sign-off, where the Risk Manager sizes the trade and issues the ticket; 4 your approval, by ticket id; 5 one send, by the Execution Trader, the only Bot with the key; 6 reconciliation, where the Execution Trader confirms it from the exchange record; 7 review, where the Trade Reviewer grades process and outcome separately.">
+  </picture>
 </p>
 
 ## A day on the desk

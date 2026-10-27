@@ -33,7 +33,7 @@ RESOURCES = (
     "docs/RESEARCH_DATASETS.md", "docs/STOP_COST.md", "docs/hyperliquid-claude-code.md",
     "docs/hyperliquid-codex.md", "docs/hyperliquid-cursor.md", "docs/hyperliquid-gemini-cli.md",
     "docs/hyperliquid-grok-build.md", "assets/ticket-hg-20260816-01.png",
-    "assets/hero.png", "assets/desk-flow.png",
+    "assets/hero.png", "assets/desk-flow.png", "assets/desk-flow-mobile.png",
     "hooks/exchange-write-gate.json", "hooks/exchange_write_gate.py",
 )
 SCRIPTS = (

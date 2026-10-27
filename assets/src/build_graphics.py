@@ -259,7 +259,7 @@ def scene(doc, unit, label_size):
 
     def centre(name):
         if name == "HL":
-            return iso.p(hx + side / 2, hy + side / 2, 3.25)
+            return iso.p(hx + side / 2, hy + side / 2, 2.95)
         if name == "YOU":
             return iso.p(DESKS["ET"][0], 0.9, 2.6)
         x, y, z = desk_at(name)
@@ -273,7 +273,7 @@ def scene(doc, unit, label_size):
         labels.append(doc.text(lx, ly + label_size * 0.35, name, "Mono-600", label_size, fill,
                                anchor="middle"))
     lx, ly = iso.p(hx + side / 2, hy + side / 2, 2.9)
-    labels.append(doc.text(lx, ly - 22, "HYPERLIQUID", "Inter-700", label_size * 0.85, C["mint_dim"],
+    labels.append(doc.text(lx, ly - unit * 1.35, "HYPERLIQUID", "Inter-700", label_size * 0.85, C["mint_dim"],
                            anchor="middle", spacing=1.6))
     lx, ly = iso.p(TR_ISLAND[0] + TR_ISLAND[2], TR_ISLAND[1] + 0.2, 0)
     labels.append(doc.text(lx + 8, ly + 4, "BY DM", "Inter-700", label_size * 0.8, C["mint_dim"],

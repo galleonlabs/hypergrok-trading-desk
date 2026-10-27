@@ -17,6 +17,6 @@ chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   --window-size=400,1100 --screenshot=assets/desk-flow-mobile.png "file://$PWD/assets/src/desk-flow-mobile.html"
 ```
 
-Trim the transparent margin below both diagrams, then reduce both to a 256-colour palette before committing; the full-colour captures are several hundred kilobytes.
+Trim the transparent margin below both diagrams, then reduce all three to a 256-colour palette before committing; the full-colour captures are several hundred kilobytes.
 
 The stages, owners and labels in both diagram sources must match the trade path in `README.md` and `docs/ARCHITECTURE.md`. Change them together.

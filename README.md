@@ -1,14 +1,17 @@
 <p align="center">
-  <img src="assets/mascot-320.jpg" width="160" alt="HyperGrok mascot">
+  <img src="assets/hero.png" width="800" alt="HyperGrok: a Hyperliquid trading desk for Grok Bot. Seven agents, one writer, your approval. Six roles read; the Execution Trader sends the ticket you approved, once.">
 </p>
 
-<h1 align="center">HyperGrok</h1>
-
-<p align="center"><strong>Grok Bot for Hyperliquid. Seven agents, one writer, your approval.</strong></p>
+<p align="center">
+  <a href="https://github.com/galleonlabs/hypergrok-trading-desk/releases"><img src="https://img.shields.io/github/v/release/galleonlabs/hypergrok-trading-desk?style=flat-square&labelColor=071815&color=1d4a43&label=release" alt="Latest release"></a>
+  <a href="https://www.npmjs.com/package/hypergrok-trading-desk"><img src="https://img.shields.io/npm/v/hypergrok-trading-desk?style=flat-square&labelColor=071815&color=1d4a43&label=npm" alt="npm version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1d4a43?style=flat-square&labelColor=071815" alt="MIT license"></a>
+  <a href="https://www.hypurr.co/ecosystem-projects/hypergrok"><img src="https://img.shields.io/badge/HypurrCollective-ecosystem%20map-1d4a43?style=flat-square&labelColor=071815" alt="Listed on the HypurrCollective Hyperliquid Ecosystem Map"></a>
+</p>
 
 <p align="center">Works in <a href="#start">Grok Bot</a> · <a href="docs/hyperliquid-claude-code.md">Claude Code</a> · <a href="docs/hyperliquid-cursor.md">Cursor</a> · <a href="docs/hyperliquid-codex.md">Codex</a> · <a href="docs/hyperliquid-gemini-cli.md">Gemini CLI</a> · <a href="docs/hyperliquid-grok-build.md">Grok Build</a></p>
 
-<p align="center">Listed on the <a href="https://www.hypurr.co/ecosystem-projects/hypergrok">HypurrCollective Hyperliquid Ecosystem Map</a></p>
+<p align="center"><a href="#try-it-now-no-keys">Try it</a> · <a href="#start">Start</a> · <a href="#meet-the-desk">Meet the desk</a> · <a href="#a-day-on-the-desk">A day on the desk</a> · <a href="#trading-controls">Trading controls</a> · <a href="#inside-the-repository">Docs</a></p>
 
 HyperGrok gives your AI agents a shared process for Hyperliquid research, risk, execution and review. It includes seven role profiles, seventeen skills and read-only Python tools. Start with public market data, then set up the desk in Grok Bot or [your preferred agent tool](#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli). Trading requires your own API wallet, verified approval controls and an exact ticket you approve.
 
@@ -81,9 +84,9 @@ You supply the ideas. Each role owns a stage and hands its evidence to the next.
 
 Six sit together on the **Trading Floor** group chat; the Trade Reviewer works by DM. Every trade follows the same path:
 
-```
-idea -> evidence -> risk sign-off -> your approval -> one send -> reconciliation -> review
-```
+<p align="center">
+  <img src="assets/desk-flow.png" width="800" alt="One trade, seven stages: 1 idea, from you; 2 evidence, from the Market Analyst, Research Analyst and Strategist; 3 risk sign-off, where the Risk Manager sizes the trade and issues the ticket; 4 your approval, by ticket id; 5 one send, by the Execution Trader, the only Bot with the key; 6 reconciliation, where the Execution Trader confirms it from the exchange record; 7 review, where the Trade Reviewer grades process and outcome separately.">
+</p>
 
 ## A day on the desk
 
@@ -183,7 +186,7 @@ skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
 template/    exact public Grok Bot profile and skill hashes
 scripts/     zero-key market, history and stop-cost reads, offline verification, release checks
 docs/        how it works, FAQ, install pages, stop cost, provenance
-assets/      the mascot, logo and worked example
+assets/      the mascot, logo, README graphics and their HTML sources
 ```
 
 | Doc | |

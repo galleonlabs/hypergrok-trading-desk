@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/hero.png" width="800" alt="HyperGrok, a Hyperliquid trading desk for Grok Bot: seven agents, one writer, your approval.">
+  <picture>
+    <source media="(max-width: 600px)" srcset="assets/hero-mobile.svg">
+    <img src="assets/hero.svg" width="800" alt="HyperGrok, a Hyperliquid trading desk for Grok Bot. Your trading desk, fully staffed. A ticket moves along the trading floor from the Desk Lead and analysts to the Risk Manager, waits for your approval, then the Execution Trader sends it once to Hyperliquid and the Trade Reviewer records it.">
+  </picture>
 </p>
 
 <p align="center">
@@ -10,8 +13,6 @@
 </p>
 
 <p align="center">Works in <a href="#start">Grok Bot</a> · <a href="docs/hyperliquid-claude-code.md">Claude Code</a> · <a href="docs/hyperliquid-cursor.md">Cursor</a> · <a href="docs/hyperliquid-codex.md">Codex</a> · <a href="docs/hyperliquid-gemini-cli.md">Gemini CLI</a> · <a href="docs/hyperliquid-grok-build.md">Grok Build</a></p>
-
-<p align="center"><a href="#try-it-now-no-keys">Try it</a> · <a href="#start">Start</a> · <a href="#meet-the-desk">Meet the desk</a> · <a href="#a-day-on-the-desk">A day on the desk</a> · <a href="#trading-controls">Trading controls</a> · <a href="#inside-the-repository">Docs</a></p>
 
 HyperGrok gives your AI agents a shared process for Hyperliquid research, risk, execution and review. It includes seven role profiles, seventeen skills and read-only Python tools. Start with public market data, then set up the desk in Grok Bot or [your preferred agent tool](#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli). Trading requires your own API wallet, verified approval controls and an exact ticket you approve.
 
@@ -41,7 +42,8 @@ Or add the [public HyperGrok Desk Lead template](https://x.ai/bot/qgVMePFoWotJTU
 
 The Desk Lead runs Opening Bell, installs the shared skills, prepares the team and returns a setup receipt. The desk starts in research mode. Add a testnet API wallet when you want to practise with play money; mainnet uses the same ticket process after its approval controls are verified. See the [full setup runbook](SETUP.md) for each step.
 
-### Opening Bell
+<details>
+<summary><strong>Opening Bell and desk doctor for scripts</strong></summary>
 
 Opening Bell reports source and UTC time, mid/mark/oracle prices, 24-hour change and volume, hourly funding, open interest, spread and depth at 5/10/25 bps. It requests coarser book pages when twenty levels cannot cover a band, identifies each figure's source page and marks unreached depth as a floor. `scripts/desk_doctor.py` checks the release, roles, skill hashes, desk folders and public connectivity. Both use only Python's standard library.
 
@@ -55,7 +57,10 @@ python3 scripts/desk_doctor.py --offline --json
 
 `--testnet` explicitly selects testnet. A custom API origin is labelled `custom`. HIP-3 discovery stays read-only; execution remains opt-in under the desk's normal ticket rules.
 
-### History you can check
+</details>
+
+<details>
+<summary><strong>Collect history you can check</strong></summary>
 
 Before a backtest, collect the exact period into a research bundle:
 
@@ -67,6 +72,8 @@ python3 scripts/research_dataset.py --verify ../hypergrok-data/eth-september --j
 ```
 
 The bundle keeps requests, captured responses, observed CSV rows and a hashed manifest. Closed UTC windows, explicit missing ranges and bounded funding pagination distinguish `complete`, `incomplete` and `unavailable` history. Offline verification replays the saved responses; it checks consistency, not source authenticity or strategy quality. The tool needs no key and never fills a gap with synthetic data. See [Research datasets](docs/RESEARCH_DATASETS.md) for the supported intervals, market selection, exit codes and analyst handoff.
+
+</details>
 
 ## Meet the desk
 
@@ -86,8 +93,8 @@ Six sit together on the **Trading Floor** group chat; the Trade Reviewer works b
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="assets/desk-flow-mobile.png">
-    <img src="assets/desk-flow.png" width="800" alt="One trade, seven stages: 1 idea, from you; 2 evidence, from the Market Analyst, Research Analyst and Strategist; 3 risk sign-off, where the Risk Manager sizes the trade and issues the ticket; 4 your approval, by ticket id; 5 one send, by the Execution Trader, the only Bot with the key; 6 reconciliation, where the Execution Trader confirms it from the exchange record; 7 review, where the Trade Reviewer grades process and outcome separately.">
+    <source media="(max-width: 600px)" srcset="assets/desk-flow-mobile.svg">
+    <img src="assets/desk-flow.svg" width="800" alt="One trade, seven stages: 1 idea, from you; 2 evidence, from the Market Analyst, Research Analyst and Strategist; 3 risk sign-off, where the Risk Manager sizes the trade and issues the ticket; 4 your approval, by ticket id; 5 one send, by the Execution Trader, the only Bot with the key; 6 reconciliation, where the Execution Trader confirms it from the exchange record; 7 review, where the Trade Reviewer grades process and outcome separately.">
   </picture>
 </p>
 
@@ -189,7 +196,7 @@ skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
 template/    exact public Grok Bot profile and skill hashes
 scripts/     zero-key market, history and stop-cost reads, offline verification, release checks
 docs/        how it works, FAQ, install pages, stop cost, provenance
-assets/      the mascot, logo, README graphics and their HTML sources
+assets/      the mascot, logo, README graphics and their generator
 ```
 
 | Doc | |

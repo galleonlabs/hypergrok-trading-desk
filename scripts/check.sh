@@ -122,11 +122,11 @@ python3 scripts/check_grok_template.py .
 python3 scripts/test_check_grok_template.py
 python3 scripts/test_release_bump.py
 python3 scripts/test_check_public_template.py
-python3 scripts/test_opening_bell.py
 python3 scripts/test_stop_cost.py
-python3 scripts/test_research_dataset.py
-python3 scripts/test_desk_doctor.py
 python3 scripts/test_exchange_write_gate.py
 
 # Verify the published arithmetic without loading a wallet or SDK.
 python3 scripts/test_order_rounding.py
+
+# Real command journeys replace tool unit suites; financial, approval and release contracts above remain required.
+python3 scripts/cli_journeys.py

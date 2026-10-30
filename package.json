@@ -77,6 +77,7 @@
     "scripts/check_npm_package.py",
     "scripts/check_public_template.py",
     "scripts/cli_contract.py",
+    "scripts/cli_journeys.py",
     "scripts/desk_doctor.py",
     "scripts/opening_bell.py",
     "scripts/release_bump.py",

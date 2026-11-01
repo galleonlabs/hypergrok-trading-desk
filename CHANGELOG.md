@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.7.1 - 2026-11-01
+
++ Explain HIP-3 equity readings while the underlying market is closed: distinguish API price references from an official close, pair mark/oracle divergence with liquidity, retain DEX identity and hourly funding history, and preserve zero versus unavailable external rates. Keep observations separate from executable prices and return claims.
++ Refresh release pins and skill hashes. The native Grok Bot share remains on its independently verified 1.7.0 bootstrap pending an authorized native update; direct pinned and package installs carry this release.
+
 + Open the README with release, npm, licence and ecosystem-map badges and animated SVGs generated from `assets/src/build_graphics.py`: an isometric trading floor where a ticket moves from the analysts through risk and your approval to the single writer and Hyperliquid, and a stage diagram lit on the same loop. Both stop under reduced motion, embed their fonts and have stacked phone versions. The banner reads "Your trading desk, fully staffed." Fold the Opening Bell automation and research-history detail into expandable sections.
 
 ## 1.7.0 - 2026-10-25

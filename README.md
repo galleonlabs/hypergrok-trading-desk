@@ -19,7 +19,7 @@ HyperGrok gives your AI agents a shared process for Hyperliquid research, risk, 
 ## Try it now, no keys
 
 ```bash
-git clone --depth 1 --branch v1.7.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
@@ -36,9 +36,9 @@ Recorded from the command above on 25 October 2026 at 13:09 UTC. The figures are
 
 For the seven-Bot desk with a shared Trading Floor, open Grok Bot and paste:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.1/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.1/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
-Or add the [public HyperGrok Desk Lead template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ), then send **Start the desk.** Its 1.7.0 bootstrap installs the complete seventeen-skill release. See the [publication and native content checks](docs/GROK_BOT_TEMPLATE.md#publication-verification---2026-10-25).
+Or add the [public HyperGrok Desk Lead template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ), then send **Start the desk.** That share still installs the prior 1.7.0 release; use the pinned bootstrap above for the current release. See the [publication and native content checks](docs/GROK_BOT_TEMPLATE.md#publication-verification---2026-10-25).
 
 The Desk Lead runs Opening Bell, installs the shared skills, prepares the team and returns a setup receipt. The desk starts in research mode. Add a testnet API wallet when you want to practise with play money; mainnet uses the same ticket process after its approval controls are verified. See the [full setup runbook](SETUP.md) for each step.
 
@@ -177,7 +177,7 @@ npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-des
 The complete resources also install from npm:
 
 ```bash
-npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.7.0
+npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.7.1
 python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
 ```
 

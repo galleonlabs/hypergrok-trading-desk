@@ -12,11 +12,11 @@
       "source": {
         "source": "url",
         "url": "https://github.com/galleonlabs/hypergrok-trading-desk.git",
-        "ref": "v1.7.0"
+        "ref": "v1.7.1"
       },
       "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
       "keywords": ["hypergrok", "hyperliquid", "trading desk", "grok bot"],
-      "version": "1.7.0",
+      "version": "1.7.1",
       "author": {
         "name": "Galleon Labs"
       },

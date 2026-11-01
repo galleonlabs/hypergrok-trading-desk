@@ -3,7 +3,7 @@ name: hyperliquid-market-data
 description: Read live Hyperliquid market data from the desk computer with curl or the Python SDK - mid, mark and oracle prices, order book depth, funding (current, predicted, historical), open interest, volume, candles, perp and spot metadata, margin tiers, and how to save datasets for the strategy lab. Read-only, no key. Use for any market brief, depth read, funding question or data pull.
 license: MIT
 metadata:
-  version: "1.2.1"
+  version: "1.2.2"
   author: Galleon Labs
   category: hyperliquid
   network-default: mainnet-for-reads
@@ -176,3 +176,11 @@ REST shares an IP budget of 1200 weight per minute. `allMids`, `l2Book`, `cleari
 - Reading a book once and calling it "the depth" ten minutes later.
 - Forgetting spot `@index` naming and base-token `szDecimals`.
 - Expecting deep history at fine intervals; only the latest 5000 candles per interval exist, so pick the interval to fit the lookback.
+
+### HIP-3 equities while the underlying market is closed
+
+- **Price reference:** `oraclePx` is the deployer's oracle reference, and `prevDayPx` is the API's previous-day reference. Neither field establishes the underlying share's official exchange close. Label `markPx / prevDayPx - 1` as the perp's 24h change against `prevDayPx`, never "since Friday's close". An exchange-close comparison needs a separately sourced official close, its session/date and timestamp; otherwise report it unavailable. Name the price field, DEX-prefixed coin, network and UTC observation time.
+- **Mark/oracle and liquidity:** Report `(markPx / oraclePx - 1) x 10000` in bps only with a positive oracle and both fields present, alongside `dayNtlVlm`. This observed divergence is distinct from the API's impact-price `premium` used in funding. Zero or thin volume warrants checking the timestamped `l2Book` and `recentTrades`; a large divergence alone proves neither an executable price nor a stale mark. Do not infer an underlying stock move from it.
+- **Market identity:** The same ticker on two DEXs represents separate markets with their own books, oracle definitions and funding settings. Query `metaAndAssetCtxs` with the explicit `dex`, and `fundingHistory` with the canonical `dex:COIN`; retain that prefix in every comparison. A ticker alone does not identify the funding rate.
+- **Funding window:** For a weekend or other closed-market question, read several completed hourly `fundingHistory` rows with their UTC times, rather than presenting one current `funding` value as the period's rate. Show the hourly decimals and any simple annualisation (`rate x 24 x 365`, multiply by 100 for percent) separately; annualisation extrapolates that observation and predicts no future payment or return. Retain missing hours as gaps.
+- **External zero rates:** Preserve a venue's reported `0` and distinguish it from `null`, missing or stale data. Check the venue's documented schedule and field semantics before labelling it actual zero accrual, a non-accruing interval or unreported funding. If that evidence is unavailable, say "reported zero; accrual/reporting status unverified". Do not replace every weekend zero with "no accrual" or compare rates whose intervals are unknown.

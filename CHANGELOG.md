@@ -3,6 +3,7 @@
 ## Unreleased
 
 + Publish and independently inspect the 1.7.1 native Grok Bot template on a new share. The 1.7.0 share keeps installing 1.7.0.
++ Refresh the public fork review: 61 listed repositories, 59 accessible, 73 branches, two new heads. Ignore environment files and local desk state in clones, as forks suggested. Decline to name a third-party weekend reference in the market-data skill. No instruction file changed.
 
 ## 1.7.1 - 2026-11-01
 

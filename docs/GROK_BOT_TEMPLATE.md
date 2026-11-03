@@ -2,7 +2,7 @@
 
 `template/grok-bot.json` is the release contract for the public **HyperGrok Desk Lead** template. It records the exact public profile, source release, avatar, exported bootstrap skill and complete reviewed release inventory. `templateSkillNames` lists the skills carried by the share; `skills` contains all seventeen files and hashes that setup must install and verify.
 
-**Release state — 2026-11-01:** The 1.7.1 native template is `ready-to-publish`, with no current public share claimed. The existing share still installs 1.7.0; use the current pinned bootstrap for the newer instructions. Updating and independently reading back the native template requires the retained publishing Bot. That authenticated publication has not been performed for this release. Public preview checks cannot prove a new export.
+**Release state — 2026-11-03:** The [1.7.1 public template](https://x.ai/bot/2GeaOwIsmTEOD_WGzmghC) is published. Its complete exported bootstrap was independently read back in the native UI and matched the reviewed source. The earlier 1.7.0 share keeps installing 1.7.0. Earlier receipts below apply only to their named releases.
 
 **Prior release — 2026-10-25:** The [1.7.0 public template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ) is published. Its complete exported bootstrap was independently read back in the native UI and matched the reviewed source. Source and package checks are recorded separately. Earlier receipts below apply only to their named releases.
 
@@ -75,6 +75,14 @@ The Desk Lead follows `hypergrok-bootstrap`. A passing result has:
 8. this sentence: **Setup stayed read-only: no key requested and no order created or sent.**
 
 Do not describe the template as a zero-interaction installer. **Add to Grok Bot** creates the Desk Lead; **Start the desk.** runs the reviewed setup. The public path is one click and one message.
+
+## Publication verification - 2026-11-03
+
+The [1.7.1 public template](https://x.ai/bot/2GeaOwIsmTEOD_WGzmghC) was authored from tag `v1.7.1` at commit `4acf5434de4161a35dd0cc0106d13959473b199f`. The Bot behind the 1.7.0 share could not be reached from the app or from grok.com, so a fresh Bot and link were used. Keep this Bot so the next release can use **Update template**. The publishing Bot has the manifest name, title and description, a default geometric avatar and one exported `hypergrok-bootstrap` skill. Its Context panel contains the public description and that skill, with no memories and no integrations. The public profile reads "By Andrew".
+
+Independent native readback opened **View Details → Context → hypergrok-bootstrap** before publishing and hashed the complete rendered content. The normalized Markdown body matched the source: 9,450 UTF-8 bytes, SHA-256 `3b71494ff0917fb3b173bbd86bf5324dea905058975040bacfc3720b969e88dd`. The logged-out preview shows the name, the v1.7.1 description and **Add to Grok Bot**.
+
+A fresh public import and **Start the desk.** round trip has not been performed for this release. The source gate and clean pinned installation do not establish native seven-Bot acceptance. No account read, key provisioning, routine activation or exchange action was used for publication.
 
 ## Publication verification - 2026-10-25
 

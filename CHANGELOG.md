@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ Publish and independently inspect the 1.7.1 native Grok Bot template on a new share. The 1.7.0 share keeps installing 1.7.0.
+
 ## 1.7.1 - 2026-11-01
 
 + Explain HIP-3 equity readings while the underlying market is closed: distinguish API price references from an official close, pair mark/oracle divergence with liquidity, retain DEX identity and hourly funding history, and preserve zero versus unavailable external rates. Keep observations separate from executable prices and return claims.

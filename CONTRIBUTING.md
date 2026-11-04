@@ -23,9 +23,9 @@ HyperGrok is instructions and resources for a user's Grok Bot, not software the 
 bash scripts/check.sh
 ```
 
-The required check runs structural validation, retained release/security/financial contracts, and 14 real CLI journeys against an isolated loopback API. The tool unit suites for Opening Bell, research datasets and the doctor remain available through `python3 -m unittest discover -s scripts -p 'test_*.py'`; prefer end-to-end journeys or boundary contracts for new coverage. CI runs the same script.
+The required check runs structural validation, retained release/security/financial contracts, and 19 real CLI journeys against an isolated loopback API. The tool unit suites for Opening Bell, research datasets and the doctor remain available through `python3 -m unittest discover -s scripts -p 'test_*.py'`; prefer end-to-end journeys or boundary contracts for new coverage. CI runs the same script.
 
-Retained contracts and reasons: manifest/npm/template checks and their negative fixtures protect installation and publication; release-bump fixtures protect immutable tags and scoped writes; exchange-write-gate fixtures protect approval and single-writer boundaries; stop-cost and order-rounding fixtures protect financial arithmetic. The CLI journeys exercise schema/errors without network, offline diagnostics, market reads, risk sizing, dataset collection, offline replay and tamper refusal. No signing, keys, account data or exchange request is used. CI-only changes do not change the pinned user instruction release.
+Retained contracts and reasons: manifest/npm/template checks and their negative fixtures protect installation and publication; release-bump fixtures protect immutable tags and scoped writes; exchange-write-gate fixtures protect approval and single-writer boundaries; stop-cost and order-rounding fixtures protect financial arithmetic. The CLI journeys exercise schema/errors without network, offline diagnostics, market reads, every-DEX account reads in standard and shared-collateral modes, risk sizing, dataset collection, offline replay and tamper refusal. No signing, keys, real account data or exchange request is used. CI-only changes do not change the pinned user instruction release.
 
 Structural validation includes:
 

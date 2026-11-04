@@ -194,8 +194,8 @@ SETUP.md     what your Grok Bot follows to build the desk
 agents/      seven roles: Bot profile card + full system prompt
 skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
 template/    exact public Grok Bot profile and skill hashes
-scripts/     zero-key market, history and stop-cost reads, offline verification, release checks
-docs/        how it works, FAQ, install pages, stop cost, provenance
+scripts/     zero-key market, history, stop-cost and every-DEX account reads, offline verification, release checks
+docs/        how it works, FAQ, install pages, stop cost, account read, provenance
 assets/      the mascot, logo, README graphics and their generator
 ```
 
@@ -205,6 +205,7 @@ assets/      the mascot, logo, README graphics and their generator
 | [FAQ](docs/FAQ.md) | keys, approvals, testnet, customising the team |
 | [Research datasets](docs/RESEARCH_DATASETS.md) | collect, verify and hand off historical evidence |
 | [Stop cost](docs/STOP_COST.md) | what a triggered stop costs, from the live book |
+| [Account read](docs/ACCOUNT_READ.md) | positions and equity across the main DEX, every HIP-3 DEX and spot |
 | [Skills index](skills/README.md) | every skill and who uses it |
 | [Grok Bot template](docs/GROK_BOT_TEMPLATE.md) | public profile, publish contract and clean-install evaluation |
 | [Provenance](docs/PROVENANCE.md) | sources and licences |

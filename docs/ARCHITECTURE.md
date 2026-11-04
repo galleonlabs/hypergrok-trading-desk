@@ -55,6 +55,8 @@ The Market Analyst hands the complete bundle to the Strategist, who runs offline
 
 `scripts/stop_cost.py` runs on the read plane too. It reads public market metadata and the L2 book and applies the `desk-risk-limits` sizing arithmetic to a plan and equity the user types, so it prices a stop without an account read.
 
+`scripts/account_read.py` is the read plane's account view. Given an address, it lists every perp DEX with `perpDexs`, reads `clearinghouseState` for each, including HIP-3 DEXs such as `xyz`, and reads spot balances. It sums total equity only in the standard account mode, where balances are separate, and leaves the total null for shared-collateral modes. It needs no key and cannot sign. See [Account read](ACCOUNT_READ.md).
+
 Data completeness, statistical evidence, Risk PASS and a user's exact ticket approval are separate decisions. The dataset tool does not supply historical oracle prices, reconstruct intrabar fills, read an account or touch an exchange write path.
 
 ## Trust boundaries

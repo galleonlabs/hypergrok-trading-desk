@@ -28,7 +28,7 @@ MANIFESTS = (
 )
 RESOURCES = (
     "assets/mascot.jpg", "assets/mascot-320.jpg", "assets/opening-bell.gif", "rules/hypergrok-team.mdc",
-    "template/grok-bot.json", "docs/ARCHITECTURE.md", "docs/FAQ.md",
+    "template/grok-bot.json", "docs/ACCOUNT_READ.md", "docs/ARCHITECTURE.md", "docs/FAQ.md",
     "docs/FORK_REVIEW.md", "docs/GROK_BOT_TEMPLATE.md", "docs/PROVENANCE.md",
     "docs/RESEARCH_DATASETS.md", "docs/STOP_COST.md", "docs/hyperliquid-claude-code.md",
     "docs/hyperliquid-codex.md", "docs/hyperliquid-cursor.md", "docs/hyperliquid-gemini-cli.md",
@@ -37,7 +37,7 @@ RESOURCES = (
     "hooks/exchange-write-gate.json", "hooks/exchange_write_gate.py",
 )
 SCRIPTS = (
-    "check.sh", "check_grok_template.py", "check_manifests.py",
+    "account_read.py", "check.sh", "check_grok_template.py", "check_manifests.py",
     "check_npm_package.py", "check_public_template.py", "cli_contract.py", "cli_journeys.py", "desk_doctor.py",
     "opening_bell.py", "release_bump.py", "research_dataset.py", "stop_cost.py", "test_research_dataset.py", "test_check_grok_template.py", "test_check_manifests.py",
     "test_check_npm_package.py", "test_check_public_template.py",

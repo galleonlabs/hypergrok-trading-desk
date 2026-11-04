@@ -1,0 +1,86 @@
+# Publishes through npm trusted publishing (OIDC): no npm token exists here, and
+# the npm-release environment only admits main, so a pushed branch cannot publish.
+name: Publish npm package
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run every release check without publishing
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-tags: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - run: npm install -g npm@11.21.1
+      - name: Read the package identity
+        run: |-
+          set -euo pipefail
+          name=$(node -p "require(\"./package.json\").name")
+          version=$(node -p "require(\"./package.json\").version")
+          echo "NPM_NAME=$name" >> "$GITHUB_ENV"
+          echo "NPM_VERSION=$version" >> "$GITHUB_ENV"
+          if npm view "$name@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then echo "NPM_EXISTS=true" >> "$GITHUB_ENV"; else echo "NPM_EXISTS=false" >> "$GITHUB_ENV"; fi
+      - name: Require successful CI on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          conclusion=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 1 --json conclusion --jq ".[0].conclusion // \"\"")
+          if [[ "$conclusion" != success ]]; then echo "::error::CI for $GITHUB_SHA is \"$conclusion\", not success"; exit 1; fi
+      - name: Require the release tag on this commit
+        if: ${{ !inputs.dry_run }}
+        run: |-
+          set -euo pipefail
+          test "$(git rev-parse "refs/tags/v$NPM_VERSION^{commit}")" = "$GITHUB_SHA"
+      - name: Pack and review the archive
+        run: |-
+          set -euo pipefail
+          npm pack --pack-destination "$RUNNER_TEMP"
+          archive="$RUNNER_TEMP/$NPM_NAME-$NPM_VERSION.tgz"
+          python3 scripts/check_npm_package.py . --tarball "$archive"
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/unpacked"
+          (cd "$RUNNER_TEMP/unpacked/package" && bash scripts/check.sh)
+          echo "NPM_ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Publish the reviewed archive
+        if: ${{ !inputs.dry_run }}
+        run: npm publish "$NPM_ARCHIVE" --access public --registry=https://registry.npmjs.org/
+      - name: Compare the published archive
+        if: ${{ !inputs.dry_run }}
+        run: |-
+          set -euo pipefail
+          # npm can return 404 for about a minute while it processes a new version.
+          for _ in {1..20}; do
+            published=$(npm view "$NPM_NAME@$NPM_VERSION" dist.integrity --registry=https://registry.npmjs.org/ 2>/dev/null || true)
+            [[ -n "$published" ]] && break
+            sleep 15
+          done
+          reviewed="sha512-$(openssl dgst -sha512 -binary "$NPM_ARCHIVE" | base64 -w0)"
+          test "$published" = "$reviewed"
+      - name: Report whether npm trusts this workflow
+        if: inputs.dry_run
+        run: |-
+          set -euo pipefail
+          id_token=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" | jq -r .value)
+          echo "::add-mask::$id_token"
+          # A success mints a short-lived token; the body is discarded, and nothing is published.
+          status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $id_token" "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${NPM_NAME//\//%2f}")
+          if [[ "$status" == 201 ]]; then echo "npm trusts this workflow for $NPM_NAME"; else echo "::notice::npm has no usable trusted publisher for $NPM_NAME (HTTP $status); create it just before the first real release"; fi

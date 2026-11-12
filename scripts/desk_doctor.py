@@ -23,6 +23,12 @@ SKILL_INDEX = ("skills/README.md", re.compile(r"\[([a-z0-9-]+)\]\(\1/SKILL\.md\)
 # checkout and already kept honest by `scripts/check_grok_template.py`.
 TEMPLATE_MANIFEST = "template/grok-bot.json"
 AGENT_INDEX = ("SETUP.md", re.compile(r"`agents/([a-z0-9-]+)\.md`"))
+# A desk record holds an account address (20 bytes) and may quote a commit or
+# file hash. A 32-byte 0x value is an Ethereum private key and must not be stored.
+KEY_MATERIAL_RE = re.compile(
+    r"private.?key|secret\s*[:=]\s*\S+|\b0x[0-9a-fA-F]{64}\b",
+    re.IGNORECASE,
+)
 REQUIRED_DESK_DIRS = (
     "proposals",
     "briefs",
@@ -187,7 +193,7 @@ def check_workspace(root: str) -> list[Check]:
     else:
         with open(desk_path, encoding="utf-8") as handle:
             text = handle.read()
-        safe = not re.search(r"private.?key|secret\s*[:=]\s*\S+", text, re.IGNORECASE)
+        safe = KEY_MATERIAL_RE.search(text) is None
         checks.append(result(safe, "desk record", "present; no key-like field detected", "contains a key-like field; remove secrets from disk"))
         if "risk limits: not yet written" in text or not os.path.isfile(os.path.join(root, "risk-limits.md")):
             checks.append(Check("WARN", "risk limits", "not written; desk remains research-only"))

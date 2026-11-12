@@ -218,7 +218,36 @@ class DeskDoctorTest(unittest.TestCase):
             with open(os.path.join(root, "desk.md"), "w", encoding="utf-8") as handle:
                 handle.write("private key: should-never-be-here\n")
             checks = desk_doctor.check_workspace(root)
-            self.assertTrue(any(check.status == "FAIL" and check.name == "desk record" for check in checks))
+            failed = [check for check in checks if check.status == "FAIL" and check.name == "desk record"]
+            self.assertEqual(len(failed), 1)
+            self.assertNotIn("should-never-be-here", failed[0].detail)
+
+    def test_workspace_rejects_a_raw_private_key_without_echoing_it(self):
+        key = "0x" + "ab" * 32
+        with tempfile.TemporaryDirectory() as root:
+            for path in desk_doctor.REQUIRED_DESK_DIRS:
+                os.makedirs(os.path.join(root, path))
+            with open(os.path.join(root, "desk.md"), "w", encoding="utf-8") as handle:
+                handle.write(f"- pasted: {key}\n")
+            checks = desk_doctor.check_workspace(root)
+            failed = [check for check in checks if check.name == "desk record"]
+            self.assertEqual([check.status for check in failed], ["FAIL"])
+            self.assertNotIn(key, failed[0].detail)
+            self.assertNotIn(key, "\n".join(check.detail for check in checks))
+
+    def test_workspace_allows_an_address_commit_and_bare_hash(self):
+        with tempfile.TemporaryDirectory() as root:
+            for path in desk_doctor.REQUIRED_DESK_DIRS:
+                os.makedirs(os.path.join(root, path))
+            with open(os.path.join(root, "desk.md"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "- account: 0x" + "1" * 40 + "\n"
+                    "- instructions commit: " + "ab" * 20 + "\n"
+                    "- skill hash: " + "cd" * 32 + "\n"
+                    "- status: research-only; no API wallet provisioned\n"
+                )
+            record = next(check for check in desk_doctor.check_workspace(root) if check.name == "desk record")
+            self.assertEqual(record.status, "PASS", record)
 
 
 if __name__ == "__main__":

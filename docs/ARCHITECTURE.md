@@ -21,7 +21,7 @@ computer:  /workspace/hypergrok (this repo)   /workspace/trading-desk (the desk'
 secret:    HYPERLIQUID_PRIVATE_KEY - a trade-only API wallet, from Grok Bot's secure secret store
 ```
 
-The shared Desk Lead starts on the read plane. `hypergrok-bootstrap` installs the pinned release, runs `scripts/opening_bell.py` against public `/info`, prepares the desk, creates the team when the product allows it, and finishes with `scripts/desk_doctor.py`. None of those first-run paths reads a key or calls `/exchange`.
+The shared Desk Lead starts on the read plane. `hypergrok-bootstrap` installs the pinned release, runs `scripts/opening_bell.py` against public `/info`, prepares the desk, creates the team when the product allows it, and finishes with `scripts/desk_doctor.py`. None of those first-run paths calls `/exchange` or reads an API wallet. The doctor reads the desk record and fails it, without printing the value, when that record contains a private-key label or a 32-byte hex key.
 
 The six-Bot group limit leaves the Trade Reviewer outside the Floor. Bots share the computer and skills, so role separation is a working convention rather than credential isolation. Native approval controls and the secret store provide separate controls; setup verifies their availability.
 
@@ -45,6 +45,7 @@ Working files live under `/workspace/trading-desk/`; chat supplies context, whil
 | `risk-limits.md` | your limits, versioned; only you change it |
 | `proposals/HG-*.md` | one file per trade idea, appended through its life: ticket, sign-off, approval, send, reconciliation, review |
 | `journal/*.md` | the desk diary, append-only |
+| `journal/incidents/` | one file per incident; the doctor requires this folder |
 | `briefs/`, `research/`, `strategies/`, `data/`, `watch/` | working material |
 
 ## Research evidence
@@ -89,4 +90,4 @@ Each runtime guide contains installation commands and observed support limits:
 
 The Grok and Codex marketplace entries pin the reviewed repository tag. Claude Code resolves this repository through its own marketplace index. Gemini CLI installs the latest GitHub release; `GEMINI.md` repeats the desk rule's approval paragraph, which the manifest check compares for drift.
 
-Only Claude Code loads `hooks/exchange-write-gate.json`. Its `PreToolUse` hook asks for confirmation when a Bash command or a named script matches an SDK write method or raw `/exchange` POST, including a shell script and a path after a literal `cd`. Host case does not hide the exchange URL. A named script that is too large or unreadable to scan also asks, and the prompt redacts a 32-byte hex key. The hook never returns `allow`, does not follow imports, expand globs or variable `cd` targets, and cannot bind a request to the approved ticket. It is a confirmation backstop; each runtime still needs verified native approval coverage before an API wallet is provisioned.
+Only Claude Code loads `hooks/exchange-write-gate.json`. Its `PreToolUse` hook asks for confirmation when a Bash command or a named script matches an SDK write method or raw `/exchange` POST, including a shell script and a path after a literal `cd`. Host case does not hide the exchange URL. A named script that is too large or unreadable to scan also asks. A command that names more than 32 scripts asks without reading them. The prompt redacts a 32-byte hex key. The hook never returns `allow`, does not follow imports, expand globs or variable `cd` targets, and cannot bind a request to the approved ticket. It is a confirmation backstop; each runtime still needs verified native approval coverage before an API wallet is provisioned.

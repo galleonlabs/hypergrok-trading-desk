@@ -6,7 +6,7 @@ A stop is a trigger, not a fill. When it fires it becomes a market order: a long
 
 ## Run it
 
-From the root of a checkout of the default branch, `main`, with Python 3's standard library:
+From the root of a checkout, with Python 3's standard library:
 
 ```bash
 python3 scripts/stop_cost.py --coin ETH --entry 3000 --stop 2900 --equity 10200 --risk-pct 0.5

@@ -16,7 +16,7 @@ Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
-+ **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
++ **Seventeen skills**: the bootstrap, Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the operating model, the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **Seven roles** from `agents/`: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader and Trade Reviewer. Only the Execution Trader writes to the exchange.
 + **The desk rule** from `rules/hypergrok-team.mdc`: analysis is not approval, and a send needs your exact approval phrase with the ticket id.
 

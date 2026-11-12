@@ -60,7 +60,7 @@ python3 scripts/research_dataset.py \
 | `unavailable` | A source or validation failure prevents a trustworthy requested dataset | `1` |
 | Invalid arguments or failed verification | The requested operation did not pass | `2` for arguments; `1` for verification |
 
-An internally consistent incomplete bundle remains incomplete after verification. Check the process exit code and reported result; the presence of files is not success. A failure before a bundle can be written may return only a diagnostic, so retain that output too.
+An internally consistent incomplete bundle remains incomplete after verification. Check the process exit code and reported result; the presence of files is not success. A failure before a bundle can be written may return only a diagnostic, so retain that output too. A write error after the output directory is reserved exits 1 (`output_unavailable`).
 
 Hashes and replay verify **internal consistency**, not independent provenance. Someone able to rewrite all files can manufacture a consistent bundle. Preserve the manifest's hash in a separate run record if later accidental changes need to be detectable, and keep source trust separate from local integrity.
 

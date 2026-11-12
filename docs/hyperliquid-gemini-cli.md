@@ -14,7 +14,7 @@ Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
-+ **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
++ **Seventeen skills**: the bootstrap, Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the operating model, the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **`GEMINI.md`**, loaded every session. It names the roles and repeats the desk rule's approval paragraph word for word: analysis is not approval, and a send needs your exact approval phrase with the ticket id.
 + **Roles as labelled passes.** This extension does not register the role files as native subagents. Run the seven roles in `agents/` as labelled passes using their system prompts. Only the Execution Trader pass writes to the exchange.
 

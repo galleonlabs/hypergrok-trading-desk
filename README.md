@@ -19,7 +19,7 @@ HyperGrok gives your AI agents a shared process for Hyperliquid research, risk, 
 ## Try it now, no keys
 
 ```bash
-git clone --depth 1 --branch v1.7.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.7.2 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
@@ -36,7 +36,7 @@ Recorded from the command above on 25 October 2026 at 13:09 UTC. The figures are
 
 For the seven-Bot desk with a shared Trading Floor, open Grok Bot and paste:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.1/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.1/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.2/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.7.2/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 Or add the [public HyperGrok Desk Lead template](https://x.ai/bot/2GeaOwIsmTEOD_WGzmghC), then send **Start the desk.** Its 1.7.1 bootstrap installs the complete seventeen-skill release. See the [publication and native content checks](docs/GROK_BOT_TEMPLATE.md#publication-verification---2026-11-03).
 
@@ -177,7 +177,7 @@ npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-des
 The complete resources also install from npm:
 
 ```bash
-npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.7.1
+npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.7.2
 python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
 ```
 

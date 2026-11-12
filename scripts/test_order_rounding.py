@@ -129,6 +129,22 @@ class OrderRoundingTest(unittest.TestCase):
                             self.assertGreaterEqual(actual.normalize().as_tuple().exponent,
                                                     -(6 - namespace['SZ_DECIMALS'][coin]))
 
+    def test_round_number_wire_drops_trailing_zeros(self):
+        """SDK 0.24.0 float_to_wire strips trailing zeros; an integer price stays an integer string."""
+        def float_to_wire(value):
+            rounded = f"{float(value):.8f}"
+            if abs(float(rounded) - float(value)) >= 1e-12:
+                raise ValueError(rounded)
+            return f"{Decimal(rounded).normalize():f}"
+
+        for coin, reference, wire in (
+            ("ETH", "999.996", "1000"),
+            ("TINY", "9999.96", "10000"),
+            ("BTC", "99999.9", "100000"),
+        ):
+            with self.subTest(coin=coin, reference=reference):
+                self.assertEqual(float_to_wire(namespace["bounded_px"](coin, reference, "0", False)), wire)
+
     def test_whole_dollar_precision(self):
         self.assertEqual(namespace['round_px']('BTC', '117234.5', rounding=ROUND_DOWN), 117234)
         self.assertEqual(namespace['round_px']('BTC', '117234.5', rounding=ROUND_UP), 117235)

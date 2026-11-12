@@ -7,9 +7,17 @@ command that looks like a signed `/exchange` request gets an "ask" decision, so
 the user confirms it even in an auto-accepting session. Anything else gets no
 opinion and follows the normal permission flow. The hook never approves.
 
-It reads the command text and any script file the command names (resolved from
-the session's working directory). It does not follow imports, so a write hidden
-in a helper module is not seen. Treat it as a backstop, not as the approval.
+It reads the command text and any script file the command names. Relative paths
+are resolved from the session working directory and from each literal ``cd`` in
+the command. Shell scripts are included. A named script that exists but is too
+large or unreadable to scan is treated as a write, so a skipped file cannot
+slip past. The decision text redacts a 32-byte hex key and never includes the
+command or file body.
+
+It does not follow imports, expand globs, or resolve a ``cd`` target that is a
+variable, command substitution or glob. A write hidden in a helper module, or
+in a file the shell will name only after expansion, is not seen. Treat it as a
+backstop, not as the approval.
 """
 import json
 import os
@@ -37,37 +45,112 @@ WRITE_METHODS = (
     "setReferrer", "userOutcome", "claimRewards", "createVault", "vaultDistribute", "vaultModify",
     "subAccountModify", "hip3LiquidatorTransfer",
 )
+_METHODS = "|".join(WRITE_METHODS)
+# The receiver has to look like an exchange client. Matching every `.order(`
+# would ask on unrelated code; `ex` and `hl` are the short names that otherwise
+# miss the `exch` requirement. `getattr` is matched separately.
 SDK_WRITE_RE = re.compile(
-    r"\b\w*exch\w*\s*\.\s*(" + "|".join(WRITE_METHODS) + r")\s*\(",
+    r"\b(?:\w*exch\w*|ex|hl)\s*\.\s*(" + _METHODS + r")\s*\(",
+    re.IGNORECASE,
+)
+GETATTR_WRITE_RE = re.compile(
+    r"""getattr\s*\(\s*\w+\s*,\s*["'](""" + _METHODS + r""")["']\s*\)\s*\(""",
     re.IGNORECASE,
 )
 # A raw POST: the API host's /exchange path, or a base URL joined to it.
-ENDPOINT_RE = re.compile(r"\.xyz/exchange\b|\}/exchange\b|\+\s*[\"']/exchange[\"']")
-SCRIPT_RE = re.compile(r"[\w./~-]+\.(?:py|ts|mts|cts|js|mjs|cjs)\b")
+# Hosts are case-insensitive, so `API.HYPERLIQUID.XYZ` is the same exchange.
+# Built from pieces so this file's own source is not itself an /exchange match.
+ENDPOINT_RE = re.compile(
+    r"\.xyz" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\+\s*[\"']" + r"/exchange[\"']",
+    re.IGNORECASE,
+)
+_SCRIPT_EXT = r"py|ts|mts|cts|js|mjs|cjs|sh|bash|zsh"
+SCRIPT_RE = re.compile(
+    rf"""(?:"([^"\n]+\.(?:{_SCRIPT_EXT}))"|'([^'\n]+\.(?:{_SCRIPT_EXT}))'|([\w./~-]+\.(?:{_SCRIPT_EXT}))\b)""",
+    re.IGNORECASE,
+)
+CD_RE = re.compile(
+    r"""(?:^|&&|\|\||;|\n)\s*cd\s+("[^"\n]+"|'[^'\n]+'|~?[^\s;&|]+)"""
+)
+KEY_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 MAX_SCRIPT_BYTES = 2_000_000
+MAX_SCRIPTS = 32
+
+
+class Unscanned(Exception):
+    def __init__(self, token):
+        self.token = token
+
+
+def redact(text):
+    return KEY_RE.sub("0x[redacted]", text)
 
 
 def find_write(text):
-    match = SDK_WRITE_RE.search(text)
+    match = SDK_WRITE_RE.search(text) or GETATTR_WRITE_RE.search(text)
     if match:
-        return match.group(0).rstrip("( ")
-    match = ENDPOINT_RE.search(text)
-    if match:
+        return match.group(1)
+    if ENDPOINT_RE.search(text):
         return "a POST to /exchange"
     return None
 
 
-def named_scripts(command, cwd):
-    for token in SCRIPT_RE.findall(command):
-        path = os.path.expanduser(token)
+def script_tokens(command):
+    tokens = []
+    for match in SCRIPT_RE.finditer(command):
+        token = next(part for part in match.groups() if part)
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def directory_roots(command, cwd):
+    """Literal `cd` targets only. A variable or glob stays unresolved."""
+    roots = [cwd]
+    current = cwd
+    for match in CD_RE.finditer(command):
+        raw = match.group(1)
+        if len(raw) >= 2 and raw[0] in "\"'" and raw[-1] == raw[0]:
+            raw = raw[1:-1]
+        if not raw or raw == "-" or any(char in raw for char in "$`*?[]"):
+            continue
+        path = os.path.expanduser(raw)
         if not os.path.isabs(path):
-            path = os.path.join(cwd, path)
-        try:
-            if os.path.isfile(path) and os.path.getsize(path) <= MAX_SCRIPT_BYTES:
+            path = os.path.join(current, path)
+        path = os.path.normpath(path)
+        current = path
+        if path not in roots:
+            roots.append(path)
+    return roots
+
+
+def candidate_paths(token, roots):
+    path = os.path.expanduser(token)
+    if os.path.isabs(path):
+        return [os.path.normpath(path)]
+    return [os.path.normpath(os.path.join(root, path)) for root in roots]
+
+
+def named_scripts(command, cwd):
+    tokens = script_tokens(command)
+    if len(tokens) > MAX_SCRIPTS:
+        raise Unscanned(f"{len(tokens)} named scripts")
+    roots = directory_roots(command, cwd)
+    seen = set()
+    for token in tokens:
+        for path in candidate_paths(token, roots):
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                if not os.path.isfile(path):
+                    continue
+                if os.path.getsize(path) > MAX_SCRIPT_BYTES:
+                    raise Unscanned(token)
                 with open(path, encoding="utf-8", errors="replace") as handle:
                     yield token, handle.read()
-        except OSError:
-            continue
+            except OSError:
+                raise Unscanned(token)
 
 
 def decide(event):
@@ -80,13 +163,19 @@ def decide(event):
     where = "in the command"
     if not found:
         cwd = event.get("cwd") or os.getcwd()
-        for token, text in named_scripts(command, cwd):
-            found = find_write(text)
-            if found:
-                where = f"in {token}"
-                break
+        try:
+            for token, text in named_scripts(command, cwd):
+                found = find_write(text)
+                if found:
+                    where = f"in {redact(token)}"
+                    break
+        except Unscanned as exc:
+            found = "an unscanned script"
+            where = f"in {redact(exc.token)}"
     if not found:
         return None
+    if not found.startswith(("a ", "an ")):
+        found = f"{found}()"
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

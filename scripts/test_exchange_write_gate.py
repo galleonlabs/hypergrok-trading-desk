@@ -71,6 +71,70 @@ class ExchangeWriteGateTest(unittest.TestCase):
         # The gate tightens and never loosens: no class of send is auto-approved.
         self.assertAsks(bash('python3 -c \'exchange.order("ETH", False, 0.5, 2900, {"trigger": {"triggerPx": 2900, "isMarket": True, "tpsl": "sl"}}, reduce_only=True)\''))
 
+    def test_short_receiver_and_getattr_still_ask(self):
+        self.assertAsks(bash("python3 -c 'ex.order(coin, True, sz, px, t)'"))
+        self.assertAsks(bash("python3 -c 'hl.cancel(\"ETH\", oid)'"))
+        self.assertAsks(bash('python3 -c \'getattr(exchange, "order")(coin, True, sz, px, t)\''))
+        self.assertAsks(bash("""python3 -c 'getattr(client, "withdraw3")(amount)'"""))
+        for command in (
+            "python3 -c 'cart.order(1)'",
+            "python3 -c 'hex.order(1)'",
+            "python3 -c 'html.order(1)'",
+            "python3 -c 'getattr(row, \"note\")(1)'",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(gate.decide(bash(command)))
+
+    def test_exchange_host_is_case_insensitive_and_reads_stay_quiet(self):
+        self.assertAsks(bash("curl -s -X POST https://api.hyperliquid.XYZ/exchange -d @signed.json"))
+        self.assertAsks(bash("curl -s -X POST https://API.HYPERLIQUID.XYZ/exchange -d @signed.json"))
+        self.assertIsNone(gate.decide(bash("curl -s -X POST https://API.HYPERLIQUID.XYZ/info -d '{\"type\":\"allMids\"}'")))
+
+    def test_shell_script_and_cd_target_ask(self):
+        with tempfile.TemporaryDirectory() as parent:
+            cwd = os.path.join(parent, "cwd")
+            other = os.path.join(parent, "other")
+            os.makedirs(cwd)
+            os.makedirs(other)
+            with open(os.path.join(other, "send.py"), "w", encoding="utf-8") as handle:
+                handle.write("res = exchange.order(coin, is_buy, sz, px, order_type)\n")
+            with open(os.path.join(cwd, "send.sh"), "w", encoding="utf-8") as handle:
+                handle.write("curl -s -X POST https://api.hyperliquid.xyz/exchange -d @signed.json\n")
+            self.assertIsNone(gate.decide(bash("python3 send.py", cwd=cwd)))
+            reason = self.assertAsks(bash(f"cd '{other}' && python3 send.py", cwd=cwd))
+            self.assertIn("send.py", reason)
+            self.assertAsks(bash("bash send.sh", cwd=cwd))
+            self.assertAsks(bash('bash "send.sh"', cwd=cwd))
+
+    def test_unreadable_script_asks_without_echoing_a_key(self):
+        key = "0x" + "ab" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "send.py")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(f"res = exchange.order('{key}')\n")
+            original = gate.MAX_SCRIPT_BYTES
+            gate.MAX_SCRIPT_BYTES = 8
+            try:
+                reason = self.assertAsks(bash("python3 send.py", cwd=directory))
+            finally:
+                gate.MAX_SCRIPT_BYTES = original
+            self.assertIn("unscanned", reason)
+            self.assertNotIn(key, reason)
+            self.assertNotIn("exchange.order", reason)
+
+    def test_decision_does_not_echo_a_private_key(self):
+        key = "0x" + "cd" * 32
+        event = bash(f"python3 -c 'exchange.order(\"{key}\")'")
+        reason = self.assertAsks(event)
+        self.assertNotIn(key, reason)
+        self.assertIn("order()", reason)
+        completed = subprocess.run(
+            [sys.executable, GATE], input=json.dumps(event), capture_output=True, text=True, check=True,
+        )
+        self.assertNotIn(key, completed.stdout)
+        self.assertNotIn(key, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["hookSpecificOutput"]["permissionDecision"], "ask")
+
     def test_write_inside_a_named_script_asks(self):
         with tempfile.TemporaryDirectory() as directory:
             os.makedirs(os.path.join(directory, "tickets"))

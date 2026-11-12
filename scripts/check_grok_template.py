@@ -32,14 +32,28 @@ def sha256(path):
 
 
 def run_git(root, args):
+    # GIT_DIR and GIT_WORK_TREE override -C and would compare a different repository.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     try:
         return subprocess.run(
             ["git", "-C", root, *args],
             capture_output=True,
             check=False,
+            env=env,
         )
     except OSError:
         return None
+
+
+def repository_file(root, rel):
+    """An existing file inside root. Absolute paths and `..` do not qualify."""
+    if not isinstance(rel, str) or not rel or rel.startswith(("http://", "https://")):
+        return False
+    root = os.path.normpath(root)
+    resolved = os.path.normpath(os.path.join(root, rel))
+    if os.path.relpath(resolved, root).startswith(".."):
+        return False
+    return os.path.isfile(resolved)
 
 
 def claimed_paths(template):
@@ -146,8 +160,7 @@ def main(root):
         if source.get(key) != expected:
             errors.append(f"{TEMPLATE}: source.{key} must be {expected}")
 
-    avatar = template.get("avatar")
-    if not isinstance(avatar, str) or not os.path.isfile(os.path.join(root, avatar)):
+    if not repository_file(root, template.get("avatar")):
         errors.append(f"{TEMPLATE}: avatar must resolve to a repository file")
 
     expected_skill_names = sorted(

@@ -85,6 +85,7 @@
     "scripts/release_bump.py",
     "scripts/research_dataset.py",
     "scripts/stop_cost.py",
+    "scripts/test_account_read.py",
     "scripts/test_check_grok_template.py",
     "scripts/test_check_manifests.py",
     "scripts/test_check_npm_package.py",

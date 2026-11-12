@@ -11,7 +11,10 @@ equity in USD.
 Equity is summed only where Hyperliquid documents separate balances: the
 standard account mode. There, total equity is each DEX's
 `marginSummary.accountValue`, converted from the DEX's collateral token, plus
-every spot balance valued at its USDC pair. Unified-account and
+every spot balance valued at its USDC pair. A nonzero balance with no
+positive USDC price is omitted. Those prices are positive, so the partial
+total is a lower bound when every omitted balance is positive and an upper
+bound when every omitted balance is negative. Unified-account and
 portfolio-margin modes share one balance between spot and perps, so the
 script reports the parts without a total rather than double counting.
 
@@ -132,8 +135,22 @@ def read_account(read, address: str) -> dict:
             "tokens": tokens, "prices": prices, "collateral": collateral}
 
 
+def equity_bound(separate: bool, omitted_positive: bool, omitted_negative: bool) -> str | None:
+    """How the partial sum sits relative to equity. Prices in the sum are positive."""
+    if not separate:
+        return None
+    if omitted_positive and omitted_negative:
+        return "unknown"
+    if omitted_negative:
+        return "upper"
+    if omitted_positive:
+        return "lower"
+    return "exact"
+
+
 def build_report(raw: dict, address: str, network: str, base_url: str) -> dict:
     tokens, prices, unpriced = raw["tokens"], raw["prices"], []
+    omitted_positive = omitted_negative = False
     dexes, times, perp_usd = [], [], Decimal(0)
     for name in raw["names"]:
         state = raw["states"][name]
@@ -144,10 +161,14 @@ def build_report(raw: dict, address: str, network: str, base_url: str) -> dict:
         value_usd = None
         if token is None:
             value_usd = Decimal(0)  # An empty DEX: no balance, no positions.
+        elif value == 0:
+            value_usd = Decimal(0)  # Zero collateral units are zero USD at any price.
         elif price is not None:
             value_usd = value * price
-        elif value != 0:
+        else:
             unpriced.append(f"{name or 'main'} collateral {tokens.get(token, token)}")
+            omitted_positive = omitted_positive or value > 0
+            omitted_negative = omitted_negative or value < 0
         if value_usd is not None:
             perp_usd += value_usd
         if isinstance(state.get("time"), int):
@@ -174,6 +195,8 @@ def build_report(raw: dict, address: str, network: str, base_url: str) -> dict:
         value_usd = None if price is None else total * price
         if value_usd is None:
             unpriced.append(f"spot {entry.get('coin')}")
+            omitted_positive = omitted_positive or total > 0
+            omitted_negative = omitted_negative or total < 0
         else:
             spot_usd += value_usd
         balances.append({
@@ -214,6 +237,7 @@ def build_report(raw: dict, address: str, network: str, base_url: str) -> dict:
             "spot_usd": str(spot_usd),
             "total_usd": str(perp_usd + spot_usd) if separate else None,
             "complete": separate and not unpriced,
+            "bound": equity_bound(separate, omitted_positive, omitted_negative),
             "unpriced": unpriced,
             "note": None if separate else SHARED_NOTE,
         },
@@ -273,7 +297,7 @@ def render(report: dict) -> str:
     if equity["unpriced"]:
         lines.append(f"Unpriced    {', '.join(equity['unpriced'])} (no USDC pair price; left out of the sum)")
     if equity["basis"] == "separate":
-        prefix = "" if equity["complete"] else "at least "
+        prefix = {"exact": "", "lower": "at least ", "upper": "at most ", "unknown": "incomplete "}[equity["bound"]]
         lines.append(f"Equity      perps {usd(equity['perp_usd'])} + spot {usd(equity['spot_usd'])} = {prefix}{usd(equity['total_usd'])}")
     else:
         lines.append(f"Equity      not summed: {equity['note']}")
@@ -296,11 +320,13 @@ def main(argv=None) -> int:
             "account": "the address read", "abstraction": "userAbstraction mode, e.g. default | unifiedAccount | portfolioMargin",
             "source": "endpoint, requests, clearinghouse_reads, base_url, observed_from and observed_to (UTC clearinghouse times)",
             "dexes": "one entry per perpDexs DEX, main first: dex ('' for main), label, collateral (null when empty and unread), "
-                     "collateral_usd_price, account_value, account_value_usd (null when unpriced), total_ntl_pos, total_margin_used, "
+                     "collateral_usd_price, account_value, account_value_usd (null when a nonzero balance has no USD price; "
+                     "zero collateral units are 0), total_ntl_pos, total_margin_used, "
                      "withdrawable, positions[coin, side, size, entry_px, position_value, unrealized_pnl, margin_used, "
                      "leverage_type, leverage, liquidation_px]",
             "spot": "balances[coin, token, total, hold, usd_price, value_usd] for nonzero balances; value_usd of priced balances",
-            "equity": "basis (separate | shared), perp_usd, spot_usd, total_usd (null when basis is shared), complete, unpriced, note",
+            "equity": "basis (separate | shared), perp_usd, spot_usd, total_usd (null when basis is shared), complete, "
+                     "bound (exact | lower | upper | unknown when separate; null when shared), unpriced, note",
             "safety": SAFETY,
         }), indent=2))
         return 0

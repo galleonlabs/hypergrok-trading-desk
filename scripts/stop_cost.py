@@ -175,7 +175,8 @@ def fixture_reader(directory: str, coin: str):
 def build_report(meta, coin: str, read_page, network: str, base_url: str, plan: dict) -> dict:
     asset = next(asset for asset in meta[0]["universe"] if asset["name"] == coin)
     sz_decimals = asset.get("szDecimals")
-    if not isinstance(sz_decimals, int) or not 0 <= sz_decimals <= 10:
+    # bool is an int subclass; JSON true would otherwise become a 1-decimal lot.
+    if type(sz_decimals) is not int or not 0 <= sz_decimals <= 10:
         raise ValueError(f"{coin} szDecimals is missing or invalid")
     mark = decimal(perp_context(meta, coin).get("markPx"), "markPx")
 

@@ -175,22 +175,86 @@ def test_git_unavailable(temp, baseline, failures):
         failures.append(f"git_unavailable: expected git-unavailable skip, got:\n{output}")
 
 
-def test_drifted_bytes(temp, baseline, failures):
-    case = os.path.join(temp, "drifted_bytes")
-    shutil.copytree(baseline, case)
-    tag = release_tag(case)
-    init_repo(case, tag=tag)
-    path = os.path.join(case, DRIFT_PATH)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write("\n# drift\n")
-    digest = sha256(path)
-
+def retarget_bootstrap(root, digest):
     def retarget(data):
         for entry in data["skills"]:
             if entry.get("name") == "hypergrok-bootstrap":
                 entry["sha256"] = digest
 
-    edit(case, retarget)
+    edit(root, retarget)
+
+
+def drift_bootstrap(root):
+    path = os.path.join(root, DRIFT_PATH)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("\n# drift\n")
+    digest = sha256(path)
+    retarget_bootstrap(root, digest)
+    return digest
+
+
+def test_ambient_git_dir_cannot_approve_another_repository(temp, baseline, failures):
+    """GIT_DIR must not make this checkout compare against a different tag."""
+    case = os.path.join(temp, "ambient_git_dir")
+    shutil.copytree(baseline, case)
+    tag = release_tag(case)
+    init_repo(case, tag=tag)
+
+    foreign = os.path.join(temp, "foreign_git_dir")
+    shutil.copytree(baseline, foreign)
+    drift_bootstrap(foreign)
+    init_repo(foreign, tag=tag)
+    for rel in (DRIFT_PATH, os.path.join("template", "grok-bot.json")):
+        shutil.copy2(os.path.join(foreign, rel), os.path.join(case, rel))
+
+    env = os.environ.copy()
+    env["GIT_DIR"] = os.path.join(foreign, ".git")
+    code, output = run(case, env=env)
+    if code == 0:
+        failures.append("ambient_git_dir: foreign GIT_DIR hid drift from this checkout's tag")
+    elif DRIFT_PATH not in output or tag not in output:
+        failures.append(f"ambient_git_dir: expected {DRIFT_PATH} and {tag}, got:\n{output}")
+
+
+def test_invalid_git_dir_cannot_skip_a_real_checkout(temp, baseline, failures):
+    case = os.path.join(temp, "invalid_git_dir")
+    shutil.copytree(baseline, case)
+    tag = release_tag(case)
+    init_repo(case, tag=tag)
+    drift_bootstrap(case)
+    env = os.environ.copy()
+    env["GIT_DIR"] = os.path.join(temp, "missing-git-dir")
+    code, output = run(case, env=env)
+    if code == 0:
+        failures.append("invalid_git_dir: broken GIT_DIR skipped the tag comparison")
+    elif "skip:" in output or DRIFT_PATH not in output or tag not in output:
+        failures.append(f"invalid_git_dir: expected a tag mismatch for {DRIFT_PATH}, got:\n{output}")
+
+
+def test_avatar_outside_repository(temp, baseline, failures):
+    outside = os.path.join(temp, "outside.jpg")
+    with open(outside, "wb") as handle:
+        handle.write(b"outside")
+    for name, avatar in (
+        ("avatar_absolute", outside),
+        ("avatar_parent", os.path.relpath(outside, os.path.join(temp, "avatar_parent"))),
+    ):
+        case = os.path.join(temp, name)
+        shutil.copytree(baseline, case)
+        edit(case, lambda data, avatar=avatar: data.update(avatar=avatar))
+        code, output = run(case)
+        if code == 0:
+            failures.append(f"{name}: avatar outside the repository was accepted")
+        elif "avatar must resolve to a repository file" not in output:
+            failures.append(f"{name}: expected avatar rejection, got:\n{output}")
+
+
+def test_drifted_bytes(temp, baseline, failures):
+    case = os.path.join(temp, "drifted_bytes")
+    shutil.copytree(baseline, case)
+    tag = release_tag(case)
+    init_repo(case, tag=tag)
+    drift_bootstrap(case)
     code, output = run(case)
     if code == 0:
         failures.append("drifted_bytes: validator passed but should fail")
@@ -222,13 +286,17 @@ def main():
         test_tag_absent(temp, baseline, failures)
         test_git_unavailable(temp, baseline, failures)
         test_drifted_bytes(temp, baseline, failures)
+        test_ambient_git_dir_cannot_approve_another_repository(temp, baseline, failures)
+        test_invalid_git_dir_cannot_skip_a_real_checkout(temp, baseline, failures)
+        test_avatar_outside_repository(temp, baseline, failures)
     if failures:
         print("\n".join(failures))
         print(f"{len(failures)} problem(s)")
         return 1
     print(
         f"ok: {len(FIXTURES)} Grok Bot template fixtures fail as expected; "
-        "tag-absent and git-unavailable skip; drifted tagged bytes fail by path"
+        "tag-absent and git-unavailable skip; drifted tagged bytes fail by path; "
+        "ambient GIT_DIR and an avatar outside the repository are rejected"
     )
     return 0
 

@@ -220,6 +220,17 @@ class StopCostTest(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs["plan"]["taker_fee_pct"], Decimal("0.09"))
         self.assertEqual(fetch.call_args.kwargs["dex"], "xyz")
 
+    def test_boolean_sz_decimals_is_not_a_lot_size(self):
+        for flag in (True, False):
+            with self.subTest(sz_decimals=flag):
+                meta = [{"universe": [{"name": "ETH", "szDecimals": flag}]}, [CONTEXT]]
+                code, output, errors = run("--json", "--fixture-dir", fixture_dir(self, meta=meta), *WORKED)
+                body = json.loads(output)
+                self.assertEqual(code, 1)
+                self.assertEqual(errors, "")
+                self.assertEqual(body["error"]["code"], "source_unavailable")
+                self.assertIn("szDecimals", body["error"]["message"])
+
     def test_unavailable_data_is_a_structured_error(self):
         with patch.object(stop_cost, "fetch_report", side_effect=ValueError("ETH order book has no two-sided depth")):
             code, output, errors = run("--json", *WORKED)

@@ -17,13 +17,13 @@ grok plugin marketplace add galleonlabs/hypergrok-trading-desk
 grok plugin install hypergrok --trust
 ```
 
-The installation format was tested with Grok Build 1.0.30 for an earlier release; 1.6.1 has no native installation proof yet.
+The installation format was tested with Grok Build 1.0.30 for an earlier release. A native installation of the current release has not been verified.
 
 Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
-+ **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
++ **Seventeen skills**: the bootstrap, Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the operating model, the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **Seven roles** from `agents/`: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader and Trade Reviewer. Only the Execution Trader writes to the exchange.
 
 Grok Build reports the skills and agents directories; loading `rules/` is not verified, and the Claude Code exchange-write hook does not load. The desk's approval by ticket id still applies.

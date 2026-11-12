@@ -19,7 +19,7 @@ Then start with the desk's operating model:
 
 ## What loads
 
-+ **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
++ **Seventeen skills**: the bootstrap, Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the operating model, the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **Seven roles as subagents** from `agents/`: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader and Trade Reviewer. Only the Execution Trader writes to the exchange.
 + **The desk process** from `desk-operating-model`: load it before delegating work. The repository's `rules/` directory is declared for Cursor; Claude Code does not automatically load it as a plugin component.
 + **An exchange-write hook.** Claude Code asks for confirmation when a Bash command or a named script matches a Hyperliquid write. The hook does not follow imports or cover every possible route, and it cannot bind a send to a ticket. It supplements the ticket process and verified native approval coverage.

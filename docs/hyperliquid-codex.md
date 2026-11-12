@@ -15,7 +15,7 @@ Load `desk-operating-model` before asking the roles to act.
 
 ## What loads
 
-+ **Seventeen skills**: Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
++ **Seventeen skills**: the bootstrap, Hyperliquid setup, market data, account state, orders, positions, WebSocket feeds, advanced actions and a compact API reference, plus the desk skills for the operating model, the trade lifecycle, risk limits and sizing, execution, monitoring, post-trade review, incidents and the strategy lab.
 + **Roles as labelled passes.** This plugin's Codex entry installs skills without registering `agents/` as native subagents. Run the seven roles as labelled passes using each role's system prompt. Only the Execution Trader pass writes to the exchange.
 
 The Claude Code exchange-write hook does not load in Codex. The desk's approval by ticket id still applies.

@@ -11,7 +11,7 @@ metadata:
 
 # Hyperliquid API reference (desk edition)
 
-Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 ([scope and evidence](../../docs/PROVENANCE.md#hyperliquid-compatibility-review---2026-10-25)). This is a scoped reference, not an exhaustive inventory of the exchange's growing API. When in doubt, fetch the page: append `.md` to any docs URL for raw markdown, for example `https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md`.
+Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 ([scope and evidence](../../docs/PROVENANCE.md#hyperliquid-compatibility-review---2026-10-25)). Funding cap, mark-price inputs, market-order notionals and CEX funding intervals were rechecked on 2026-11-12 ([evidence](../../docs/PROVENANCE.md#hyperliquid-factual-recheck---2026-11-12)). This is a scoped reference, not an exhaustive inventory of the exchange's growing API. When in doubt, fetch the page: append `.md` to any docs URL for raw markdown, for example `https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md`.
 
 ## Endpoints
 
@@ -38,7 +38,7 @@ Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 (
 | `recentTrades` | `coin` | `[{coin, side, px, sz, time, hash, tid}]` |
 | `candleSnapshot` | `req:{coin, interval, startTime, endTime}` | `[{t,T,s,i,o,c,h,l,v,n}]`, most recent 5000 only |
 | `fundingHistory` | `coin, startTime, endTime?` | `[{coin, fundingRate (hourly), premium, time}]` |
-| `predictedFundings` | | `[[coin, [[venue, {fundingRate, nextFundingTime, fundingIntervalHours?}]]]]`; venue is `HlPerp`, `BinPerp` or `BybitPerp`, payload `null` when unlisted there. Normalise by `fundingIntervalHours` (HlPerp 1; CEX venues 4 or 8 per coin), never by a fixed 8 |
+| `predictedFundings` | | `[[coin, [[venue, {fundingRate, nextFundingTime, fundingIntervalHours?}]]]]`; venue is `HlPerp`, `BinPerp` or `BybitPerp`, payload `null` when unlisted there. Normalise by `fundingIntervalHours` (HlPerp always 1; CEX venues 1, 4 or 8 per coin, or omitted), never by a fixed 8 |
 | `perpsAtOpenInterestCap` | `dex?` | `[coin]` |
 | `perpDexs` | | `[null, {name, fullName, deployer, ...}]` |
 | `clearinghouseState` | `user, dex?` | `{assetPositions:[{type, position:{coin, szi, entryPx, leverage{type,value,rawUsd?}, liquidationPx, marginUsed, positionValue, unrealizedPnl, returnOnEquity, cumFunding, maxLeverage}}], marginSummary{accountValue,totalNtlPos,totalRawUsd,totalMarginUsed}, crossMarginSummary, crossMaintenanceMarginUsed, withdrawable, time}` |
@@ -112,7 +112,7 @@ Order status vocabulary (`orderStatus`, `historicalOrders`, WS `orderUpdates`): 
 
 - Price: at most 5 significant figures **and** at most `6 - szDecimals` decimals (perps) or `8 - szDecimals` (spot). Integer prices are always valid.
 - Size: rounded to `szDecimals`. Round down on the desk.
-- Minimum order value: 10 USD (perps) / 10 quote tokens (spot). Max market order value scales with max leverage (30M for 25x+, down to 500k); limit orders 10x that.
+- Minimum order value: 10 USD (perps) / 10 quote tokens (spot). Max market order value is $30,000,000 when max leverage is at least 25, $5,000,000 for [20, 25), $2,000,000 for [10, 20), otherwise $500,000; limit orders are 10x that.
 - Open orders per account: 1000 + 1 per 5M USDC volume, cap 5000; at 1000 open orders new reduce-only and trigger orders are rejected.
 
 ## Rate limits
@@ -131,12 +131,12 @@ Order status vocabulary (`orderStatus`, `historicalOrders`, WS `orderUpdates`): 
 
 ## Trading facts the desk quotes
 
-- Funding: hourly, peer to peer, computed from an 8h formula paid 1/8 each hour, capped 4%/h, paid on **oracle** price; API rates are hourly.
-- Mark price (median of oracle-adjusted mid, book mid and CEX perp mids) drives margining, liquidation and TP/SL triggers.
+- Funding: hourly, peer to peer, computed from an 8h formula paid 1/8 each hour, capped at 0.5% per hour independent of the asset, paid on **oracle** price; API rates are hourly.
+- Mark price is the median of (oracle + 150s EMA of mid minus oracle), the median of best bid, best ask and last trade, and the median of Binance, OKX, Bybit, Gate IO and MEXC perp mids (weights 3, 2, 2, 1, 1). When only two of those inputs exist, the 30s EMA of the Hyperliquid median is included too. It drives margining, liquidation, unrealized PnL and TP/SL triggers.
 - Maintenance margin = half the initial margin at the tier's max leverage; partial liquidations first for large positions; cross liquidation price ignores the leverage setting.
 - Fees: base taker 0.045% / maker 0.015% perps, 0.07% / 0.04% spot, tiered by 14-day volume, staking and referral discounts; account base rates via `userFees`; apply referral, aligned-quote, stable-pair and HIP-3 deployer/growth modifiers for the market. Actual fill fees remain the reconciliation source.
 - Testnet: same API; faucet at `app.hyperliquid-testnet.xyz/drip` (needs an address that has deposited on mainnet); much tighter margin tiers; asset ids differ.
 
 ## Official pages worth fetching
 
-`for-developers/api/info-endpoint`, `.../info-endpoint/perpetuals`, `.../info-endpoint/spot`, `.../exchange-endpoint`, `.../signing`, `.../nonces-and-api-wallets`, `.../rate-limits-and-user-limits`, `.../tick-and-lot-size`, `.../asset-ids`, `.../error-responses`, `.../websocket/subscriptions`, `.../websocket/post-requests`; `trading/order-types`, `trading/take-profit-and-stop-loss-orders-tp-sl`, `trading/margining`, `trading/margin-tiers`, `trading/liquidations`, `trading/funding`, `trading/fees`, `trading/sub-accounts`; `onboarding/testnet-faucet`. All under `https://hyperliquid.gitbook.io/hyperliquid-docs/`.
+`for-developers/api/info-endpoint`, `.../info-endpoint/perpetuals`, `.../info-endpoint/spot`, `.../exchange-endpoint`, `.../signing`, `.../nonces-and-api-wallets`, `.../rate-limits-and-user-limits`, `.../tick-and-lot-size`, `.../asset-ids`, `.../error-responses`, `.../websocket/subscriptions`, `.../websocket/post-requests`; `trading/order-types`, `trading/take-profit-and-stop-loss-orders-tp-sl`, `trading/margining`, `trading/margin-tiers`, `trading/liquidations`, `trading/funding`, `trading/fees`, `trading/contract-specifications`, `trading/robust-price-indices`, `trading/sub-accounts`; `onboarding/testnet-faucet`. All under `https://hyperliquid.gitbook.io/hyperliquid-docs/`.

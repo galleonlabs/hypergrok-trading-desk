@@ -22,6 +22,10 @@ def frontmatter(path):
         if m:
             key, val = m.group(1), m.group(2).strip()
             data[key] = [] if val == "" else val
+            # An unquoted YAML scalar cannot contain ": " or " #"; loaders that reject
+            # the frontmatter (Claude Code among them) skip the whole skill or role.
+            if val and val[0] not in "\"'|>[{" and (": " in val or " #" in val):
+                err(f"{path}: '{key}' needs quoting or rewording (unquoted ': ' or ' #' is invalid YAML)")
         elif key and re.match(r"^\s+-\s+", line):
             if not isinstance(data.get(key), list): data[key] = []
             data[key].append(line.strip()[2:].strip())

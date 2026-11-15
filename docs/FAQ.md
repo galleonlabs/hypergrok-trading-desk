@@ -48,6 +48,9 @@ Yes. Use the guide for [Claude Code](hyperliquid-claude-code.md), [Cursor](hyper
 **<a id="token"></a>Does HyperGrok have a token?**
 HyperGrok has no token and will not launch one. Coins using the name were launched by third parties and are not part of this project.
 
+**<a id="what-it-is-not"></a>Is there a `hypergrok` command, or a version that trades for me?**
+No. HyperGrok is instructions, role profiles and read-only Python scripts. You load them into Grok Bot or another agent tool and run the scripts with `python3`, such as `python3 scripts/opening_bell.py`. It installs no `hypergrok` binary, so commands like `hypergrok --global` do not exist. It places no order on its own: a send needs a ticket with a Risk PASS and your approval by that ticket's id, or a standing approval you wrote yourself in `desk.md` for one exact class of action, such as cancels on testnet. It contains no strategies or signals and makes no profit or return claim. Videos or posts that show other commands or promise returns do not come from this project; check them against this repository.
+
 **Where can I get help or report a bug?**
 Check the runtime guide and run `python3 scripts/desk_doctor.py --offline --json`. [Open an issue](https://github.com/galleonlabs/hypergrok-trading-desk/issues/new/choose) with your release, runtime, failing command and sanitized output. Follow the [security policy](../SECURITY.md) for sensitive reports.
 

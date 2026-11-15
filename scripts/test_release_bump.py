@@ -16,12 +16,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "release_bump.py")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-from release_bump import TAG_RE, PIN_BEFORE, doc_files
+from release_bump import TAG_RE, PIN_BEFORE, doc_files, write_all
 from check_manifests import MANIFESTS, PINNED_SOURCE_MANIFESTS  # noqa: E402
 
 NEW = "9.9.9"
@@ -384,6 +385,32 @@ class ReleaseBumpTest(unittest.TestCase):
         code, output = bump(root, env=env)
         self.assertEqual(code, 3, output)
         self.assertIn(STUB_MARK, output)
+
+    def test_failed_replace_restores_written_files(self):
+        root = os.path.realpath(self.safe_case())
+        before = tree_digest(root)
+        pending = {rel: read(root, rel).decode() + "\n" for rel in ("plugin.json", "README.md", "SETUP.md")}
+        real_replace, calls = os.replace, []
+
+        def fail_third(source, destination):
+            calls.append(destination)
+            if len(calls) == 3:
+                raise OSError("injected replace failure")
+            return real_replace(source, destination)
+
+        with patch("release_bump.os.replace", side_effect=fail_third):
+            with self.assertRaisesRegex(OSError, "injected replace failure"):
+                write_all(root, pending)
+        self.assertEqual(tree_digest(root), before)
+        leftovers = [name for _, _, names in os.walk(root) for name in names if name.startswith(".release-bump-")]
+        self.assertEqual(leftovers, [])
+
+    def test_failed_check_keeps_writes_for_inspection(self):
+        root = self.safe_case()
+        env = dict(os.environ, STUB_CHECK_RC="3")
+        code, output = bump(root, NEW, env=env)
+        self.assertEqual(code, 3, output)
+        self.assertEqual(load(root, "plugin.json")["version"], NEW)
 
     def test_invalid_version_exits_2(self):
         root = self.case()

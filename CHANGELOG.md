@@ -2,6 +2,12 @@
 
 ## Unreleased
 
++ `scripts/release_bump.py` replaces its files together or not at all: each is staged and renamed into place, and a failed write restores any file already replaced. A failing check still leaves the edits for review. Adapted from the 77TheMob77 fork.
++ The structural check fails an unquoted frontmatter value containing `: ` or ` #`, which strict YAML loaders such as Claude Code's reject, skipping the whole skill. Every shipped skill and role already parses. Idea from the PappaBaloo fork.
++ The FAQ and README state that HyperGrok installs no `hypergrok` binary, sends nothing without a Risk PASS and the user's approval, and makes no profit claim, because posts showing invented commands and returns are circulating.
++ Pin the publish workflow's checkout and setup-node actions to the commits their v4.4.0 tags name.
++ Refresh the public fork review: 120 listed forks, 103 pushed since 1 October, 16 distinct heads ahead of `main`, ten of them new.
+
 ## 1.7.2 - 2026-11-12
 
 + The Claude Code exchange-write gate missed writes that a literal `cd`, a shell script, a case-variant `hyperliquid.xyz` host, `ex.order` / `hl.cancel`, or `getattr(..., "order")` kept out of its matcher. Those now ask. A named script that is too large or unreadable to scan asks as well. A 32-byte hex key in a named script path is redacted in the prompt, which still omits the command and the file body. `scripts/desk_doctor.py` previously reported a desk record as clean when it held that key shape with no "private key" label; it now fails the record without printing the value. An account address, commit or bare hash still passes.

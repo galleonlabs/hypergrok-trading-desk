@@ -224,4 +224,4 @@ assets/      the mascot, logo, README graphics and their generator
 
 See [reuse and attribution](ATTRIBUTION.md) for a ready-to-copy credit line. If HyperGrok Trading Desk helps your work, [a star on the original repository](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and entirely optional.
 
-HyperGrok has no token and will not launch one. [Read the FAQ](docs/FAQ.md#token).
+HyperGrok has no token and will not launch one. [Read the FAQ](docs/FAQ.md#token). It also has no `hypergrok` command-line binary, sends nothing to the exchange without a Risk PASS and your approval, and makes no profit claim; posts showing otherwise are not from this project. [What HyperGrok is not](docs/FAQ.md#what-it-is-not).

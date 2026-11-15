@@ -56,7 +56,7 @@ Structural validation includes:
 
    Once that release has landed, set the package's npm **Settings → Publishing access** to "Require two-factor authentication and disallow tokens".
 
-   If Actions is unavailable, stage the reviewed archive from dappnode with `npx -y npm@11.21.1 stage publish <archive> --access public`; it goes live only when the owner approves it with 2FA on npmjs.com. npm removes direct publishing by 2FA-bypass tokens around January 2027.
+   If Actions is unavailable, stage the reviewed archive from a trusted local machine with `npx -y npm@11.21.1 stage publish <archive> --access public`; it goes live only when the owner approves it with 2FA on npmjs.com. npm removes direct publishing by 2FA-bypass tokens around January 2027.
 8. Verify the published instructions actually work by running section 1 verbatim in an empty directory: clone the tag, then `bash scripts/check.sh` inside it.
 
 The tag must contain a `SETUP.md` that pins to that same tag. If step 4 is skipped, the release ships instructions pointing at the previous one, so the check enforces it rather than leaving it to whoever cuts the release: step 2 without step 4 fails the build, and so does a pin that names a moving branch or no ref at all.

@@ -1,6 +1,6 @@
 # PR definitions come from the trusted base; the job guard rejects fork heads
 # before runner admission. Trusted PRs check their exact head SHA.
-# GitHub-hosted runners keep this public repository's CI off dappnode.
+# GitHub-hosted runners keep this public repository's CI off self-hosted runners.
 name: Public Grok Bot template
 on:
   schedule:

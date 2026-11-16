@@ -105,7 +105,7 @@ class MandateTest(unittest.TestCase):
     def test_markets_all_or_list_and_wildcards_fail(self):
         self.assertTrue(self.evaluate(record(fields(markets="all")))["in_force"])
         self.assertTrue(self.evaluate(record(fields(markets="BTC, xyz:TSLA")))["in_force"])
-        for value in ("*", "BTC, *", "BTC, all", "BTC,,ETH", "BTC, btc", "any market"):
+        for value in ("*", "BTC, *", "BTC, all", "any market", "BTC ETH etc", "BTC/ETH"):
             with self.subTest(markets=value):
                 report = self.evaluate(record(fields(markets=value)))
                 self.assertEqual(self.status(report, "markets")["status"], "invalid")
@@ -129,7 +129,7 @@ class MandateTest(unittest.TestCase):
             "max risk per trade": "half a percent",
             "max total open risk": "0%",
             "max leverage": "2.5x",
-            "daily loss stop": "2%",
+            "daily loss stop": "two percent",
             "max new entries per day": "0",
             "written": "16/11/2026",
             "expires": "next month",
@@ -184,7 +184,7 @@ class MandateTest(unittest.TestCase):
         self.assertEqual(self.evaluate(duplicate_field)["verdict"], "invalid")
 
     def test_block_ends_at_next_heading_and_ignores_prose(self):
-        text = record(fields()) + "Written after the September review.\n- note: keep it small\n\n## Bots\n- network: mainnet\n"
+        text = record(fields()) + "Written after the September review.\n\n## Bots\n- network: mainnet\n"
         report = self.evaluate(text)
         self.assertTrue(report["in_force"], report["reasons"])
         self.assertTrue(any("ignored" in note for note in report["notes"]))
@@ -257,6 +257,95 @@ class MandateTest(unittest.TestCase):
         filled = block.replace("0xYOUR_ACCOUNT_ADDRESS", ACCOUNT)
         report = self.evaluate("# Desk record\n\n" + filled, today=dt.date(2026, 11, 20))
         self.assertTrue(report["in_force"], report["reasons"])
+
+
+    def test_revoke_in_any_markdown_form_wins(self):
+        for line in ("`standing mandate: revoked`", "**standing mandate:** revoked", "**standing mandate: revoked**",
+                     "> standing mandate: revoked", "1. standing mandate: revoked", "standing mandate revoked",
+                     "standing mandate - revoked", "+ Standing Mandate: REVOKED", "<!-- standing mandate: revoked -->",
+                     "\ufeffstanding mandate: revoked"):
+            with self.subTest(line=line):
+                report = self.evaluate(record(fields(), extra=line + "\n"))
+                self.assertEqual((report["verdict"], report["in_force"]), ("revoked", False))
+
+    def test_block_inside_an_html_comment_is_ignored(self):
+        text = "# Desk record\n<!--\n" + record(fields()).split("\n", 1)[1] + "-->\n"
+        self.assertEqual(self.evaluate(text)["verdict"], "none")
+        self.assertEqual(self.evaluate("<!-- unfinished\n" + record(fields()))["verdict"], "none", "an unclosed comment hides the rest")
+
+    def test_unknown_field_fails_closed_and_synonyms_are_read(self):
+        report = self.evaluate(record(fields(), extra="").replace("- expires:", "- expires in:"))
+        self.assertEqual(report["verdict"], "invalid")
+        self.assertIn("expires in", " ".join(report["reasons"]))
+        report = self.evaluate(record(fields(**{"max new entries per day": None}), extra="").replace("## Standing mandate", "## Standing mandate\n- max entries per day: 2"))
+        self.assertTrue(report["in_force"], report["reasons"])
+        self.assertEqual(self.status(report, "max new entries per day")["value"], 2)
+        for synonym in ("expiry", "expires on"):
+            with self.subTest(synonym=synonym):
+                report = self.evaluate(record(fields(written="2026-10-01", expires="2026-11-01")).replace("- expires:", f"- {synonym}:"))
+                self.assertEqual(report["verdict"], "expired", "a renamed expiry must still be honoured")
+                self.assertTrue(any("read field" in note for note in report["notes"]))
+
+    def test_reasonable_formatting_is_accepted_and_reported(self):
+        ack = mandate.ACKNOWLEDGEMENT.format(network="testnet")
+        variants = {
+            "bom": "\ufeff" + record(fields()),
+            "plus bullets": record(fields()).replace("\n- ", "\n+ "),
+            "numbered": "\n".join(f"{i}. {line[2:]}" if line.startswith("- ") else line for i, line in enumerate(record(fields()).splitlines())),
+            "no bullet and bold keys": "\n".join(f"**{line[2:].split(':', 1)[0]}:**{line[2:].split(':', 1)[1]}" if line.startswith("- ") else line for line in record(fields()).splitlines()),
+            "heading colon": record(fields()).replace("## Standing mandate", "## Standing mandate:"),
+            "bold heading": record(fields()).replace("## Standing mandate", "**Standing mandate**"),
+            "blockquote": "\n".join("> " + line for line in record(fields()).splitlines()),
+        }
+        for name, text in variants.items():
+            with self.subTest(form=name):
+                report = self.evaluate(text)
+                self.assertTrue(report["in_force"], report["reasons"])
+        values = {
+            "max risk per trade": (".5%", 0.5), "max total open risk": ("1,5%", 1.5),
+        }
+        report = self.evaluate(record(fields(**{k: v for k, (v, _) in values.items()})))
+        self.assertTrue(report["in_force"], report["reasons"])
+        for key, (_raw, parsed) in values.items():
+            self.assertEqual(self.status(report, key)["value"], parsed)
+        self.assertTrue(any("decimal comma" in note for note in report["notes"]))
+        self.assertEqual(self.status(self.evaluate(record(fields(**{"max risk per trade": "0.5 percent"}))), "max risk per trade")["value"], 0.5)
+        for loss in ("-2", "2%", "\u22122%", "-2% of equity", "-2 percent"):
+            with self.subTest(loss=loss):
+                report = self.evaluate(record(fields(**{"daily loss stop": loss})))
+                self.assertTrue(report["in_force"], report["reasons"])
+                self.assertEqual(self.status(report, "daily loss stop")["value"], 2.0)
+        for leverage in ("x3", "3.0x", "3", "3X"):
+            with self.subTest(leverage=leverage):
+                self.assertEqual(self.status(self.evaluate(record(fields(**{"max leverage": leverage}))), "max leverage")["value"], 3)
+        for written in ("2026/11/16", "16 Nov 2026", "November 16, 2026", "2026-11-16T09:30:00Z", "2026-11-16T09:30:00+01:00"):
+            with self.subTest(written=written):
+                report = self.evaluate(record(fields(written=written, expires=None)))
+                self.assertTrue(report["in_force"], report["reasons"])
+        for never in ("never", "none", "None"):
+            with self.subTest(expires=never):
+                report = self.evaluate(record(fields(expires=never)))
+                self.assertEqual(self.status(report, "expires")["status"], "absent")
+                self.assertTrue(report["in_force"])
+        for markets, parsed in (("BTC ETH", ["BTC", "ETH"]), ("BTC-PERP, ETH-perp", ["BTC", "ETH"]), ("BTC, ETH,", ["BTC", "ETH"]), ("BTC, btc", ["BTC"])):
+            with self.subTest(markets=markets):
+                report = self.evaluate(record(fields(markets=markets)))
+                self.assertEqual(self.status(report, "markets")["value"], parsed)
+                self.assertTrue(report["notes"])
+        cut = ack.index(" ", 60)
+        wrapped = record(fields(acknowledgement=ack[:cut])).replace(ack[:cut], ack[:cut] + "\n  " + ack[cut + 1:])
+        self.assertTrue(self.evaluate(wrapped)["in_force"], "wrapped acknowledgement")
+        for variant in (f'"{ack}"', ack.rstrip("."), ack.upper(), "  " + ack.replace(" ", "   ")):
+            with self.subTest(acknowledgement=variant[:20]):
+                self.assertTrue(self.evaluate(record(fields(acknowledgement=variant)))["in_force"])
+
+    def test_ambiguous_values_still_fail_closed(self):
+        for name, value in (("written", "11/16/2026"), ("written", "16/11/2026"), ("max risk per trade", "0.5"),
+                            ("daily loss stop", "2"), ("max leverage", "x3x"), ("max leverage", "3.5x"), ("expires", "soon")):
+            with self.subTest(field=name, value=value):
+                report = self.evaluate(record(fields(**{name: value})))
+                self.assertEqual(report["verdict"], "invalid")
+                self.assertEqual(self.status(report, name)["status"], "invalid")
 
 
 if __name__ == "__main__":

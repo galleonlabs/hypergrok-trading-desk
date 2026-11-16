@@ -22,19 +22,27 @@ import os
 import re
 import sys
 
-HEADING_RE = re.compile(r"^#{1,6}\s+standing mandate\s*$", re.IGNORECASE)
-ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
-STATE_LINE_RE = re.compile(r"^\s*[-*]?\s*standing mandate\s*:\s*(.*?)\s*$", re.IGNORECASE)
-FIELD_RE = re.compile(r"^\s*[-*]\s+([A-Za-z][A-Za-z -]*?)\s*:\s*(.*?)\s*$")
 ACCOUNT_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 MARKET_RE = re.compile(r"^[A-Za-z0-9]+(?::[A-Za-z0-9]+)?$")
-PERCENT_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*%(?:\s+of\s+equity)?$", re.IGNORECASE)
-LOSS_RE = re.compile(r"^-\s*(\d+(?:\.\d+)?)\s*%(?:\s+of\s+start-of-day\s+equity)?$", re.IGNORECASE)
-LEVERAGE_RE = re.compile(r"^(\d+)\s*x?$", re.IGNORECASE)
+NUMBER = r"(\d+(?:[.,]\d+)?|[.,]\d+)"
+UNIT = r"(?:%|\s*percent|\s*per\s*cent|\s*pct)"
+EQUITY = r"(?:\s+of\s+(?:start[- ]of[- ]day\s+)?equity)?"
+PERCENT_RE = re.compile(rf"^{NUMBER}\s*{UNIT}{EQUITY}$", re.IGNORECASE)
+LOSS_RE = re.compile(rf"^([-−–—]?)\s*{NUMBER}\s*({UNIT})?{EQUITY}$", re.IGNORECASE)
+LEVERAGE_RE = re.compile(r"^(x)?\s*(\d+)(?:\.0+)?\s*(x)?$", re.IGNORECASE)
 COUNT_RE = re.compile(r"^(\d+)$")
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+VAGUE_MARKETS = {"all", "any", "every", "everything", "market", "markets", "perp", "perps", "coin", "coins", "and", "or", "etc"}
 KEY_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 SUSPENSION_RE = re.compile(r"\bmandate suspended\b.*\breason\s+daily-loss-stop\b", re.IGNORECASE)
+COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+QUOTE_RE = re.compile(r"^(?:\s*>)+\s?")
+BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z -]*?)\s*:\s*(.*?)\s*$")
+STATE_RE = re.compile(r"^standing mandate\s*[:\-–—]\s*(.+)$", re.IGNORECASE)
+MONTHS = {name: index for index, names in enumerate((
+    ("jan", "january"), ("feb", "february"), ("mar", "march"), ("apr", "april"), ("may",), ("jun", "june"),
+    ("jul", "july"), ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"), ("nov", "november"),
+    ("dec", "december")), start=1) for name in names}
 
 ACKNOWLEDGEMENT = (
     "I wrote this mandate myself. I accept that the desk will place {network} orders for this account "
@@ -57,6 +65,14 @@ FIELDS = (
     ("acknowledgement", True),
 )
 FIELD_NAMES = tuple(name for name, _required in FIELDS)
+SYNONYMS = {
+    "expiry": "expires", "expires on": "expires", "expiry date": "expires", "expires at": "expires",
+    "max entries per day": "max new entries per day", "entries per day": "max new entries per day",
+    "max new entries": "max new entries per day", "new entries per day": "max new entries per day",
+    "acknowledgment": "acknowledgement", "date written": "written", "written on": "written",
+    "risk per trade": "max risk per trade", "total open risk": "max total open risk",
+    "max open risk": "max total open risk", "leverage": "max leverage", "market": "markets",
+}
 
 # The desk ceilings from desk-risk-limits section 0. They stay the defaults without a mandate; a mandate
 # may set its own values above them, and the report says so.
@@ -76,24 +92,63 @@ def _normalise(value: str) -> str:
     return " ".join(value.split())
 
 
+def _clean(line: str) -> str:
+    """Remove markdown decoration a person might reasonably add to a desk record line."""
+    line = line.replace("﻿", "")
+    line = QUOTE_RE.sub("", line)
+    line = BULLET_RE.sub("", line)
+    line = line.replace("`", "").replace("**", "").replace("__", "").strip()
+    if len(line) >= 2 and line[0] == line[-1] and line[0] in "*_":
+        line = line[1:-1].strip()
+    return line
+
+
+def _heading_text(line: str):
+    """The text of a heading-like line, or None. `## X`, `**X**`, `X:` alone all count."""
+    stripped = QUOTE_RE.sub("", line.replace("﻿", "")).strip()
+    if stripped.startswith("#"):
+        return _clean(stripped.lstrip("#")).rstrip(":").strip()
+    cleaned = _clean(stripped)
+    bold = re.fullmatch(r"\*\*[^*]+\*\*:?|__[^_]+__:?", BULLET_RE.sub("", stripped).strip())
+    if bold or (cleaned.endswith(":") and ":" not in cleaned[:-1]):
+        return cleaned.rstrip(":").strip()
+    return None
+
+
+def _is_mandate_heading(line: str) -> bool:
+    text = _heading_text(line)
+    return text is not None and _normalise(text).lower() == "standing mandate"
+
+
+def _is_markdown_heading(line: str) -> bool:
+    return QUOTE_RE.sub("", line.replace("﻿", "")).strip().startswith("#")
+
+
 def parse(text: str) -> dict:
     """Locate the mandate in a desk record without judging its values.
 
-    Returns {"state": "none" | "revoked" | "block" | "invalid", ...}. A revoke
-    line wins over everything else. Two blocks, or a block beside an explicit
-    `standing mandate: none`, are ambiguous and fail closed.
+    Returns {"state": "none" | "revoked" | "block" | "invalid", ...}. Any line
+    that mentions both "standing mandate" and "revoked", in any markdown form and
+    even inside an HTML comment, revokes. Otherwise HTML comments are ignored.
+    Two blocks, an unknown field, or a block beside an explicit
+    `standing mandate: none` are ambiguous and fail closed.
     """
-    lines = text.splitlines()
-    state_values = []
-    for line in lines:
-        match = STATE_LINE_RE.match(line)
-        if match:
-            state_values.append(_strip_comment(match.group(1)).lower())
-    if "revoked" in state_values:
-        return {"state": "revoked", "reason": "`standing mandate: revoked` is present"}
+    text = text.replace("﻿", "")
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "standing mandate" in lowered and "revoked" in lowered:
+            return {"state": "revoked", "reason": "a `standing mandate: revoked` line is present"}
 
-    starts = [index for index, line in enumerate(lines) if HEADING_RE.match(line.strip())]
-    unknown_states = sorted({value for value in state_values if value not in ("none", "revoked")})
+    lines = COMMENT_RE.sub("", text).splitlines()
+    starts = [index for index, line in enumerate(lines) if _is_mandate_heading(line)]
+    state_values = []
+    for index, line in enumerate(lines):
+        if index in starts:
+            continue
+        match = STATE_RE.match(_clean(line))
+        if match:
+            state_values.append(_strip_comment(match.group(1)).strip().lower())
+    unknown_states = sorted({value for value in state_values if value != "none"})
     if unknown_states:
         return {"state": "invalid", "reason": f"`standing mandate: {redact(unknown_states[0])[:40]}` is not understood; use the block, `none` or `revoked`"}
     if len(starts) > 1:
@@ -103,27 +158,38 @@ def parse(text: str) -> dict:
     if "none" in state_values:
         return {"state": "invalid", "reason": "a mandate block and `standing mandate: none` are both present; remove one"}
 
-    body = []
+    raw, duplicates, unknown, notes = {}, [], [], []
+    last = None
     for line in lines[starts[0] + 1:]:
-        if ANY_HEADING_RE.match(line.strip()):
+        if _is_markdown_heading(line) or (_heading_text(line) is not None and not FIELD_RE.match(_clean(line)[:-1] + ": x")
+                                          and _clean(line).rstrip(":").lower() not in FIELD_NAMES and _clean(line).rstrip(":").lower() not in SYNONYMS):
             break
-        body.append(line)
-    raw, duplicates, notes = {}, [], []
-    for line in body:
-        if not line.strip():
+        cleaned = _clean(line)
+        if not cleaned:
+            last = None  # a blank line ends a wrapped acknowledgement
             continue
-        match = FIELD_RE.match(line)
+        match = FIELD_RE.match(cleaned)
         if not match:
-            notes.append(f"ignored line: {redact(line.strip())[:60]}")
+            if last == "acknowledgement" and not raw[last].rstrip("\"'\u201d\u2019 ").endswith("."):
+                raw[last] = _normalise(raw[last] + " " + cleaned)
+            else:
+                notes.append(f"ignored line: {redact(cleaned)[:60]}")
             continue
         key = _normalise(match.group(1).lower())
-        value = match.group(2) if key == "acknowledgement" else _strip_comment(match.group(2))
+        if key in SYNONYMS:
+            notes.append(f"read field '{key}' as '{SYNONYMS[key]}'")
+            key = SYNONYMS[key]
         if key not in FIELD_NAMES:
-            notes.append(f"ignored unknown field: {redact(key)[:40]}")
+            unknown.append(redact(key)[:40])
+            last = None
             continue
+        value = match.group(2) if key == "acknowledgement" else _strip_comment(match.group(2))
         if key in raw:
             duplicates.append(key)
         raw[key] = _normalise(value)
+        last = key
+    if unknown:
+        return {"state": "invalid", "reason": f"unknown field in the mandate block: {', '.join(unknown)}; check the spelling against docs/STANDING_MANDATE.md"}
     if duplicates:
         return {"state": "invalid", "reason": f"field written more than once: {', '.join(sorted(set(duplicates)))}"}
     return {"state": "block", "raw": raw, "notes": notes}
@@ -154,17 +220,52 @@ def _field(name, status, value, detail, **extra):
 
 
 def _date(value):
-    if not DATE_RE.match(value):
-        raise ValueError("use YYYY-MM-DD")
-    return dt.date.fromisoformat(value)
+    """Return (date, note). Accepts ISO dates and datetimes, YYYY/MM/DD and day-month-name forms."""
+    text = value.strip()
+    match = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", text)
+    if match:
+        year, month, day = (int(part) for part in match.groups())
+        return dt.date(year, month, day), (None if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) else f"read '{text}' as {dt.date(year, month, day).isoformat()}")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ].+", text):
+        stamp = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone(dt.timezone.utc)
+        return stamp.date(), f"read '{text}' as {stamp.date().isoformat()} UTC"
+    match = re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})", text) or None
+    if match:
+        day, month, year = int(match.group(1)), MONTHS.get(match.group(2).lower()), int(match.group(3))
+    else:
+        match = re.fullmatch(r"([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})", text)
+        if not match:
+            raise ValueError("write a date such as 2026-11-16 or 16 Nov 2026 (a numeric day/month order is ambiguous)")
+        month, day, year = MONTHS.get(match.group(1).lower()), int(match.group(2)), int(match.group(3))
+    if not month:
+        raise ValueError(f"'{text}' has no month name I recognise")
+    parsed = dt.date(year, month, day)
+    return parsed, f"read '{text}' as {parsed.isoformat()}"
 
 
-def check_fields(raw: dict, today: dt.date) -> list[dict]:
+def _number(text, notes, field):
+    if "," in text:
+        notes.append(f"{field}: read '{text}' with a decimal comma")
+    return float(text.replace(",", "."))
+
+
+def _ack(value: str) -> str:
+    text = _normalise(value).strip().strip("\"'“”‘’").strip()
+    return text.rstrip(".").strip().lower()
+
+
+def check_fields(raw: dict, today: dt.date, notes: list | None = None) -> list[dict]:
+    notes = [] if notes is None else notes
     results = []
     network = raw.get("network", "").lower()
     written = None
     for name, required in FIELDS:
         value = raw.get(name)
+        if name == "expires" and value and value.strip().lower() in ("never", "none", "no expiry", "-"):
+            notes.append(f"expires: read '{value}' as no expiry")
+            value = None
         if value is None or value == "":
             if required:
                 results.append(_field(name, "missing", None, "required"))
@@ -181,65 +282,85 @@ def check_fields(raw: dict, today: dt.date) -> list[dict]:
                     raise ValueError("must be a 0x address of 40 hex characters")
                 results.append(_field(name, "valid", value.lower(), "applies only to this account"))
             elif name == "markets":
-                markets = [part.strip() for part in value.split(",")]
-                if [m.lower() for m in markets] == ["all"]:
+                parts = [part for part in re.split(r"[,\s]+", value) if part]
+                if [m.lower() for m in parts] == ["all"]:
                     results.append(_field(name, "valid", "all", "every market the exchange lists"))
                     continue
-                if any(not m for m in markets):
-                    raise ValueError("empty market in the list")
-                bad = [m for m in markets if not MARKET_RE.match(m) or m.lower() == "all"]
-                if bad:
-                    raise ValueError(f"not a market name: {bad[0]} (write `all` on its own, or list markets)")
-                if len({m.upper() for m in markets}) != len(markets):
-                    raise ValueError("a market is listed twice")
+                if not parts:
+                    raise ValueError("list at least one market, or write `all`")
+                markets, seen = [], set()
+                for part in parts:
+                    market = part
+                    if re.search(r"-perp$", market, re.IGNORECASE):
+                        market = market[:-5]
+                        notes.append(f"markets: read '{part}' as '{market}'")
+                    if not MARKET_RE.match(market) or market.lower() in VAGUE_MARKETS:
+                        raise ValueError(f"not a market name: {part} (write `all` on its own, or list markets)")
+                    if market.upper() in seen:
+                        notes.append(f"markets: '{part}' is listed twice; counted once")
+                        continue
+                    seen.add(market.upper())
+                    markets.append(market)
+                if value.rstrip().endswith(",") or ("," not in value and len(parts) > 1):
+                    notes.append("markets: read the list ignoring a trailing comma or spaces as separators")
                 results.append(_field(name, "valid", markets, f"{len(markets)} listed"))
             elif name in ("max risk per trade", "max total open risk"):
                 match = PERCENT_RE.match(value)
                 if not match:
                     raise ValueError("write a percentage of equity, such as 0.5%")
-                number = float(match.group(1))
+                number = _number(match.group(1), notes, name)
                 if not 0 < number <= 100:
                     raise ValueError("must be above 0% and at most 100%")
-                results.append(_with_default(name, number, f"{match.group(1)}% of equity"))
+                results.append(_with_default(name, number, f"{number:g}% of equity"))
             elif name == "max leverage":
                 match = LEVERAGE_RE.match(value)
-                if not match or int(match.group(1)) < 1:
+                if not match or (match.group(1) and match.group(3)) or int(match.group(2)) < 1:
                     raise ValueError("write a whole number of at least 1, such as 3x")
-                results.append(_with_default(name, int(match.group(1)), f"{int(match.group(1))}x; the exchange's market and tier maximum still applies"))
+                if value.strip().lower() != f"{int(match.group(2))}x":
+                    notes.append(f"max leverage: read '{value}' as {int(match.group(2))}x")
+                results.append(_with_default(name, int(match.group(2)), f"{int(match.group(2))}x; the exchange's market and tier maximum still applies"))
             elif name == "daily loss stop":
                 match = LOSS_RE.match(value)
-                if not match:
-                    raise ValueError("write a negative percentage of start-of-day equity, such as -2%")
-                number = float(match.group(1))
+                if not match or not (match.group(1) or match.group(3)):
+                    raise ValueError("write a percentage of start-of-day equity, such as -2%")
+                number = _number(match.group(2), notes, name)
                 if not 0 < number <= 100:
-                    raise ValueError("must be below 0% and no lower than -100%")
-                results.append(_with_default(name, number, f"-{match.group(1)}% suspends the mandate for the rest of the UTC day"))
+                    raise ValueError("must be a loss above 0% and at most 100%")
+                if not match.group(1) or match.group(1) != "-" or not match.group(3):
+                    notes.append(f"daily loss stop: read '{value}' as a loss of {number:g}% of start-of-day equity")
+                results.append(_with_default(name, number, f"-{number:g}% suspends the mandate for the rest of the UTC day"))
             elif name == "max new entries per day":
                 match = COUNT_RE.match(value)
                 if not match or int(match.group(1)) < 1:
                     raise ValueError("write a whole number of at least 1")
                 results.append(_field(name, "valid", int(match.group(1)), "new entries per UTC day"))
             elif name == "written":
-                written = _date(value)
+                written, note = _date(value)
+                if note:
+                    notes.append(f"written: {note}")
                 if written > today:
-                    raise ValueError(f"{value} is after today ({today.isoformat()} UTC)")
-                results.append(_field(name, "valid", value, "date the user wrote this mandate"))
+                    raise ValueError(f"{written.isoformat()} is after today ({today.isoformat()} UTC)")
+                results.append(_field(name, "valid", written.isoformat(), "date the user wrote this mandate"))
             elif name == "expires":
-                expires = _date(value)
-                base = written or (_safe_date(raw.get("written")))
+                expires, note = _date(value)
+                if note:
+                    notes.append(f"expires: {note}")
+                base = written or _safe_date(raw.get("written"))
                 if base and expires < base:
                     raise ValueError("is before the written date")
                 if today > expires:
-                    results.append(_field(name, "expired", value, f"ended at the end of {value} UTC"))
+                    results.append(_field(name, "expired", expires.isoformat(), f"ended at the end of {expires.isoformat()} UTC"))
                 else:
-                    results.append(_field(name, "valid", value, f"in force through {value} UTC"))
+                    results.append(_field(name, "valid", expires.isoformat(), f"in force through {expires.isoformat()} UTC"))
             elif name == "acknowledgement":
                 if network not in ("mainnet", "testnet"):
                     raise ValueError("cannot be checked until network is valid")
                 expected = ACKNOWLEDGEMENT.format(network=network)
-                if _normalise(value) != expected:
+                if _ack(value) != _ack(expected):
                     raise ValueError("does not match the acknowledgement sentence in docs/STANDING_MANDATE.md for this network")
-                results.append(_field(name, "valid", "matches", "written by the user, word for word"))
+                if _normalise(value) != expected:
+                    notes.append("acknowledgement: matched ignoring case, spacing, quotes and the final full stop")
+                results.append(_field(name, "valid", "matches", "the user's acknowledgement for this network"))
         except ValueError as exc:
             results.append(_field(name, "invalid", value if name != "acknowledgement" else "differs", str(exc)))
     return results
@@ -247,7 +368,7 @@ def check_fields(raw: dict, today: dt.date) -> list[dict]:
 
 def _safe_date(value):
     try:
-        return _date(value) if value else None
+        return _date(value)[0] if value else None
     except ValueError:
         return None
 
@@ -293,9 +414,10 @@ def evaluate(desk_root: str, today: dt.date | None = None, network: str | None =
         return report
 
     raw = parsed["raw"]
-    fields = check_fields(raw, today)
+    notes = list(parsed["notes"])
+    fields = check_fields(raw, today, notes)
     report["fields"] = fields
-    report["notes"] = parsed["notes"]
+    report["notes"] = [redact(note) for note in notes]
     valid = {entry["field"]: entry["value"] for entry in fields if entry["status"] in ("valid", "expired")}
     report["mandate"] = {"written": valid.get("written"), "network": valid.get("network"),
                          "account": valid.get("account"), "fingerprint": fingerprint(raw)}

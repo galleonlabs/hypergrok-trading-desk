@@ -2,7 +2,9 @@
 
 `template/grok-bot.json` is the release contract for the public **HyperGrok Desk Lead** template. It records the exact public profile, source release, avatar, exported bootstrap skill and complete reviewed release inventory. `templateSkillNames` lists the skills carried by the share; `skills` contains all seventeen files and hashes that setup must install and verify.
 
-**Release state — 2026-11-03:** The [1.7.1 public template](https://x.ai/bot/2GeaOwIsmTEOD_WGzmghC) is published. Its complete exported bootstrap was independently read back in the native UI and matched the reviewed source. The earlier 1.7.0 share keeps installing 1.7.0. Earlier receipts below apply only to their named releases.
+**Release state — 2026-11-16:** The [1.8.0 public template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) is published. Its complete exported bootstrap was independently read back in the native template view and matched the reviewed source. The earlier 1.7.1 and 1.7.0 shares keep installing their own releases. Earlier receipts below apply only to their named releases.
+
+**Prior release — 2026-11-03:** The [1.7.1 public template](https://x.ai/bot/2GeaOwIsmTEOD_WGzmghC) is published. Its complete exported bootstrap was independently read back in the native UI and matched the reviewed source.
 
 **Prior release — 2026-10-25:** The [1.7.0 public template](https://x.ai/bot/qgVMePFoWotJTUtl3gkdZ) is published. Its complete exported bootstrap was independently read back in the native UI and matched the reviewed source. Source and package checks are recorded separately. Earlier receipts below apply only to their named releases.
 
@@ -75,6 +77,14 @@ The Desk Lead follows `hypergrok-bootstrap`. A passing result has:
 8. this sentence: **Setup stayed read-only: no key requested and no order created or sent.**
 
 Do not describe the template as a zero-interaction installer. **Add to Grok Bot** creates the Desk Lead; **Start the desk.** runs the reviewed setup. The public path is one click and one message.
+
+## Publication verification - 2026-11-16
+
+The [1.8.0 public template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) was authored from the v1.8.0 release tag at commit `0a1f9c0e3a1aae9b2ec10e1ef6976b6ce4e3536b`. The Bot behind the 1.7.1 share could no longer be opened from grok.com, so a fresh Bot and link were used; keep this Bot so the next release can use **Update template**. The publishing Bot has the manifest name, title and description and the default geometric avatar. The template Context panel holds the public description and one skill, `hypergrok-bootstrap`; no plugins, memories or routines are exported.
+
+Independent native readback opened **View Details → Context → hypergrok-bootstrap** in the staged template before publishing and hashed the complete rendered content. The source name and description matched. The normalized Markdown body matched the source: 9,658 UTF-8 bytes, SHA-256 `ac93ae90e94db3f259572029e134ef7eaa618bc0f7cf8479500a3ba089c11067`. The logged-out preview shows **HyperGrok Desk Lead**, the 1.8.0 description and **Add to Grok Bot**.
+
+A fresh public import and **Start the desk.** round trip has not been performed for this release. No account read, key provisioning, routine activation or exchange action was used for publication.
 
 ## Publication verification - 2026-11-03
 

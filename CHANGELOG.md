@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ Publish the 1.8.0 native Grok Bot template on a new share, https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr, with its exported bootstrap independently read back and matched to the release. The 1.7.1 and 1.7.0 shares keep installing their own releases.
+
 ## 1.8.0 - 2026-11-16
 
 + Add an opt-in standing mandate, because users who want the desk to place orders without per-ticket approval had no supported way to do so. Before this, the only alternative was to switch the approval gate off entirely. A mandate is a block the user writes in `desk.md`. Its required fields are network, account, markets (a list or `all`), per-trade risk, total open risk, leverage, a daily loss stop, the date written and a fixed acknowledgement sentence. Entries per day and expiry are optional. Its limits are the user's own and may exceed the 1.7.3 ceilings, which remain the defaults for every desk without one. Without a valid block nothing changes: every send needs approval by ticket id. Documented in `docs/STANDING_MANDATE.md` with a plain risk statement.

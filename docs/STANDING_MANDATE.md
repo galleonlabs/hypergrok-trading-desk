@@ -49,7 +49,7 @@ For mainnet, write `mainnet` both in `network` and in the acknowledgement senten
 | --- | --- | --- |
 | `network` | yes | `mainnet` or `testnet`. The mandate covers that network only. |
 | `account` | yes | The 0x account the API wallet trades for. Writes for any other account need approval by id. |
-| `markets` | yes | A comma-separated list such as `BTC, ETH, xyz:TSLA`, or `all` on its own. `*` and mixed forms are invalid. |
+| `markets` | yes | A list such as `BTC, ETH, xyz:TSLA, @107`, or `all` on its own. `*` and mixed forms are invalid. |
 | `max risk per trade` | yes | Loss to the stressed stop, as a percentage of equity. |
 | `max total open risk` | yes | Open positions plus pending entries, as a percentage of equity. |
 | `max leverage` | yes | A whole number such as `3x`. The exchange's market and tier maximum still applies. |
@@ -100,7 +100,7 @@ These always need approval by ticket id, or stay in the Hyperliquid app with you
 - **Expiry.** If you wrote `expires`, the mandate ends after that UTC day.
 - **Revoke.** Delete the block, or write the line `standing mandate: revoked` anywhere in `desk.md`. Either takes effect on the next check, before the next send. A revoke line overrides any block.
 
-Ordinary formatting is accepted, and the validator lists each reading it made. That covers `-`, `+`, numbered or no bullets, bold keys, a bold or colon-ended heading, a blockquote, `.5%`, `0,5%` or `0.5 percent`, a daily loss stop written as `-2`, `2%` or `-2% of equity`, leverage as `x3` or `3.0x`, dates such as `2026/11/16`, `16 Nov 2026` or an ISO datetime (converted to UTC), `expires: never`, space-separated markets, `BTC-PERP` and a trailing comma. Common synonyms such as `expiry` or `max entries per day` are read as the canonical field.
+Ordinary formatting is accepted, and the validator lists each reading it made. That covers `-`, `+`, numbered or no bullets, bold keys, a bold or colon-ended heading, a blockquote, `.5%`, `0,5%` or `0.5 percent`, a daily loss stop written as `-2`, `2%` or `-2% of equity`, leverage as `x3` or `3.0x`, dates such as `2026/11/16`, `16 Nov 2026` or an ISO datetime (converted to UTC), `expires: never`, space-separated markets, `BTC-PERP`, spot indexes such as `@107` and a trailing comma. A value may wrap onto following lines, indented or not, until the next field, a blank line or a heading. Common synonyms such as `expiry` or `max entries per day` are read as the canonical field.
 
 It treats these as no mandate and names what failed: a block with a required field missing or a value it cannot read without guessing (a bare `0.5` risk, a numeric day/month date such as `11/16/2026`, `3.5x`, `*`); an unknown field, so a misspelled limit is never silently dropped; a block that appears twice; and a block beside `standing mandate: none`. A block inside an HTML comment is ignored. Any line that mentions both "standing mandate" and "revoked", in any markdown form and even inside a comment, revokes.
 

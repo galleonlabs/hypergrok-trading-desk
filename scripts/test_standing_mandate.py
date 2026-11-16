@@ -184,7 +184,7 @@ class MandateTest(unittest.TestCase):
         self.assertEqual(self.evaluate(duplicate_field)["verdict"], "invalid")
 
     def test_block_ends_at_next_heading_and_ignores_prose(self):
-        text = record(fields()) + "Written after the September review.\n\n## Bots\n- network: mainnet\n"
+        text = record(fields()) + "\nWritten after the September review.\n\n## Bots\n- network: mainnet\n"
         report = self.evaluate(text)
         self.assertTrue(report["in_force"], report["reasons"])
         self.assertTrue(any("ignored" in note for note in report["notes"]))
@@ -346,6 +346,42 @@ class MandateTest(unittest.TestCase):
                 report = self.evaluate(record(fields(**{name: value})))
                 self.assertEqual(report["verdict"], "invalid")
                 self.assertEqual(self.status(report, name)["status"], "invalid")
+
+
+    def test_wrapped_values_continue_until_a_field_blank_line_or_heading(self):
+        ack = mandate.ACKNOWLEDGEMENT.format(network="testnet")
+        first, rest = ack.split(". ", 1)
+        for indent in ("  ", "", "    "):
+            with self.subTest(indent=repr(indent)):
+                text = record(fields(acknowledgement=first + ".")).replace(first + ".", first + ".\n" + indent + rest)
+                report = self.evaluate(text)
+                self.assertTrue(report["in_force"], report["reasons"])
+        wrapped_markets = record(fields(markets="BTC, ETH,")).replace("BTC, ETH,", "BTC, ETH,\n  SOL, @107")
+        self.assertEqual(self.status(self.evaluate(wrapped_markets), "markets")["value"], ["BTC", "ETH", "SOL", "@107"])
+        heading_stops = record(fields(acknowledgement=first + ".")).replace(first + ".", first + ".\n## Next\n" + rest)
+        self.assertEqual(self.evaluate(heading_stops)["verdict"], "invalid")
+
+    def test_spot_index_markets_are_accepted(self):
+        report = self.evaluate(record(fields(markets="@107, BTC")))
+        self.assertTrue(report["in_force"], report["reasons"])
+        self.assertEqual(self.status(report, "markets")["value"], ["@107", "BTC"])
+        for bad in ("@", "@abc", "@1.5"):
+            with self.subTest(market=bad):
+                self.assertEqual(self.evaluate(record(fields(markets=bad)))["verdict"], "invalid")
+
+    def test_suspension_line_is_read_case_and_spacing_insensitively(self):
+        self.write(record(fields()))
+        journal = os.path.join(self.root, "journal", "2026-11-16.md")
+        for line in ("14:05 UTC  Mandate Suspended  mandate 2026-11-16  reason Daily-Loss-Stop",
+                     "14:05 UTC mandate   suspended mandate 2026-11-16 reason daily loss stop",
+                     "14:05 UTC  MANDATE SUSPENDED  reason: daily_loss_stop  day pnl -2.1%"):
+            with self.subTest(line=line):
+                with open(journal, "w", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+                self.assertEqual(mandate.evaluate(self.root, today=TODAY)["verdict"], "suspended")
+        with open(journal, "w", encoding="utf-8") as handle:
+            handle.write("14:05 UTC  mandate suspended  reason incident INC-20261116-01\n")
+        self.assertTrue(mandate.evaluate(self.root, today=TODAY)["in_force"], "only the daily loss stop suspends")
 
 
 if __name__ == "__main__":

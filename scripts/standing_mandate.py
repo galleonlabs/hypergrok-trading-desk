@@ -23,7 +23,7 @@ import re
 import sys
 
 ACCOUNT_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
-MARKET_RE = re.compile(r"^[A-Za-z0-9]+(?::[A-Za-z0-9]+)?$")
+MARKET_RE = re.compile(r"^(?:[A-Za-z0-9]+(?::[A-Za-z0-9]+)?|@\d+)$")
 NUMBER = r"(\d+(?:[.,]\d+)?|[.,]\d+)"
 UNIT = r"(?:%|\s*percent|\s*per\s*cent|\s*pct)"
 EQUITY = r"(?:\s+of\s+(?:start[- ]of[- ]day\s+)?equity)?"
@@ -33,7 +33,7 @@ LEVERAGE_RE = re.compile(r"^(x)?\s*(\d+)(?:\.0+)?\s*(x)?$", re.IGNORECASE)
 COUNT_RE = re.compile(r"^(\d+)$")
 VAGUE_MARKETS = {"all", "any", "every", "everything", "market", "markets", "perp", "perps", "coin", "coins", "and", "or", "etc"}
 KEY_RE = re.compile(r"0x[0-9a-fA-F]{64}")
-SUSPENSION_RE = re.compile(r"\bmandate suspended\b.*\breason\s+daily-loss-stop\b", re.IGNORECASE)
+SUSPENSION_RE = re.compile(r"\bmandate\s+suspended\b.*\breason\s*[:=]?\s*daily[\s_-]*loss[\s_-]*stop\b", re.IGNORECASE)
 COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 QUOTE_RE = re.compile(r"^(?:\s*>)+\s?")
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -170,8 +170,9 @@ def parse(text: str) -> dict:
             continue
         match = FIELD_RE.match(cleaned)
         if not match:
-            if last == "acknowledgement" and not raw[last].rstrip("\"'\u201d\u2019 ").endswith("."):
-                raw[last] = _normalise(raw[last] + " " + cleaned)
+            if last is not None:
+                # A wrapped value continues until the next field, a blank line or a heading.
+                raw[last] = _normalise(raw[last] + " " + (cleaned if last == "acknowledgement" else _strip_comment(cleaned)))
             else:
                 notes.append(f"ignored line: {redact(cleaned)[:60]}")
             continue

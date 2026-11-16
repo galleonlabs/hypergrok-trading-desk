@@ -1,9 +1,9 @@
 {
-  "description": "HyperGrok: ask before any Bash command that looks like a Hyperliquid exchange write",
+  "description": "HyperGrok: ask before any Bash command that looks like a Hyperliquid exchange write unless a valid standing mandate covers it, and before an edit that adds or changes a standing mandate in desk.md",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",

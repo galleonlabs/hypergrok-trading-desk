@@ -124,6 +124,19 @@ def main():
         assert any(check["name"] == "public API" and check["status"] == "SKIP" for check in doctor["checks"])
         assert not requests, "Offline doctor must not access any API"
         checked += 1
+        mandate_schema = command("standing_mandate", "--schema")
+        assert mandate_schema["mode"] == "read-only" and mandate_schema["network_access"] == "none"
+        checked += 1
+        with tempfile.TemporaryDirectory(prefix="hypergrok-mandate-") as desk:
+            Path(desk, "desk.md").write_text("# Desk record\n- standing mandate: none\n", encoding="utf-8")
+            none = command("standing_mandate", "--desk-root", desk, "--json")
+            assert none["verdict"] == "none" and none["in_force"] is False
+            Path(desk, "desk.md").write_text("## Standing mandate\n- network: mainnet\n- markets: *\n", encoding="utf-8")
+            invalid = command("standing_mandate", "--desk-root", desk, "--json", expected=1)
+            assert invalid["verdict"] == "invalid" and not invalid["in_force"]
+            assert any(field["field"] == "account" and field["status"] == "missing" for field in invalid["fields"])
+            assert not requests, "The mandate validator must not access any API"
+            checked += 1
         bell = command("opening_bell", "--coin", "ETH", "--json", "--base-url", base)
         assert bell["mode"] == "read-only" and bell["coin"] == "ETH" and bell["network"] == "custom"
         assert bell["prices"]["mark"] == "3001"
@@ -169,7 +182,7 @@ def main():
             assert tampered["error"]["code"] == "verification_failed"
             checked += 3
         assert not failures, failures
-        print(f"Passed {checked} read-only CLI journeys: schemas, invalid input, offline doctor, market read, every-DEX account read, risk sizing, dataset collection/replay/tamper refusal; only loopback POST /info used.")
+        print(f"Passed {checked} read-only CLI journeys: schemas, invalid input, offline doctor, offline standing mandate check, market read, every-DEX account read, risk sizing, dataset collection/replay/tamper refusal; only loopback POST /info used.")
     finally:
         server.shutdown()
         server.server_close()

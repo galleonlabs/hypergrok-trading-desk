@@ -13,6 +13,7 @@ import urllib.request
 from dataclasses import asdict, dataclass
 
 from cli_contract import ReadOnlyParser, add_network_arguments, describe, emit_error, network_settings
+import standing_mandate
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # What the checkout says it ships, read from the two lists it already publishes
@@ -199,7 +200,24 @@ def check_workspace(root: str) -> list[Check]:
             checks.append(Check("WARN", "risk limits", "not written; desk remains research-only"))
         else:
             checks.append(Check("PASS", "risk limits", "risk-limits.md present"))
+        checks.append(check_mandate(root))
     return checks
+
+
+def check_mandate(root: str) -> Check:
+    """Report the optional standing mandate; an invalid block fails the doctor."""
+    report = standing_mandate.evaluate(root)
+    verdict, reasons = report["verdict"], "; ".join(report["reasons"])
+    if verdict in ("none", "revoked"):
+        return Check("PASS", "standing mandate", f"{verdict}; every send needs approval by ticket id")
+    if verdict == "valid":
+        mandate = report["mandate"]
+        above = [entry["field"] for entry in report["fields"] if entry.get("above_default")]
+        note = f"; above the default ceilings: {', '.join(above)}" if above else ""
+        return Check("PASS", "standing mandate", f"in force for {mandate['network']} {mandate['account']}, written {mandate['written']}, fingerprint {mandate['fingerprint']}{note}")
+    if verdict in ("expired", "suspended"):
+        return Check("WARN", "standing mandate", f"{verdict}: {reasons}; per-ticket approval applies")
+    return Check("FAIL", "standing mandate", f"{verdict}: {reasons}; per-ticket approval applies until you fix or remove the block")
 
 
 def check_public_api(base_url: str, timeout: float) -> Check:

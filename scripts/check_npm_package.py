@@ -30,7 +30,7 @@ RESOURCES = (
     "assets/mascot.jpg", "assets/mascot-320.jpg", "assets/opening-bell.gif", "rules/hypergrok-team.mdc",
     "template/grok-bot.json", "docs/ACCOUNT_READ.md", "docs/ARCHITECTURE.md", "docs/FAQ.md",
     "docs/FORK_REVIEW.md", "docs/GROK_BOT_TEMPLATE.md", "docs/PROVENANCE.md",
-    "docs/RESEARCH_DATASETS.md", "docs/STOP_COST.md", "docs/hyperliquid-claude-code.md",
+    "docs/RESEARCH_DATASETS.md", "docs/STANDING_MANDATE.md", "docs/STOP_COST.md", "docs/hyperliquid-claude-code.md",
     "docs/hyperliquid-codex.md", "docs/hyperliquid-cursor.md", "docs/hyperliquid-gemini-cli.md",
     "docs/hyperliquid-grok-build.md", "assets/ticket-hg-20260816-01.png",
     "assets/hero.svg", "assets/hero-mobile.svg", "assets/desk-flow.svg", "assets/desk-flow-mobile.svg",
@@ -39,10 +39,10 @@ RESOURCES = (
 SCRIPTS = (
     "account_read.py", "check.sh", "check_grok_template.py", "check_manifests.py",
     "check_npm_package.py", "check_public_template.py", "cli_contract.py", "cli_journeys.py", "desk_doctor.py",
-    "opening_bell.py", "release_bump.py", "research_dataset.py", "stop_cost.py", "test_account_read.py", "test_research_dataset.py", "test_check_grok_template.py", "test_check_manifests.py",
+    "opening_bell.py", "release_bump.py", "research_dataset.py", "standing_mandate.py", "stop_cost.py", "test_account_read.py", "test_research_dataset.py", "test_check_grok_template.py", "test_check_manifests.py",
     "test_check_npm_package.py", "test_check_public_template.py",
     "test_desk_doctor.py", "test_exchange_write_gate.py", "test_opening_bell.py", "test_order_rounding.py",
-    "test_release_bump.py",
+    "test_release_bump.py", "test_standing_mandate.py",
     "test_stop_cost.py",
 )
 SAFE_SCRIPTS = {"test": "bash scripts/check.sh", "prepack": "bash scripts/check.sh"}

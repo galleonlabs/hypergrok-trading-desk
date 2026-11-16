@@ -3,7 +3,7 @@ name: desk-execution-protocol
 description: The Execution Trader's procedure for turning an approved ticket into one Hyperliquid action and reconciling it - the pre-send checklist, order construction rules, single-send discipline, unknown-result handling and the execution report. Use before and after every send, cancel, modify, leverage change or close.
 license: MIT
 metadata:
-  version: "1.1.3"
+  version: "1.2.0"
   author: Galleon Labs
   category: desk
 ---
@@ -15,16 +15,16 @@ This is the only skill on the desk that ends with a request to Hyperliquid's `/e
 ## Inputs
 
 - The proposal file `/workspace/trading-desk/proposals/<id>.md` with a Risk Manager PASS and exact ticket fields.
-- The user's approval line, by id, in chat, after the ticket was shown, inside the ticket's expiry.
+- The user's approval line, by id, in chat, after the ticket was shown, inside the ticket's expiry; or, for an order under a valid standing mandate in Claude Code, the ticket's `authority:` and `mandate check:` lines ([Standing mandate](../../docs/STANDING_MANDATE.md)).
 - The desk computer configured per `hyperliquid-setup`: `HYPERLIQUID_NETWORK`, `HYPERLIQUID_ACCOUNT_ADDRESS`, and the API wallet key available to scripts from the environment (never printed).
 
 ## Pre-send checklist
 
 Run every item and write the result under `## execution` before sending. Any failure: do not send, name the item, hand back to the Desk Lead.
 
-1. **Ticket integrity and gate.** Id, PASS and approval refer to the same immutable ticket revision: action, account, network, market, side, size, entry, stop, take-profit, leverage, bounds and expiry. Append revisions; never overwrite the approved text. Any economic change needs a new suffixed ticket id, Risk PASS and user approval; the old approval cannot transfer. Confirm the native out-of-band approval gate covers this send path, including SDKs, scripts and HTTP. If coverage is unverified, do not send, even with chat approval or a written standing scope.
+1. **Ticket integrity and gate.** Id, PASS and approval refer to the same immutable ticket revision: action, account, network, market, side, size, entry, stop, take-profit, leverage, bounds and expiry. Append revisions; never overwrite the approved text. Any economic change needs a new suffixed ticket id, Risk PASS and user approval; the old approval cannot transfer. Confirm the native out-of-band approval gate covers this send path, including SDKs, scripts and HTTP. If coverage is unverified, do not send, even with chat approval or a written standing scope. For a mandate ticket, re-run `scripts/standing_mandate.py` for this network and account immediately before the send; require `in_force: true`, the fingerprint on the ticket's `authority:` line, and every `mandate check:` field still `ok` against live state. Anything else needs approval by id.
 2. **Network.** `HYPERLIQUID_NETWORK` equals the ticket's network. Mainnet is never assumed.
-3. **Account and wallet.** `HYPERLIQUID_ACCOUNT_ADDRESS` equals the ticket's account. Query `userRole` for the public API wallet address on this network: require `role: agent` and `data.user` equal to the ticket's account. Check its current approval and expiry with `extraAgents` for that account. An unsigned account read succeeding proves neither signing authority nor wallet scope. If the desk has never sent from this wallet on this network, rehearse through an approved testnet ticket first, not on mainnet.
+3. **Account and wallet.** `HYPERLIQUID_ACCOUNT_ADDRESS` equals the ticket's account. Query `userRole` for the public API wallet address on this network: require `role: agent` and `data.user` equal to the ticket's account. Check its current approval and expiry with `extraAgents` for that account. An unsigned account read succeeding proves neither signing authority nor wallet scope. If the desk has never sent from this wallet on this network, rehearse through an approved testnet ticket first, not on mainnet; under a valid standing mandate the user has waived that, so recommend it without blocking.
 4. **Price still valid.** Fresh mid from `allMids` is within the ticket's slippage tolerance of the ticket price. For a stop or take-profit ticket, the trigger price is on the correct side of the current mark.
 5. **Formatting.** Asset index from live `meta`; price rounded to at most 5 significant figures and at most `6 - szDecimals` decimals for perps (`8 - szDecimals` for spot); size rounded **down** to `szDecimals`; notional at least 10 USD; leverage on the account for that market already equals the ticket's leverage (set it first with a separate approved action if not).
 6. **cloid, nonce and expiry.** Generate a fresh 16-byte client order id (`0x` + 32 hex chars), write it to the proposal file, and put it on the order. One cloid per order, never reused. Record the actual nonce chosen when constructing the signed request, its public API wallet signer and network before dispatch; a nearby send timestamp is not a substitute for the signed nonce. Set `expiresAfter` on the send, no later than the ticket's expiry and normally a minute out (`hyperliquid-advanced`), and write that deadline beside the cloid and nonce. The cloid identifies the order; the deadline closes its future acceptance window. Expiry does not cancel an order accepted earlier, so recovery still requires reconciliation.
@@ -64,7 +64,7 @@ Update the risk reservation with those same facts. A resting remainder or unknow
 
 ## Cancels, modifies, leverage, closes
 
-Each is its own ticket (suffix `-B`, `-C`...) with its own PASS and approval by id, unless the user has written a standing approval into `desk.md` for that exact class of action on that network.
+Each is its own ticket (suffix `-B`, `-C`...) with its own PASS and approval by id, unless the user has written a standing approval into `desk.md` for that exact class of action on that network, or the action is inside a valid standing mandate. A mandate covers cancels, modifies, closes and setting a market's leverage to what the ticket needs; it never covers a margin-mode change the ticket does not need, a dead-man's switch or a TWAP.
 
 - **Cancel:** by cloid where you have it, else by oid from `openOrders`. Confirm removal from `openOrders`.
 - **Modify:** Hyperliquid's `modify`/`batchModify` cancels a resting limit order and places the replacement in one action (new oid, fresh cloid); the replacement must itself rest (`Alo`, or a non-executable `Gtc`). Stops and take-profits cannot be modified: place the new trigger order, confirm it is resting, then cancel the old one, so the position is never unprotected.
@@ -74,7 +74,7 @@ Each is its own ticket (suffix `-B`, `-C`...) with its own PASS and approval by 
 
 ## Rehearsal rule
 
-Any action type the desk has not performed before (first TP/SL bracket, first modify, first close, first isolated-margin trade) is rehearsed on testnet with the same ticket format before it is done on mainnet. Record the rehearsal in the journal.
+Any action type the desk has not performed before (first TP/SL bracket, first modify, first close, first isolated-margin trade) is rehearsed on testnet with the same ticket format before it is done on mainnet. Record the rehearsal in the journal. A user who writes a standing mandate has chosen not to require this for actions inside it; the desk still recommends a rehearsal and does not block on it.
 
 ## Report
 
@@ -82,9 +82,9 @@ Post the block from `agents/execution-trader.md` on the floor: sent, response, r
 
 ## Never
 
-- Never send without a PASS and approval by id for this exact ticket.
+- Never send without a PASS and either approval by id for this exact ticket or a passing mandate check.
 - Never send from a main-wallet key or with a key pasted in chat.
 - Never withdraw, deposit, bridge, transfer, send tokens, approve builder fees or touch vaults and sub-accounts.
 - Never resend on an unknown result while the original could still arrive; only an expired original and a fresh approval by id permit a replacement. Never cancel-all as a reflex.
-- Never let a routine, a watch or a schedule send. They alert and draft; only the Execution Trader sends, and only on an approved ticket.
+- Never let a routine, a watch or a schedule send outside a valid standing mandate. They alert and draft; only the Execution Trader sends, and only on an approved ticket or a mandate ticket in a runtime that supports mandates.
 - Never treat a clean `orderStatus` read as proof that an unknown result did not execute; only an expired original proves that.

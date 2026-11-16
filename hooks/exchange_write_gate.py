@@ -7,6 +7,36 @@ command that looks like a signed `/exchange` request gets an "ask" decision, so
 the user confirms it even in an auto-accepting session. Anything else gets no
 opinion and follows the normal permission flow. The hook never approves.
 
+Standing mandate. When the user has written a valid standing mandate in
+`desk.md` (docs/STANDING_MANDATE.md), the hook stays silent instead of asking,
+but only when every one of these holds; otherwise it asks as before:
+
+- `HYPERGROK_DESK_ROOT` in the hook's environment names the desk directory, and
+  `scripts/standing_mandate.py` reports the mandate in force for the network and
+  account of this write;
+- every write found is an order, cancel, modify or leverage call; transfers,
+  withdrawals, agent approvals, raw `/exchange` posts, `getattr` calls and
+  unscanned scripts always ask;
+- the scanned text names exactly one network (testnet or mainnet endpoint or
+  SDK constant, comment lines ignored) and it matches the mandate;
+- the scanned text names the mandate's account and no other 0x address;
+- every `Exchange(...)`, `HttpTransport(...)` or `WebSocketTransport(...)`
+  construction names its network explicitly, since the SDKs default to
+  mainnet, and no leverage call sets isolated margin;
+- the command names one ticket id whose proposal file's last
+  `RISK | ... | PASS|REJECT` line is PASS and which holds the line
+  `authority: standing mandate <written> sha <fingerprint>` for the mandate as
+  it reads now, so a ticket checked against an edited mandate asks.
+
+Silence is not approval: Claude Code's own permission rules still apply. The
+hook cannot check sizing, open risk, the daily loss figure or the stop; those
+stay with the Risk PASS and the desk's prose rules.
+
+It also asks before a Write or Edit to a file named `desk.md` that adds or
+changes a mandate block, and before a Bash command that names `desk.md` with a
+redirect, `tee`, in-place edit, move, copy or delete. Removing or revoking a
+mandate does not ask.
+
 It reads the command text and any script file the command names. Relative paths
 are resolved from the session working directory and from each literal ``cd`` in
 the command. Shell scripts are included. A named script that exists but is too
@@ -61,7 +91,7 @@ GETATTR_WRITE_RE = re.compile(
 # Hosts are case-insensitive, so `API.HYPERLIQUID.XYZ` is the same exchange.
 # Built from pieces so this file's own source is not itself an /exchange match.
 ENDPOINT_RE = re.compile(
-    r"\.xyz" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\+\s*[\"']" + r"/exchange[\"']",
+    r"\.xyz(?::\d+)?" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\+\s*[\"']" + r"/exchange[\"']",
     re.IGNORECASE,
 )
 _SCRIPT_EXT = r"py|ts|mts|cts|js|mjs|cjs|sh|bash|zsh"
@@ -73,6 +103,24 @@ CD_RE = re.compile(
     r"""(?:^|&&|\|\||;|\n)\s*cd\s+("[^"\n]+"|'[^'\n]+'|~?[^\s;&|]+)"""
 )
 KEY_RE = re.compile(r"0x[0-9a-fA-F]{64}")
+# Writes a standing mandate may cover. Everything else in WRITE_METHODS asks.
+MANDATE_METHODS = {name.lower() for name in (
+    "order", "bulk_orders", "market_open", "market_close", "cancel", "bulk_cancel",
+    "cancel_by_cloid", "bulk_cancel_by_cloid", "modify_order", "bulk_modify_orders_new",
+    "update_leverage", "batchModify", "cancelByCloid", "modify", "updateLeverage",
+)}
+TESTNET_RE = re.compile(r"hyperliquid-testnet\.xyz|TESTNET_API_URL|isTestnet\s*:\s*true", re.IGNORECASE)
+MAINNET_RE = re.compile(r"api\.hyperliquid\.xyz|MAINNET_API_URL|isTestnet\s*:\s*false", re.IGNORECASE)
+ADDRESS_RE = re.compile(r"(?<![0-9a-fA-F])0x[0-9a-fA-F]{40}(?![0-9a-fA-F])")
+RISK_VERDICT_RE = re.compile(r"^\s*RISK\b[^\n]*?\|\s*(PASS|REJECT)\s*(?:\||$)", re.MULTILINE)
+CONSTRUCTOR_RE = re.compile(r"\b(Exchange|HttpTransport|WebSocketTransport)\s*\(")
+LEVERAGE_CALL_RE = re.compile(r"\b(?:update_leverage|updateLeverage)\s*\(")
+TICKET_RE = re.compile(r"\b(HG-\d{8}-\d{2})(?:-[A-Z]+)?\b")
+DESK_RECORD_WRITE_RE = re.compile(
+    r">>?\s*['\"]?[^\s&|;'\"]*desk\.md|\btee\b|\bsed\s+-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i|"
+    r"\b(?:mv|cp|rm|truncate|ln|dd|install)\s|open\s*\(|write_text|writeFile|os\.replace|os\.rename"
+)
+EDIT_TOOLS = ("Write", "Edit", "MultiEdit")
 MAX_SCRIPT_BYTES = 2_000_000
 MAX_SCRIPTS = 32
 
@@ -93,6 +141,162 @@ def find_write(text):
     if ENDPOINT_RE.search(text):
         return "a POST to /exchange"
     return None
+
+
+def all_writes(text):
+    """Every write in the text: (SDK method names, any write a mandate cannot cover)."""
+    methods = {match.group(1).lower() for match in SDK_WRITE_RE.finditer(text)}
+    uncoverable = bool(GETATTR_WRITE_RE.search(text) or ENDPOINT_RE.search(text))
+    return methods, uncoverable
+
+
+def _code_lines(text):
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(("#", "//")))
+
+
+def _load_mandate_module():
+    scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import standing_mandate  # noqa: E402  (stdlib-only module shipped beside the hook)
+    return standing_mandate
+
+
+def _call_arguments(code, start):
+    """The argument text of a call whose opening parenthesis is at `start` (bounded scan)."""
+    depth = 0
+    for index in range(start, min(len(code), start + 2000)):
+        if code[index] == "(":
+            depth += 1
+        elif code[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return code[start + 1:index]
+    return None
+
+
+def construction_refusal(code):
+    """Every Exchange or transport construction must name its network explicitly.
+
+    The Python SDK's `Exchange` and the TypeScript transports default to mainnet,
+    so a script that names the testnet only for its `Info` client would
+    otherwise pass as a testnet write.
+    """
+    constructions = list(CONSTRUCTOR_RE.finditer(code))
+    if not constructions:
+        return "the scanned code does not construct its Exchange client or transport, so its network cannot be confirmed"
+    for match in constructions:
+        arguments = _call_arguments(code, match.end() - 1)
+        if arguments is None or not (TESTNET_RE.search(arguments) or MAINNET_RE.search(arguments)):
+            return f"a {match.group(1)}(...) construction does not name its network URL or isTestnet flag explicitly"
+    return None
+
+
+def margin_mode_refusal(code):
+    for match in LEVERAGE_CALL_RE.finditer(code):
+        arguments = _call_arguments(code, match.end() - 1)
+        if arguments is None or re.search(r"\bFalse\b|isCross\s*:\s*false", arguments):
+            return "a leverage call that sets isolated margin (or cannot be read) changes margin mode and needs your approval"
+    return None
+
+
+def mandate_refusal(command, texts, uncoverable, methods):
+    """None when a valid standing mandate covers this write; otherwise the reason it does not."""
+    desk_root = os.environ.get("HYPERGROK_DESK_ROOT")
+    if not desk_root:
+        return "no standing mandate checked: HYPERGROK_DESK_ROOT is not set"
+    if uncoverable:
+        return "a raw /exchange post, getattr call or unscanned script cannot be checked against a standing mandate"
+    outside = sorted(methods - MANDATE_METHODS)
+    if outside:
+        return f"{outside[0]}() is outside any standing mandate and always needs your approval"
+    try:
+        module = _load_mandate_module()
+    except Exception:  # A missing or broken validator must not silence the gate.
+        return "the standing mandate validator could not be loaded"
+    code = _code_lines("\n".join(texts))
+    networks = {name for name, pattern in (("testnet", TESTNET_RE), ("mainnet", MAINNET_RE)) if pattern.search(code)}
+    if len(networks) != 1:
+        return "the write does not name exactly one network, so it cannot be matched to a standing mandate"
+    network = networks.pop()
+    refusal = construction_refusal(code) or margin_mode_refusal(code)
+    if refusal:
+        return refusal
+    addresses = {address.lower() for address in ADDRESS_RE.findall(code)}
+    try:
+        report = module.evaluate(os.path.abspath(desk_root), network=network)
+    except Exception:
+        return "the standing mandate could not be read"
+    if not report.get("in_force"):
+        return f"no standing mandate in force for {network}: {'; '.join(report.get('reasons') or ['unknown'])}"
+    mandate = report["mandate"]
+    if addresses != {mandate["account"]}:
+        return "the write must name the mandate's account and no other address"
+    tickets = set(TICKET_RE.findall(command))
+    if len(tickets) != 1:
+        return "the command must name exactly one ticket id"
+    proposal = os.path.join(os.path.abspath(desk_root), "proposals", f"{tickets.pop()}.md")
+    try:
+        with open(proposal, encoding="utf-8") as handle:
+            record = handle.read()
+    except OSError:
+        return "the ticket's proposal file is missing"
+    authority = f"authority: standing mandate {mandate['written']} sha {mandate['fingerprint']}"
+    verdicts = RISK_VERDICT_RE.findall(record)
+    if not verdicts or verdicts[-1] != "PASS":
+        return "the ticket's latest `RISK | ... | PASS` or `REJECT` line is not a Risk PASS"
+    if authority not in record:
+        return "the ticket does not record the current standing mandate's authority line"
+    return None
+    return None
+
+
+def desk_record_change(event):
+    """Ask before a file edit adds or changes a standing mandate in desk.md."""
+    tool_input = event.get("tool_input") or {}
+    path = tool_input.get("file_path")
+    if not isinstance(path, str) or os.path.basename(path) != "desk.md":
+        return False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            before = handle.read()
+    except FileNotFoundError:
+        before = ""
+    except OSError:
+        before = None
+    tool = event.get("tool_name")
+    if tool == "Write":
+        after = tool_input.get("content") if isinstance(tool_input.get("content"), str) else ""
+    else:
+        edits = tool_input.get("edits") if tool == "MultiEdit" else [tool_input]
+        after = before
+        for edit in edits if isinstance(edits, list) else []:
+            old, new = (edit or {}).get("old_string"), (edit or {}).get("new_string")
+            if not isinstance(old, str) or not isinstance(new, str) or after is None or old not in after:
+                after = None
+                break
+            after = after.replace(old, new) if edit.get("replace_all") else after.replace(old, new, 1)
+        if after is None:
+            text = " ".join(str((edit or {}).get("new_string", "")) for edit in (edits if isinstance(edits, list) else []))
+            return "mandate" in text.lower()
+    try:
+        module = _load_mandate_module()
+    except Exception:
+        return "mandate" in after.lower()
+    signature = module.block_signature(after)
+    if signature[0] in ("none", "revoked"):
+        return False
+    return before is None or signature != module.block_signature(before)
+
+
+def ask(reason):
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": reason,
+        }
+    }
 
 
 def script_tokens(command):
@@ -154,39 +358,58 @@ def named_scripts(command, cwd):
 
 
 def decide(event):
-    if event.get("tool_name") != "Bash":
+    tool = event.get("tool_name")
+    if tool in EDIT_TOOLS:
+        if desk_record_change(event):
+            return ask(
+                "HyperGrok: this edit adds or changes the standing mandate in desk.md. "
+                "Only you write, widen or renew a mandate; approve only if you are making this change yourself."
+            )
+        return None
+    if tool != "Bash":
         return None
     command = (event.get("tool_input") or {}).get("command")
     if not isinstance(command, str) or not command:
         return None
+    if "desk.md" in command and DESK_RECORD_WRITE_RE.search(command):
+        return ask(
+            "HyperGrok: this command may change desk.md, which holds any standing mandate. "
+            "Only you write, widen or renew a mandate; approve only if this is your own change."
+        )
     found = find_write(command)
     where = "in the command"
-    if not found:
-        cwd = event.get("cwd") or os.getcwd()
-        try:
-            for token, text in named_scripts(command, cwd):
+    texts = [command]
+    unscanned = False
+    cwd = event.get("cwd") or os.getcwd()
+    try:
+        for token, text in named_scripts(command, cwd):
+            texts.append(text)
+            if not found:
                 found = find_write(text)
                 if found:
                     where = f"in {redact(token)}"
-                    break
-        except Unscanned as exc:
+    except Unscanned as exc:
+        unscanned = True
+        if not found:
             found = "an unscanned script"
             where = f"in {redact(exc.token)}"
     if not found:
         return None
+    methods, uncoverable = set(), unscanned
+    for text in texts:
+        text_methods, text_uncoverable = all_writes(text)
+        methods |= text_methods
+        uncoverable = uncoverable or text_uncoverable
+    refusal = mandate_refusal(command, texts, uncoverable, methods)
+    if refusal is None:
+        return None
     if not found.startswith(("a ", "an ")):
         found = f"{found}()"
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": (
-                f"HyperGrok: this looks like a Hyperliquid exchange write ({found} {where}). "
-                "Approve only if it is the single send for a ticket with a Risk PASS "
-                "and your approval by that ticket id."
-            ),
-        }
-    }
+    return ask(
+        f"HyperGrok: this looks like a Hyperliquid exchange write ({found} {where}). "
+        "Approve only if it is the single send for a ticket with a Risk PASS "
+        f"and your approval by that ticket id. Standing mandate: {redact(refusal)}."
+    )
 
 
 def main():

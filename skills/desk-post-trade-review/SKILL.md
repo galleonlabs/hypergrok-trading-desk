@@ -3,7 +3,7 @@ name: desk-post-trade-review
 description: The Trade Reviewer's procedure for journaling desk activity and reviewing trades from the exchange record - process graded separately from outcome, execution costs measured, one repeatable finding per review, plus the weekly desk review. Use after any send, when a trade closes, on the weekly routine, or when the user asks "how did that go".
 license: MIT
 metadata:
-  version: "1.0.2"
+  version: "1.1.0"
   author: Galleon Labs
   category: desk
 ---
@@ -28,6 +28,13 @@ The journal is the desk's memory; the review is how the desk learns. Both come f
 18:00 UTC  note                    maker entries at 10 bps depth filled within 2h on both attempts this week
 ```
 
+Under a [standing mandate](../../docs/STANDING_MANDATE.md), the approval line names the mandate instead of the user, and suspensions use a fixed form that `scripts/standing_mandate.py` reads:
+
+```
+08:15 UTC  HG-20261116-03 approval mandate 2026-11-16 sha 5cbb094fee79f518 (mandate check all ok)
+14:05 UTC  mandate suspended  mandate 2026-11-16  reason daily-loss-stop  day pnl -2.1% of start-of-day equity
+```
+
 Rules: append only; corrections are new lines with `correction:`; every line has a UTC time and an id where one exists; no opinions in the journal (those go in reviews).
 
 ## 2. Trade review
@@ -50,12 +57,12 @@ Compute:
 | Funding | sum of funding payments over the window, USD |
 | Net result | realised PnL after fees and funding, in USD and in R (R from the ticket) |
 | Protection | was a reduce-only stop resting on the exchange for the entire life of the position? gaps in minutes |
-| Lifecycle | each stage present, in order, with timestamps; approval by id; single send; reconciled |
+| Lifecycle | each stage present, in order, with timestamps; approval by id or a passing mandate check; single send; reconciled |
 | Holding time | fill to flat |
 
 Grade:
 
-- **Process:** clean / minor break / major break, with the specific stage named. A major break is any send without PASS or approval by id, any missing protection, any resend on unknown result, or any limit breached.
+- **Process:** clean / minor break / major break, with the specific stage named. A major break is any send without PASS or without approval by id or a passing mandate check, any missing protection, any resend on unknown result, or any limit breached.
 - **Outcome:** result in R and USD, stated without adjectives.
 
 Then **one thing**: a leak, a control that worked, or a break, chosen because it is repeatable. Not a list.

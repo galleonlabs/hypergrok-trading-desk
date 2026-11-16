@@ -7,7 +7,7 @@ HyperGrok turns Cursor into a Hyperliquid trading desk: seven roles and seventee
 Clone the reviewed release:
 
 ```bash
-git clone --depth 1 --branch v1.7.3 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.8.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 ```
 
 Open the `hypergrok-trading-desk` folder in Cursor and enable the plugin; `.cursor-plugin/plugin.json` points it at the skills, roles and rules. The plugin is also listed on [cursor.directory](https://cursor.directory/plugins/hypergrok).
@@ -34,7 +34,7 @@ It reads Hyperliquid's public `/info` endpoint only: price, funding, open intere
 
 ## When you want to trade
 
-Add a testnet API wallet first and practise with play money; add a mainnet one when you decide to trade real money. The desk only ever asks for a trade-only API wallet key from your own secret store, never a seed phrase or main-wallet key; see [`hyperliquid-setup`](../skills/hyperliquid-setup/SKILL.md). Every trade goes idea, evidence, Risk Manager sign-off, your approval by ticket id, one send, reconciliation, review.
+Add a testnet API wallet first and practise with play money; add a mainnet one when you decide to trade real money. The desk only ever asks for a trade-only API wallet key from your own secret store, never a seed phrase or main-wallet key; see [`hyperliquid-setup`](../skills/hyperliquid-setup/SKILL.md). Every trade goes idea, evidence, Risk Manager sign-off, your approval by ticket id, one send, reconciliation, review. A [standing mandate](STANDING_MANDATE.md) is not honoured in Cursor: HyperGrok ships no check here that reads one, so every send keeps approval by ticket id.
 
 Perpetual futures can liquidate an account. HyperGrok is documentation and instructions, not financial advice.
 

@@ -250,5 +250,31 @@ class DeskDoctorTest(unittest.TestCase):
             self.assertEqual(record.status, "PASS", record)
 
 
+    def test_workspace_reports_the_standing_mandate(self):
+        import datetime as dt
+        import standing_mandate
+        today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        block = ("## Standing mandate\n- network: testnet\n- account: 0x" + "1" * 40 + "\n- markets: all\n"
+                 "- max risk per trade: 3%\n- max total open risk: 6%\n- max leverage: 5x\n- daily loss stop: -2%\n"
+                 f"- written: {today}\n- acknowledgement: " + standing_mandate.ACKNOWLEDGEMENT.format(network="testnet") + "\n")
+        cases = (
+            ("- standing mandate: none\n", "PASS", "none"),
+            ("# Desk record\n\n" + block, "PASS", "above the default ceilings: max risk per trade"),
+            ("# Desk record\n\n" + block.replace("- max leverage: 5x\n", ""), "FAIL", "max leverage: missing"),
+            ("# Desk record\n\n" + block + "- standing mandate: revoked\n", "PASS", "revoked"),
+        )
+        for text, status, detail in cases:
+            with self.subTest(detail=detail), tempfile.TemporaryDirectory() as root:
+                for path in desk_doctor.REQUIRED_DESK_DIRS:
+                    os.makedirs(os.path.join(root, path))
+                with open(os.path.join(root, "desk.md"), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                check = next(check for check in desk_doctor.check_workspace(root) if check.name == "standing mandate")
+                self.assertEqual(check.status, status, check)
+                self.assertIn(detail, check.detail)
+                record = next(check for check in desk_doctor.check_workspace(root) if check.name == "desk record")
+                self.assertEqual(record.status, "PASS", "the mandate block must not look like key material")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ HyperGrok turns Grok Build into a Hyperliquid trading desk: seven roles and seve
 Install the reviewed release:
 
 ```bash
-grok plugin install galleonlabs/hypergrok-trading-desk@v1.7.3 --trust
+grok plugin install galleonlabs/hypergrok-trading-desk@v1.8.0 --trust
 ```
 
 Or register this repository's Grok marketplace, which pins the same release, and install by name:
@@ -33,14 +33,14 @@ Grok Build reports the skills and agents directories; loading `rules/` is not ve
 Ask for a market brief, for example "Brief me on ETH". The reads use Hyperliquid's public `/info` endpoint, with no wallet or account. The same read works from a terminal:
 
 ```bash
-git clone --depth 1 --branch v1.7.3 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.8.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
 
 ## When you want to trade
 
-Add a testnet API wallet first and practise with play money; add a mainnet one when you decide to trade real money. The desk only ever asks for a trade-only API wallet key from your own secret store, never a seed phrase or main-wallet key; see [`hyperliquid-setup`](../skills/hyperliquid-setup/SKILL.md). Every trade goes idea, evidence, Risk Manager sign-off, your approval by ticket id, one send, reconciliation, review.
+Add a testnet API wallet first and practise with play money; add a mainnet one when you decide to trade real money. The desk only ever asks for a trade-only API wallet key from your own secret store, never a seed phrase or main-wallet key; see [`hyperliquid-setup`](../skills/hyperliquid-setup/SKILL.md). Every trade goes idea, evidence, Risk Manager sign-off, your approval by ticket id, one send, reconciliation, review. A [standing mandate](STANDING_MANDATE.md) is not honoured in Grok Build: HyperGrok ships no check here that reads one, so every send keeps approval by ticket id.
 
 Perpetual futures can liquidate an account. HyperGrok is documentation and instructions, not financial advice.
 

@@ -1,6 +1,6 @@
 # Hyperliquid trading desk for Claude Code
 
-HyperGrok turns Claude Code into a Hyperliquid trading desk: seven roles as subagents and seventeen agent skills for research, risk, execution and review. It is open source (MIT), starts read-only on public market data, and sends an order only for a ticket you approve by id with a trade-only API wallet you provide.
+HyperGrok turns Claude Code into a Hyperliquid trading desk: seven roles as subagents and seventeen agent skills for research, risk, execution and review. It is open source (MIT), starts read-only on public market data, and sends an order only for a ticket you approve by id, or one inside a [standing mandate](STANDING_MANDATE.md) you write yourself, with a trade-only API wallet you provide.
 
 ## Install
 
@@ -23,20 +23,21 @@ Then start with the desk's operating model:
 + **Seven roles as subagents** from `agents/`: Desk Lead, Market Analyst, Research Analyst, Strategist, Risk Manager, Execution Trader and Trade Reviewer. Only the Execution Trader writes to the exchange.
 + **The desk process** from `desk-operating-model`: load it before delegating work. The repository's `rules/` directory is declared for Cursor; Claude Code does not automatically load it as a plugin component.
 + **An exchange-write hook.** Claude Code asks for confirmation when a Bash command or a named script matches a Hyperliquid write. The hook does not follow imports or cover every possible route, and it cannot bind a send to a ticket. It supplements the ticket process and verified native approval coverage.
++ **Optional standing mandate.** Claude Code is the one runtime where HyperGrok honours a [standing mandate](STANDING_MANDATE.md): a block you write yourself in `desk.md` with your network, account, markets and limits. With `HYPERGROK_DESK_ROOT` set and the mandate valid, the hook stays silent for order, cancel, modify and leverage writes it can match to the mandate and to a ticket with a Risk PASS. It keeps asking for everything else. A silent hook does not approve anything: your Claude Code permission rules still decide.
 
 ## First run, no keys
 
 Ask the desk for a market brief, for example "Brief me on ETH". The reads use Hyperliquid's public `/info` endpoint, with no wallet or account. The same read works from a terminal:
 
 ```bash
-git clone --depth 1 --branch v1.7.3 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.8.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
 
 ## When you want to trade
 
-Add a testnet API wallet first and practise with play money; add a mainnet one when you decide to trade real money. The desk only ever asks for a trade-only API wallet key from your own secret store, never a seed phrase or main-wallet key; see [`hyperliquid-setup`](../skills/hyperliquid-setup/SKILL.md). Every trade goes idea, evidence, Risk Manager sign-off, your approval by ticket id, one send, reconciliation, review.
+Add a testnet API wallet first and practise with play money; add a mainnet one when you decide to trade real money. The desk only ever asks for a trade-only API wallet key from your own secret store, never a seed phrase or main-wallet key; see [`hyperliquid-setup`](../skills/hyperliquid-setup/SKILL.md). Every trade goes idea, evidence, Risk Manager sign-off, your approval by ticket id, one send, reconciliation, review. If you write a standing mandate, the approval step becomes the mandate check, and runs nobody is watching (`claude -p` from your own scheduler, or `/loop`) may send inside it. Read the [risk statement and setup](STANDING_MANDATE.md) first.
 
 Perpetual futures can liquidate an account. HyperGrok is documentation and instructions, not financial advice.
 

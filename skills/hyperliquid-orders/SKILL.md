@@ -3,7 +3,7 @@ name: hyperliquid-orders
 description: Place, cancel and modify Hyperliquid orders correctly from the desk computer - limit and IOC (market-style) orders, take-profit and stop-loss trigger orders with grouping, client order ids, reduce-only, batch actions, price and size rounding, and how to read every response status. Write path - Execution Trader only, on an approved ticket. Use for any order action and for reconciling by cloid.
 license: MIT
 metadata:
-  version: "1.1.3"
+  version: "1.2.0"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -11,7 +11,7 @@ metadata:
 
 # Hyperliquid orders
 
-Everything here ends in a signed request to `/exchange`. On this desk only the Execution Trader runs it, only on a ticket with a Risk PASS and the user's approval by id, and only once per approval (`desk-execution-protocol`). Reads used for reconciliation are in `hyperliquid-account`.
+Everything here ends in a signed request to `/exchange`. On this desk only the Execution Trader runs it, only on a ticket with a Risk PASS and the user's approval by id, or a passing check against a valid [standing mandate](../../docs/STANDING_MANDATE.md) where the runtime honours one, and only once per approval or check (`desk-execution-protocol`). Reads used for reconciliation are in `hyperliquid-account`.
 
 ## Concepts you must get right
 

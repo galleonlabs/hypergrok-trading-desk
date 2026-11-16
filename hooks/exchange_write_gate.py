@@ -20,9 +20,13 @@ but only when every one of these holds; otherwise it asks as before:
 - the scanned text names exactly one network (testnet or mainnet endpoint or
   SDK constant, comment lines ignored) and it matches the mandate;
 - the scanned text names the mandate's account and no other 0x address;
-- the command names one ticket id whose proposal file records a PASS and the
-  line `authority: standing mandate <written> sha <fingerprint>` for the
-  mandate as it reads now, so a ticket checked against an edited mandate asks.
+- every `Exchange(...)`, `HttpTransport(...)` or `WebSocketTransport(...)`
+  construction names its network explicitly, since the SDKs default to
+  mainnet, and no leverage call sets isolated margin;
+- the command names one ticket id whose proposal file's last
+  `RISK | ... | PASS|REJECT` line is PASS and which holds the line
+  `authority: standing mandate <written> sha <fingerprint>` for the mandate as
+  it reads now, so a ticket checked against an edited mandate asks.
 
 Silence is not approval: Claude Code's own permission rules still apply. The
 hook cannot check sizing, open risk, the daily loss figure or the stop; those
@@ -87,7 +91,7 @@ GETATTR_WRITE_RE = re.compile(
 # Hosts are case-insensitive, so `API.HYPERLIQUID.XYZ` is the same exchange.
 # Built from pieces so this file's own source is not itself an /exchange match.
 ENDPOINT_RE = re.compile(
-    r"\.xyz" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\+\s*[\"']" + r"/exchange[\"']",
+    r"\.xyz(?::\d+)?" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\+\s*[\"']" + r"/exchange[\"']",
     re.IGNORECASE,
 )
 _SCRIPT_EXT = r"py|ts|mts|cts|js|mjs|cjs|sh|bash|zsh"
@@ -108,6 +112,9 @@ MANDATE_METHODS = {name.lower() for name in (
 TESTNET_RE = re.compile(r"hyperliquid-testnet\.xyz|TESTNET_API_URL|isTestnet\s*:\s*true", re.IGNORECASE)
 MAINNET_RE = re.compile(r"api\.hyperliquid\.xyz|MAINNET_API_URL|isTestnet\s*:\s*false", re.IGNORECASE)
 ADDRESS_RE = re.compile(r"(?<![0-9a-fA-F])0x[0-9a-fA-F]{40}(?![0-9a-fA-F])")
+RISK_VERDICT_RE = re.compile(r"^\s*RISK\b[^\n]*?\|\s*(PASS|REJECT)\s*(?:\||$)", re.MULTILINE)
+CONSTRUCTOR_RE = re.compile(r"\b(Exchange|HttpTransport|WebSocketTransport)\s*\(")
+LEVERAGE_CALL_RE = re.compile(r"\b(?:update_leverage|updateLeverage)\s*\(")
 TICKET_RE = re.compile(r"\b(HG-\d{8}-\d{2})(?:-[A-Z]+)?\b")
 DESK_RECORD_WRITE_RE = re.compile(
     r">>?\s*['\"]?[^\s&|;'\"]*desk\.md|\btee\b|\bsed\s+-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i|"
@@ -155,6 +162,44 @@ def _load_mandate_module():
     return standing_mandate
 
 
+def _call_arguments(code, start):
+    """The argument text of a call whose opening parenthesis is at `start` (bounded scan)."""
+    depth = 0
+    for index in range(start, min(len(code), start + 2000)):
+        if code[index] == "(":
+            depth += 1
+        elif code[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return code[start + 1:index]
+    return None
+
+
+def construction_refusal(code):
+    """Every Exchange or transport construction must name its network explicitly.
+
+    The Python SDK's `Exchange` and the TypeScript transports default to mainnet,
+    so a script that names the testnet only for its `Info` client would
+    otherwise pass as a testnet write.
+    """
+    constructions = list(CONSTRUCTOR_RE.finditer(code))
+    if not constructions:
+        return "the scanned code does not construct its Exchange client or transport, so its network cannot be confirmed"
+    for match in constructions:
+        arguments = _call_arguments(code, match.end() - 1)
+        if arguments is None or not (TESTNET_RE.search(arguments) or MAINNET_RE.search(arguments)):
+            return f"a {match.group(1)}(...) construction does not name its network URL or isTestnet flag explicitly"
+    return None
+
+
+def margin_mode_refusal(code):
+    for match in LEVERAGE_CALL_RE.finditer(code):
+        arguments = _call_arguments(code, match.end() - 1)
+        if arguments is None or re.search(r"\bFalse\b|isCross\s*:\s*false", arguments):
+            return "a leverage call that sets isolated margin (or cannot be read) changes margin mode and needs your approval"
+    return None
+
+
 def mandate_refusal(command, texts, uncoverable, methods):
     """None when a valid standing mandate covers this write; otherwise the reason it does not."""
     desk_root = os.environ.get("HYPERGROK_DESK_ROOT")
@@ -174,6 +219,9 @@ def mandate_refusal(command, texts, uncoverable, methods):
     if len(networks) != 1:
         return "the write does not name exactly one network, so it cannot be matched to a standing mandate"
     network = networks.pop()
+    refusal = construction_refusal(code) or margin_mode_refusal(code)
+    if refusal:
+        return refusal
     addresses = {address.lower() for address in ADDRESS_RE.findall(code)}
     try:
         report = module.evaluate(os.path.abspath(desk_root), network=network)
@@ -194,8 +242,12 @@ def mandate_refusal(command, texts, uncoverable, methods):
     except OSError:
         return "the ticket's proposal file is missing"
     authority = f"authority: standing mandate {mandate['written']} sha {mandate['fingerprint']}"
-    if authority not in record or "PASS" not in record:
-        return "the ticket does not record a Risk PASS and the current standing mandate's authority line"
+    verdicts = RISK_VERDICT_RE.findall(record)
+    if not verdicts or verdicts[-1] != "PASS":
+        return "the ticket's latest `RISK | ... | PASS` or `REJECT` line is not a Risk PASS"
+    if authority not in record:
+        return "the ticket does not record the current standing mandate's authority line"
+    return None
     return None
 
 

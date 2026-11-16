@@ -67,6 +67,7 @@ class ExchangeWriteGateTest(unittest.TestCase):
         for command in (
             "curl -s -X POST https://api.hyperliquid.xyz/exchange -d @signed.json",
             "curl -s -X POST https://api.hyperliquid-testnet.xyz/exchange -d @signed.json",
+            "curl -s -X POST https://api.hyperliquid.xyz:443/exchange -d @signed.json",
             'python3 -c \'requests.post(f"{BASE}/exchange", json=payload)\'',
             "node -e 'fetch(BASE + \"/exchange\", opts)'",
         ):
@@ -228,9 +229,9 @@ class StandingMandateGateTest(unittest.TestCase):
         with open(os.path.join(self.desk, "desk.md"), "w", encoding="utf-8") as handle:
             handle.write(text)
 
-    def ticket(self, ticket="HG-20261116-01", authority=True, passed=True):
+    def ticket(self, ticket="HG-20261116-01", authority=True, passed=True, risk=None):
         report = standing_mandate.evaluate(self.desk)
-        lines = [f"# {ticket}", "## risk", "RISK | PASS" if passed else "RISK | REJECT"]
+        lines = [f"# {ticket}", "## risk"] + (risk if risk is not None else [f"RISK | {ticket} | {'PASS' if passed else 'REJECT'} | 2026-11-16 08:00 UTC"])
         if authority and report["mandate"]:
             lines.append(f"authority: standing mandate {report['mandate']['written']} sha {report['mandate']['fingerprint']}")
         with open(os.path.join(self.desk, "proposals", f"{ticket}.md"), "w", encoding="utf-8") as handle:
@@ -370,6 +371,43 @@ class StandingMandateGateTest(unittest.TestCase):
         for command in ("cat desk.md", "grep -n mandate trading-desk/desk.md", "python3 scripts/standing_mandate.py --desk-root trading-desk"):
             with self.subTest(command=command):
                 self.assertIsNone(gate.decide(bash(command)))
+
+
+    def test_risk_verdict_is_parsed_not_substring_matched(self):
+        self.valid_testnet()
+        body = SEND.format(url="TESTNET_API_URL", account=ACCOUNT)
+        for risk in (["RISK | HG-20261116-01 | REJECT | 08:00 UTC", "note: BYPASS attempted; PASSWORD not stored"],
+                     ["RISK | HG-20261116-01 | PASS | 08:00 UTC", "RISK | HG-20261116-01 | REJECT | 08:05 UTC (revision B)"],
+                     ["risk sign-off: PASS 08:00 UTC"]):
+            with self.subTest(risk=risk[-1]):
+                self.ticket(risk=risk)
+                self.assertIn("Risk PASS", self.reason(self.run_send(body)))
+        self.ticket(risk=["RISK | HG-20261116-01 | REJECT | 08:00 UTC", "RISK | HG-20261116-01 | PASS | 08:10 UTC"])
+        self.assertIsNone(self.run_send(body))
+
+    def test_exchange_must_name_its_network_even_when_info_does(self):
+        self.valid_testnet()
+        default = ("info = Info(constants.TESTNET_API_URL, skip_ws=True)\n"
+                   "exchange = Exchange(wallet, account_address=\"%s\")\nexchange.order(\"ETH\", True, 1, 2, t)\n" % ACCOUNT)
+        self.assertIn("does not name its network", self.reason(self.run_send(default)))
+        no_client = "info = Info(constants.TESTNET_API_URL)\nACCOUNT = \"%s\"\nexchange.order(\"ETH\", True, 1, 2, t)\n" % ACCOUNT
+        self.assertIn("does not construct", self.reason(self.run_send(no_client)))
+        typescript = ("const transport = new HttpTransport();\nconst info = { isTestnet: true };\n"
+                      "const exchange = new ExchangeClient({ wallet, transport });\nconst user = \"%s\";\n"
+                      "await exchange.order({ orders, grouping: 'na' });\n" % ACCOUNT)
+        self.assertIn("HttpTransport", self.reason(self.run_send(typescript)))
+        explicit = typescript.replace("new HttpTransport()", "new HttpTransport({ isTestnet: true })")
+        self.assertIsNone(self.run_send(explicit))
+
+    def test_isolated_margin_leverage_and_port_endpoint_ask(self):
+        self.valid_testnet()
+        prefix = "exchange = Exchange(wallet, constants.TESTNET_API_URL, account_address=\"%s\")\n" % ACCOUNT
+        for call in ('exchange.update_leverage(3, "ETH", is_cross=False)', 'exchange.update_leverage(3, "ETH", False)',
+                     "await exchange.updateLeverage({ asset: 1, isCross: false, leverage: 3 })"):
+            with self.subTest(call=call):
+                self.assertIn("margin mode", self.reason(self.run_send(prefix + call + "\n")))
+        port = prefix + "requests.post(\"https://api.hyperliquid-testnet.xyz:443/exchange\", json=signed)\n"
+        self.assertIn("cannot be checked", self.reason(self.run_send(port)))
 
 
 if __name__ == "__main__":

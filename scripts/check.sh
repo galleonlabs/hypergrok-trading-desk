@@ -129,6 +129,7 @@ python3 scripts/test_check_public_template.py
 python3 scripts/test_stop_cost.py
 python3 scripts/test_account_read.py
 python3 scripts/test_exchange_write_gate.py
+python3 scripts/test_standing_mandate.py
 
 # Verify the published arithmetic without loading a wallet or SDK.
 python3 scripts/test_order_rounding.py

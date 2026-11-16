@@ -117,6 +117,8 @@ The native rule enforces approval outside Bot-authored messages. The phrase in c
 
 Then ask the user one question: **may the desk place a protective stop for a position that has none, without waiting for approval?** It is reduce-only, so it can only reduce exposure, and the alternative is a naked position waiting on someone to read a message. If yes, record it in `desk.md` under `standing approvals` with the date. If no, record that too, along with how long the desk should chase them before telling them to fix it in the Hyperliquid app themselves.
 
+Do not offer, draft or write a standing mandate during setup. Record `standing mandate: none`. A mandate is a block only the user writes, and Grok Bot does not honour one: its native gate cannot tell a mandate send from any other, so every send here keeps approval by id. If the user asks, point to [Standing mandate](docs/STANDING_MANDATE.md).
+
 ## 8. Write the desk record
 
 Ask the user two questions, then write `/workspace/trading-desk/desk.md`:
@@ -140,6 +142,7 @@ Record only verified Bot, group and member IDs as observed; mark uncreated, manu
 - trading floor id and member ids: <verified native group and six Bot IDs>
 - risk limits: not yet written  (Risk Manager runs the interview: skills/desk-risk-limits)
 - standing approvals: none          # recommended: protective stops (reduce-only), any network
+- standing mandate: none            # optional; only you write one (docs/STANDING_MANDATE.md); not honoured in Grok Bot
 - exchange approval gate: unverified # evidence of native coverage required before provisioning a key
 - unprotected position deadline: 15m  # chase this long, then tell the user to fix it in the app
 - status: research-only until the native gate is verified, limits exist and an API wallet is provisioned
@@ -184,10 +187,10 @@ Only after the required native and role checks pass, say: "The desk is ready. As
 
 Use the guide for your runtime:
 
-- [Claude Code](docs/hyperliquid-claude-code.md): plugin skills, subagents and the exchange-write confirmation hook. Invoke `/hypergrok:desk-operating-model` explicitly; `rules/` is not a Claude Code plugin component.
+- [Claude Code](docs/hyperliquid-claude-code.md): plugin skills, subagents and the exchange-write confirmation hook, which also checks an optional [standing mandate](docs/STANDING_MANDATE.md). Invoke `/hypergrok:desk-operating-model` explicitly; `rules/` is not a Claude Code plugin component.
 - [Cursor](docs/hyperliquid-cursor.md): skills, role profiles and the declared desk rules.
 - [Grok Build](docs/hyperliquid-grok-build.md): skills and agent directories; rule loading remains unverified.
 - [Codex](docs/hyperliquid-codex.md): skills, with role prompts run as labelled passes.
 - [Gemini CLI](docs/hyperliquid-gemini-cli.md): skills and `GEMINI.md`, with role prompts run as labelled passes.
 
-Grok Bot's cloud paths, native Bot creation and Trading Floor steps do not describe these runtimes. Use their supported workspace and role mechanisms, and report what actually loaded. Preserve the desk's evidence standard, Risk PASS, exact ticket approval, expiry, single writer, single send and reconciliation. Verify native approval coverage for the actual SDK, script and HTTP routes before provisioning a key; a command-matching hook alone is insufficient. If coverage is unavailable, remain in research mode.
+Grok Bot's cloud paths, native Bot creation and Trading Floor steps do not describe these runtimes. Use their supported workspace and role mechanisms, and report what actually loaded. Preserve the desk's evidence standard, Risk PASS, exact ticket approval (or, in Claude Code only, a valid standing mandate the user wrote), expiry, single writer, single send and reconciliation. Verify native approval coverage for the actual SDK, script and HTTP routes before provisioning a key; a command-matching hook alone is insufficient. If coverage is unavailable, remain in research mode.

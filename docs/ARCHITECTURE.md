@@ -41,7 +41,7 @@ Working files live under `/workspace/trading-desk/`; chat supplies context, whil
 
 | File | What it is |
 | --- | --- |
-| `desk.md` | the desk record: network, account, engagement level, Bots, chats, standing approvals |
+| `desk.md` | the desk record: network, account, engagement level, Bots, chats, standing approvals, and any [standing mandate](STANDING_MANDATE.md) you wrote |
 | `risk-limits.md` | your limits, versioned; only you change it |
 | `proposals/HG-*.md` | one file per trade idea, appended through its life: ticket, sign-off, approval, send, reconciliation, review |
 | `journal/*.md` | the desk diary, append-only |
@@ -64,7 +64,7 @@ Data completeness, statistical evidence, Risk PASS and a user's exact ticket app
 
 **Reads.** Six Bots use `POST /info` and public web pages without signing keys.
 
-**Writes.** One Bot uses `POST /exchange` with the API wallet, only when a proposal carries a Risk PASS, your approval by id, and a passing pre-send checklist. One approval, one send. Every send is bounded by `expiresAfter`, so a lost response is reconciled by client order id and a replacement waits until the original is provably incapable of arriving. A clean read is not proof; an expired original is.
+**Writes.** One Bot uses `POST /exchange` with the API wallet, only when a proposal carries a Risk PASS, your approval by id, and a passing pre-send checklist. The one alternative to approval by id is a [standing mandate](STANDING_MANDATE.md) you write yourself in `desk.md`, honoured only in Claude Code, where the exchange-write hook checks it. A mandate ticket still needs its Risk PASS, an exchange-resting stop and a journal entry, and a mandate never covers transfers, withdrawals, bridging or wallet approvals. One approval, one send. Every send is bounded by `expiresAfter`, so a lost response is reconciled by client order id and a replacement waits until the original is provably incapable of arriving. A clean read is not proof; an expired original is.
 
 **Key.** The API wallet can trade and cannot withdraw. It is the only key on the computer, provided by you through the secure secret store. Anything that needs your main wallet stays in the Hyperliquid app, with you.
 
@@ -90,4 +90,4 @@ Each runtime guide contains installation commands and observed support limits:
 
 The Grok and Codex marketplace entries pin the reviewed repository tag. Claude Code resolves this repository through its own marketplace index. Gemini CLI installs the latest GitHub release; `GEMINI.md` repeats the desk rule's approval paragraph, which the manifest check compares for drift.
 
-Only Claude Code loads `hooks/exchange-write-gate.json`. Its `PreToolUse` hook asks for confirmation when a Bash command or a named script matches an SDK write method or raw `/exchange` POST, including a shell script and a path after a literal `cd`. Host case does not hide the exchange URL. A named script that is too large or unreadable to scan also asks. A command that names more than 32 scripts asks without reading them. The prompt redacts a 32-byte hex key. The hook never returns `allow`, does not follow imports, expand globs or variable `cd` targets, and cannot bind a request to the approved ticket. It is a confirmation backstop; each runtime still needs verified native approval coverage before an API wallet is provisioned.
+Only Claude Code loads `hooks/exchange-write-gate.json`. Its `PreToolUse` hook asks for confirmation when a Bash command or a named script matches an SDK write method or raw `/exchange` POST, including a shell script and a path after a literal `cd`. Host case does not hide the exchange URL. A named script that is too large or unreadable to scan also asks. A command that names more than 32 scripts asks without reading them. The prompt redacts a 32-byte hex key. The hook never returns `allow`, does not follow imports, expand globs or variable `cd` targets, and cannot bind a request to the approved ticket. With `HYPERGROK_DESK_ROOT` set and a valid [standing mandate](STANDING_MANDATE.md), it stays silent instead of asking for order, cancel, modify and leverage writes that name the mandate's network and account and a ticket whose proposal records a PASS and the mandate's fingerprint. Claude Code's own permission rules then decide. It also asks before an edit that adds or changes a mandate in `desk.md`. It is a confirmation backstop; each runtime still needs verified native approval coverage before an API wallet is provisioned.

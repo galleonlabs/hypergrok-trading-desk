@@ -58,7 +58,7 @@ FIELDS = (
 )
 FIELD_NAMES = tuple(name for name, _required in FIELDS)
 
-# The 1.7.3 desk ceilings. They stay the defaults without a mandate; a mandate
+# The desk ceilings from desk-risk-limits section 0. They stay the defaults without a mandate; a mandate
 # may set its own values above them, and the report says so.
 DEFAULTS = {
     "max risk per trade": (2.0, "2% of equity"),

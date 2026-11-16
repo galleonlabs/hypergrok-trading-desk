@@ -144,7 +144,7 @@ Neither is required to use HyperGrok. Installing instructions does not connect a
 
 ## Trading controls
 
-- **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one.
+- **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one. In Claude Code you can opt in to a [standing mandate](docs/STANDING_MANDATE.md) you write yourself, with your own markets and limits; orders inside it go out without asking, still with a Risk PASS, a resting stop and a journal entry.
 - **A trade-only API wallet**, provisioned through Grok Bot's secure secret store, is the only key the desk ever holds. It can trade; it cannot withdraw.
 - **Sized on a stressed stop.** The desk includes assumed adverse stop fills and taker fees on both legs when sizing. Actual losses can exceed that assumption. [See what a stop costs](docs/STOP_COST.md).
 - **Ceilings you cannot trade through.** Your limits file may only tighten the desk's own caps, never loosen them.
@@ -166,7 +166,7 @@ Choose the guide for your runtime. Each uses the same skills and ticket process;
 | Codex | [Install from the Codex marketplace](docs/hyperliquid-codex.md) | Skills, with the seven roles run as labelled passes |
 | Gemini CLI | [Install the extension](docs/hyperliquid-gemini-cli.md) | Skills and `GEMINI.md`, with roles run as labelled passes |
 
-The Claude Code hook asks for confirmation when a Bash command or a named script looks like an exchange write. It cannot bind a request to a ticket or inspect every imported path. Every runtime still needs verified native approval coverage before an API wallet is provisioned. The guides distinguish manifest support from observed native installation.
+The Claude Code hook asks for confirmation when a Bash command or a named script looks like an exchange write, unless a valid [standing mandate](docs/STANDING_MANDATE.md) covers it. It cannot inspect every imported path or check sizing. Every runtime still needs verified native approval coverage before an API wallet is provisioned. The guides distinguish manifest support from observed native installation.
 
 The same pack installs as a skill:
 
@@ -224,4 +224,4 @@ assets/      the mascot, logo, README graphics and their generator
 
 See [reuse and attribution](ATTRIBUTION.md) for a ready-to-copy credit line. If HyperGrok Trading Desk helps your work, [a star on the original repository](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and entirely optional.
 
-HyperGrok has no token and will not launch one. [Read the FAQ](docs/FAQ.md#token). It also has no `hypergrok` command-line binary, sends nothing to the exchange without a Risk PASS and your approval, and makes no profit claim; posts showing otherwise are not from this project. [What HyperGrok is not](docs/FAQ.md#what-it-is-not).
+HyperGrok has no token and will not launch one. [Read the FAQ](docs/FAQ.md#token). It also has no `hypergrok` command-line binary, sends nothing to the exchange without a Risk PASS and your approval or a standing mandate you wrote yourself, and makes no profit claim; posts showing otherwise are not from this project. [What HyperGrok is not](docs/FAQ.md#what-it-is-not).

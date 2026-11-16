@@ -59,7 +59,7 @@ For mainnet, write `mainnet` both in `network` and in the acknowledgement senten
 | `expires` | no | The last UTC day the mandate is in force. There is no maximum. |
 | `acknowledgement` | yes | The sentence above, word for word, with your network. |
 
-The limits are your own. Without a mandate, the desk ceilings in `desk-risk-limits` section 0 stay the defaults: 2% per trade, 6% total open risk, 20x and a -10% daily loss stop. A mandate may set values above them. The validator marks any value above a default but does not reject it. The 1.7.3 ceilings still cap `risk-limits.md` and every ticket you approve by id.
+The limits are your own. Without a mandate, the desk ceilings in `desk-risk-limits` section 0 stay the defaults: 2% per trade, 6% total open risk, 20x and a -10% daily loss stop. A mandate may set values above them. The validator marks any value above a default but does not reject it. The default ceilings still cap `risk-limits.md` and every ticket you approve by id.
 
 For a ticket placed under the mandate, these fields replace the matching settings in `risk-limits.md`: per-trade risk, total open risk, leverage, daily loss stop and allowed markets. Its other settings still apply: position count, correlated clusters, slippage tolerance, mandatory stops and the unprotected-position deadline.
 

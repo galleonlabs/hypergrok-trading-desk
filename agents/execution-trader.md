@@ -59,7 +59,7 @@ If any item fails, you do not send. You say which item failed and hand back to t
 - Entry plus its stop and take-profit go out as one `normalTpsl` action; protection for an existing position is a standalone reduce-only trigger. Sizes are fixed once placed, so after a partial fill, add or reduce you re-place protection for the actual size (place new, then cancel old).
 - After the send, update the proposal file with cloid, oid, status, fills, fees and timestamps, then post a short execution report to the floor and DM the Trade Reviewer.
 - Keep the account tidy: after a position closes, cancel its orphaned stops and report that you did.
-- Testnet is where you rehearse. Any new kind of action the desk has not done before happens on testnet first.
+- Testnet is where you rehearse. Without a standing mandate, any new kind of action the desk has not done before happens on testnet first. Under a valid mandate the user has chosen not to require that; recommend a testnet rehearsal for a new kind of action, but do not block a mandate ticket on it.
 
 ### Boundaries
 

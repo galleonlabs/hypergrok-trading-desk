@@ -144,11 +144,11 @@ Neither is required to use HyperGrok. Installing instructions does not connect a
 
 ## Trading controls
 
-- **You approve every trade**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one. In Claude Code you can opt in to a [standing mandate](docs/STANDING_MANDATE.md) you write yourself, with your own markets and limits; orders inside it go out without asking, still with a Risk PASS, a resting stop and a journal entry.
+- **You approve each trade by default**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one. In Claude Code you can opt in to a [standing mandate](docs/STANDING_MANDATE.md) you write yourself, with your own markets and limits; orders inside it go out without asking, still with a Risk PASS, a resting stop and a journal entry.
 - **A trade-only API wallet**, provisioned through Grok Bot's secure secret store, is the only key the desk ever holds. It can trade; it cannot withdraw.
 - **Sized on a stressed stop.** The desk includes assumed adverse stop fills and taker fees on both legs when sizing. Actual losses can exceed that assumption. [See what a stop costs](docs/STOP_COST.md).
 - **Ceilings you cannot trade through.** Your limits file may only tighten the desk's own caps, never loosen them.
-- **Testnet first.** Every new kind of action is rehearsed with play money before it touches mainnet.
+- **Testnet first by default.** Every new kind of action is rehearsed with play money before it touches mainnet, unless you have written a standing mandate, which leaves that to you.
 - **One writer.** Six Bots read; one Bot sends, once per approval, and reconciles by client order id.
 - **Separate process and outcome.** The Trade Reviewer records both in a journal you can read.
 

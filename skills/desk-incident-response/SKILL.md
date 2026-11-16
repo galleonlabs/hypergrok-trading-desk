@@ -3,7 +3,7 @@ name: desk-incident-response
 description: What the desk does when something goes wrong on Hyperliquid - unknown send results, unexpected fills or positions, unprotected positions, stuck or orphaned orders, API outages, rate limiting, and suspected API wallet compromise. Contain first, reconcile from the exchange record, act only through approved tickets, then review. Use the moment anything does not match the ticket.
 license: MIT
 metadata:
-  version: "1.1.2"
+  version: "1.2.0"
   author: Galleon Labs
   category: desk
 ---
@@ -50,7 +50,7 @@ The Desk Lead confirms an owner (usually the Execution Trader for order/position
 
 1. Risk Manager flags it; the Desk Lead treats it as priority.
 2. Protective stop ticket (trigger, reduce-only, correct side, sized to the position read live) through Risk PASS and user approval. This is also the path after any partial fill of an entry that carried `normalTpsl` children.
-3. If the user has pre-authorised protective stops in `desk.md`, the Execution Trader places it under that standing approval and journals it. This is the one standing approval the desk actively recommends the user grant at setup, on every network, because it can only ever reduce risk.
+3. If the user has pre-authorised protective stops in `desk.md`, or a valid standing mandate covers this account and network, the Execution Trader places it under that authority and journals it. Under a mandate this is an alert to the user, not a suspension of the mandate. This is the one standing approval the desk actively recommends the user grant at setup, on every network, because it can only ever reduce risk.
 4. Without that pre-authorisation the desk cannot act, and an unprotected position does not become safe while it waits. Do not alert indefinitely: state the exposure and the distance to liquidation in the first alert, escalate on a deadline the user set in `desk.md` (fifteen minutes is a reasonable default), and when that passes, tell the user plainly that the fastest fix is theirs - close or protect the position in the Hyperliquid app - rather than continuing to ping a channel nobody is reading.
 
 ### E. Orphaned or stuck orders
@@ -79,12 +79,16 @@ Remember the shared computer: every Bot could read the key's environment; that i
 
 ### H. Daily loss stop hit
 
-Not an incident, but handled like one: Risk Manager posts it, `desk.md` gets `status: no-new-risk`, protective and exit tickets continue, new risk waits for the user's written reset.
+Not an incident, but handled like one: Risk Manager posts it, `desk.md` gets `status: no-new-risk`, protective and exit tickets continue, new risk waits for the user's written reset. A standing mandate's own daily loss stop suspends the mandate for the rest of the UTC day instead: the Trade Reviewer journals `mandate suspended  mandate <written>  reason daily-loss-stop`, the user is alerted, and new sends need approval by id until 00:00 UTC.
+
+### I. Under a standing mandate
+
+A rejected order, stale or unreadable data, or a position without a resting stop does not suspend a [standing mandate](../../docs/STANDING_MANDATE.md). Alert the user and handle the affected ticket with the playbooks above: a rejection voids its ticket, stale data REJECTs it for `missing input`, and a missing stop gets protection at priority. An unknown send result is never resent, whatever the mandate allows. Only the mandate's daily loss stop, its expiry, deleting the block or `standing mandate: revoked` end or suspend it.
 
 ## Containment rules
 
 - Contain with the smallest reversible action. Reduce, don't flip. Cancel one, not all, unless the user has asked for a dead-man's switch and its condition has occurred.
-- Every containment action is still a ticket with approval by id (or a pre-written standing approval in `desk.md`).
+- Every containment action is still a ticket with approval by id (or a pre-written standing approval in `desk.md`, or a valid standing mandate when the action is inside it).
 - Never withdraw, transfer or bridge as an incident response.
 - Never resend to "make sure".
 

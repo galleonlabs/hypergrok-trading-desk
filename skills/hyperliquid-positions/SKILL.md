@@ -1,9 +1,9 @@
 ---
 name: hyperliquid-positions
-description: Manage Hyperliquid perp positions and margin from the desk computer - read positions and margin, set leverage and cross/isolated mode, add isolated margin, understand margin tiers and liquidation price, close a position with a reduce-only IOC, and clean up orphaned orders. Write actions are Execution Trader only, on an approved ticket. Use for leverage changes, closes, protection checks and margin questions.
+description: Manage Hyperliquid perp positions and margin from the desk computer - read positions and margin, set leverage and cross/isolated mode, add isolated margin, understand margin tiers and liquidation price, close a position with a reduce-only IOC, and clean up orphaned orders. Write actions are Execution Trader only, on an approved or mandate-covered ticket. Use for leverage changes, closes, protection checks and margin questions.
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.2.0"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -11,7 +11,7 @@ metadata:
 
 # Hyperliquid positions and margin
 
-Reads here are for everyone (Risk Manager first); the write actions (`updateLeverage`, `updateIsolatedMargin`, closes) are Execution Trader only, on a ticket. Order mechanics are in `hyperliquid-orders`.
+Reads here are for everyone (Risk Manager first); the write actions (`updateLeverage`, `updateIsolatedMargin`, closes) are Execution Trader only, on a ticket approved by id or covered by a valid [standing mandate](../../docs/STANDING_MANDATE.md). A mandate covers closes and setting leverage to what the ticket needs; isolated-margin top-ups and margin-mode changes the ticket does not need stay per-ticket. Order mechanics are in `hyperliquid-orders`.
 
 ## Concepts
 
@@ -96,7 +96,7 @@ Partial close: pass the reduced size. The position still exists afterwards and *
 
 Clean-up depends on which happened, and reading `clearinghouseState` is what tells you:
 
-- **Full close** (`assetPositions` no longer contains the coin): list `open_orders(ACCOUNT)` and cancel the orphaned TP/SL for that market (their own ticket, or the standing approval in `desk.md`), then confirm the position is gone.
+- **Full close** (`assetPositions` no longer contains the coin): list `open_orders(ACCOUNT)` and cancel the orphaned TP/SL for that market (their own ticket, the standing approval in `desk.md`, or a valid standing mandate), then confirm the position is gone.
 - **Partial close** (the coin is still there at a smaller size): do **not** cancel the protective trigger. A position-tied stop (`sz: "0.0"`, `isPositionTpsl: true`) already covers the smaller size and needs nothing. A fixed-size stop now covers more than the position: place the correctly sized replacement first, confirm it is resting, then cancel the old one, so the remainder is never naked between the two actions.
 
 Never run the orphan sweep on the assumption that a close was total. Confirm it from the exchange first.

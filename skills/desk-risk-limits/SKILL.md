@@ -3,7 +3,7 @@ name: desk-risk-limits
 description: How the Risk Manager writes the desk's risk limits with the user, sizes every proposed trade from live account state and Hyperliquid's real constraints, checks the book, and issues a PASS or REJECT with exact ticket fields. Use for setting up or changing limits, sizing any trade, and answering "how's the book".
 license: MIT
 metadata:
-  version: "1.1.3"
+  version: "1.2.0"
   author: Galleon Labs
   category: desk
 ---
@@ -14,7 +14,7 @@ The user sets the desk's limits, in writing, once; the Risk Manager enforces the
 
 ## 0. Desk ceilings
 
-These ceilings reject limits files that exceed the desk's bounds. They are maximum permitted settings, not recommended risk levels; the user chooses stricter limits below.
+These ceilings reject limits files that exceed the desk's bounds. They are maximum permitted settings, not recommended risk levels; the user chooses stricter limits below. They are also the defaults for every desk without a standing mandate.
 
 | Ceiling | Value |
 | --- | --- |
@@ -23,9 +23,9 @@ These ceilings reject limits files that exceed the desk's bounds. They are maxim
 | max leverage on any market | 20x, and never above the exchange or tier max |
 | daily loss stop | -10% of start-of-day equity |
 | exchange-resting stop on every entry | mandatory |
-| standing approval for a mainnet send that can open or increase exposure | never |
+| standing approval for a mainnet send that can open or increase exposure | never; only a valid standing mandate (section 5) replaces approval by id |
 
-The one send a standing approval may cover on any network is **reduce-only protection**: placing or resizing a stop for a position that has none. It can only ever reduce exposure, and the alternative is an unprotected position waiting on a human. Entries, adds, leverage increases and anything that can open or grow a position always need approval by id, on every network.
+The one send a standing approval may cover on any network is **reduce-only protection**: placing or resizing a stop for a position that has none. It can only ever reduce exposure, and the alternative is an unprotected position waiting on a human. Without a valid standing mandate, entries, adds, leverage increases and anything that can open or grow a position need approval by id, on every network.
 
 The user's limits file may only be **stricter** than these. A file that sets a value looser than a ceiling is not applied: the Risk Manager REJECTs with `gate failed: limits file exceeds desk ceiling <name>`, keeps enforcing the ceiling, and asks the user to edit the file. The desk never edits the file itself, and no Bot may raise a ceiling.
 
@@ -98,6 +98,8 @@ check             positions_after <= max_positions ; cluster count within cluste
 check             market in allowed list ; stop present ; daily loss stop not hit
 ```
 
+For a ticket under a standing mandate, the mandate's per-trade risk, total open risk, leverage, daily loss stop and markets replace the matching limits-file values and the two desk-ceiling lines above (section 5).
+
 `R` for the ticket is `stop_distance` in USD per unit, and targets are quoted in R by the user, never invented by the desk. Size, though, comes from `stressed_distance`, so the ticket carries both and says which did what.
 
 **Why the stress.** A triggered stop can fill beyond its trigger price, partially fill or leave a remainder when liquidity does not reach its price bound. Fees and adverse fills increase the loss beyond the nominal `stop_distance`. Size from the stressed distance and state the `slip_stop` assumption and its source in the PASS. Stale depth cannot justify a smaller stress; refresh the evidence before sizing.
@@ -143,6 +145,18 @@ Timestamp everything. Save a copy under `/workspace/trading-desk/briefs/YYYY-MM-
 - Daily loss stop hit: post it once on the floor, set `status: no-new-risk` in `desk.md`, and REJECT new proposals with that gate until the user resets in writing. Exits and protection are still allowed.
 - Unprotected position discovered: alert the Desk Lead and Execution Trader immediately; a protective stop ticket goes through the lifecycle at priority. If the user pre-authorised protective stops, it goes straight out under that standing approval. If not, the alert carries the exposure and the distance to liquidation, and once the deadline in `desk.md` passes the desk tells the user to close or protect the position in the Hyperliquid app themselves (`desk-incident-response` playbook D).
 - Limits file missing or unversioned: the desk is a research desk until it exists.
+- Mandate daily loss stop hit: suspend the mandate for the rest of the UTC day (section 5) and alert the user. New sends need approval by id until 00:00 UTC.
+
+## 5. Standing mandate tickets
+
+A standing mandate is an optional block the user writes in `desk.md` ([Standing mandate](../../docs/STANDING_MANDATE.md)). Without a valid one, every rule above applies unchanged. The desk may show the template; it never writes, widens, extends or renews a mandate, and never suggests loosening one, least of all after a loss.
+
+- Before every mandate ticket, run `python3 scripts/standing_mandate.py --desk-root /workspace/trading-desk --network <network> --account <account> --json` and use only a `valid` verdict with `in_force: true`. Any other verdict means per-ticket approval for this ticket. Re-reading each time is how an edited block takes effect.
+- Size with the arithmetic in section 2, with the mandate's limits in place of the limits-file per-trade risk, total open risk, leverage, daily loss stop and markets. The mandate may set values above the section 0 defaults; that is the user's decision, recorded in their block. The exchange's tier maximum, minimum order value, size decimals, the mandatory exchange-resting stop and the limits file's other settings still apply.
+- Count today's mandate entries from the journal when `max new entries per day` is set, and read day PnL against start-of-day equity for the mandate's `daily loss stop`.
+- Add two lines to the PASS and ticket: `authority: standing mandate <written> sha <fingerprint>`, and `mandate check:` with each field, its value for this ticket and `ok`, as shown in the doc. A field that fails is a REJECT naming it.
+- When the day's loss reaches the mandate's stop, journal `mandate suspended  mandate <written>  reason daily-loss-stop` and alert the user. That suspends the mandate until 00:00 UTC whatever the block says.
+- Stale or unreadable account or market data is a REJECT for `missing input` on that ticket. A position found without a resting stop gets a protective stop at priority. Both are alerts, not suspensions.
 
 ## Pitfalls
 

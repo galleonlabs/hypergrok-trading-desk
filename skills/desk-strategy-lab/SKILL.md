@@ -3,7 +3,7 @@ name: desk-strategy-lab
 description: How the Strategist works with the user to turn their own trading idea into explicit rules, backtest it honestly on Hyperliquid candle and funding history, and paper-trade it on testnet through the desk lifecycle. Method only - the desk ships no strategies and makes no return claims. Use when the user wants to design, test, compare or paper-trade an idea.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   author: Galleon Labs
   category: desk
 ---
@@ -108,7 +108,7 @@ Write what you checked into the run file.
 
 ## 5. Paper trade on testnet
 
-When the user wants to see it live: the Strategist runs the rules on live data (polling or WebSocket per `hyperliquid-websocket`) and posts each signal as a **proposal** (`HG-...`) with the rules file cited as the idea. The Risk Manager sizes it, the user approves it, the Execution Trader sends it on **testnet**, the Trade Reviewer reviews it. The Strategist never sends orders and never asks another Bot to skip a stage "because the rules said so".
+When the user wants to see it live: the Strategist runs the rules on live data (polling or WebSocket per `hyperliquid-websocket`) and posts each signal as a **proposal** (`HG-...`) with the rules file cited as the idea. The Risk Manager sizes it, the user approves it by id (or a valid testnet [standing mandate](../../docs/STANDING_MANDATE.md) covers it), the Execution Trader sends it on **testnet**, the Trade Reviewer reviews it. The Strategist never sends orders and never asks another Bot to skip a stage "because the rules said so".
 
 After a set number of paper trades agreed with the user (20 is a common choice), the Trade Reviewer's numbers and the backtest are compared side by side.
 
@@ -122,4 +122,4 @@ If it does not hold up: `POSTMORTEM.md` with the data, the runs, and one paragra
 - Never quote a backtest return without trade count, drawdown, costs, the out-of-sample split and the trial count.
 - Never carry an imported claim's published results into this desk as evidence. The desk's evidence is what the desk ran.
 - Never send an order, on any network.
-- Never let a live signal loop turn into unattended execution.
+- Never let a live signal loop send. Signals become proposals; outside a valid standing mandate the user approves each one, and under one the desk's lifecycle still runs every stage. A mandate is the user's to write, never the Strategist's to draft for them as a way to "let it run".

@@ -3,7 +3,7 @@ name: hypergrok-bootstrap
 description: Build and verify a HyperGrok trading desk from the pinned public release. Use for first-run setup, repair, or a readiness check. Starts with a live zero-key Opening Bell, installs the seven role profiles and seventeen shared skills, prepares the Trading Floor, and returns an evidence receipt. Read-only by default; never requests a wallet or places an order.
 license: MIT
 metadata:
-  version: "1.0.13"
+  version: "1.0.14"
   author: Galleon Labs
   category: desk
 ---
@@ -18,6 +18,7 @@ Bootstrap is research-only.
 
 - Do not request, read or store an API wallet, private key, seed phrase or exchange secret.
 - Do not call Hyperliquid `/exchange`, create an order, alter leverage, move funds or change approval settings.
+- Do not write a standing mandate. The desk record says `standing mandate: none`; only the user may later write one.
 - Public `POST /info` market reads are allowed. State mainnet, request type and UTC time.
 - Local writes are limited to `/workspace/hypergrok` and `/workspace/trading-desk`.
 - Creating the seven named Bots and the private Trading Floor group is in scope. Sharing anything publicly is not.
@@ -115,6 +116,7 @@ Record only verified Bot, group and member IDs as observed; mark uncreated, manu
 - trading floor id and member ids: <verified native group and six Bot IDs>
 - risk limits: not yet written
 - standing approvals: none
+- standing mandate: none   # optional; only the user writes one (docs/STANDING_MANDATE.md)
 - exchange approval gate: unverified; required before provisioning any API wallet key
 - unprotected position deadline: not applicable
 - status: research-only; no API wallet provisioned

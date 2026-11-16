@@ -3,14 +3,14 @@ name: desk-monitoring
 description: How the desk watches markets and the account between trades using Grok Bot routines and WebSocket or polling watches - the desk brief, book checks, funding and price watches, alert conditions and what a watch may and may not do. Use when the user asks for briefings, alerts, "watch X" or scheduled checks.
 license: MIT
 metadata:
-  version: "1.1.2"
+  version: "1.2.0"
   author: Galleon Labs
   category: desk
 ---
 
 # Monitoring, briefs and watches
 
-Monitoring is read-only. A watch may fetch, compute, save and alert. It may never send to the exchange. If a watch condition implies action ("stop got hit, re-enter"), the alert opens a proposal; the lifecycle does the rest.
+Monitoring is read-only. A watch may fetch, compute, save and alert. It may never send to the exchange. If a watch condition implies action ("stop got hit, re-enter"), the alert opens a proposal; the lifecycle does the rest. Under a valid [standing mandate](../../docs/STANDING_MANDATE.md) in Claude Code, that proposal may go out without approval by id once it passes Risk and the mandate check; the watch itself still never sends.
 
 ## Grok Bot routines
 

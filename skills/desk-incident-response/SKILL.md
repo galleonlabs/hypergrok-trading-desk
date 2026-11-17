@@ -3,7 +3,7 @@ name: desk-incident-response
 description: What the desk does when something goes wrong on Hyperliquid - unknown send results, unexpected fills or positions, unprotected positions, stuck or orphaned orders, API outages, rate limiting, and suspected API wallet compromise. Contain first, reconcile from the exchange record, act only through approved tickets, then review. Use the moment anything does not match the ticket.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   author: Galleon Labs
   category: desk
 ---
@@ -51,7 +51,7 @@ The Desk Lead confirms an owner (usually the Execution Trader for order/position
 1. Risk Manager flags it; the Desk Lead treats it as priority.
 2. Protective stop ticket (trigger, reduce-only, correct side, sized to the position read live) through Risk PASS and user approval. This is also the path after any partial fill of an entry that carried `normalTpsl` children.
 3. If the user has pre-authorised protective stops in `desk.md`, or a valid standing mandate covers this account and network, the Execution Trader places it under that authority and journals it. Under a mandate this is an alert to the user, not a suspension of the mandate. This is the one standing approval the desk actively recommends the user grant at setup, on every network, because it can only ever reduce risk.
-4. Without that pre-authorisation the desk cannot act, and an unprotected position does not become safe while it waits. Do not alert indefinitely: state the exposure and the distance to liquidation in the first alert, escalate on a deadline the user set in `desk.md` (fifteen minutes is a reasonable default), and when that passes, tell the user plainly that the fastest fix is theirs - close or protect the position in the Hyperliquid app - rather than continuing to ping a channel nobody is reading.
+4. Without that pre-authorisation the desk cannot act, and an unprotected position does not become safe while it waits. State the exposure and the distance to liquidation in the first alert, escalate on the deadline the user set in `desk.md` (15 minutes by default), and when it passes tell the user plainly that the fastest fix is theirs: close or protect the position in the Hyperliquid app. Do not keep pinging a channel nobody is reading.
 
 ### E. Orphaned or stuck orders
 

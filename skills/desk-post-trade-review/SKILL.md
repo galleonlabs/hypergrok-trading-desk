@@ -3,7 +3,7 @@ name: desk-post-trade-review
 description: The Trade Reviewer's procedure for journaling desk activity and reviewing trades from the exchange record - process graded separately from outcome, execution costs measured, one repeatable finding per review, plus the weekly desk review. Use after any send, when a trade closes, on the weekly routine, or when the user asks "how did that go".
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: Galleon Labs
   category: desk
 ---
@@ -21,10 +21,11 @@ The journal is the desk's memory; the review is how the desk learns. Both come f
 14:12 UTC  HG-20260816-01 risk     PASS 0.4827 ETH, stop 2,900, 0.5% risk stressed (risk-limits v3)
 14:29 UTC  HG-20260816-01 approval "approve HG-20260816-01" (user)
 14:31 UTC  HG-20260816-01 sent     buy 0.4827 @ 3,000 Gtc + sl 2,900 (normalTpsl); cloid 0x9f3e...; oid 1839201122, sl waitingForFill
-16:05 UTC  HG-20260816-01 fill     0.4827 @ 3,000.0 maker, fee $0.29
-09:12 UTC  HG-20260816-01 closed   tp 3,089.6, fee $1.44; position flat; sl 2,900 cancelled 09:13
+16:05 UTC  HG-20260816-01 fill     0.4827 @ 3,000.0 maker, fee $0.22
+08:24 UTC  HG-20260816-01-B sent   tp trigger 3,090 (market) sell 0.4827 reduce-only (PASS 08:20, approved by id 08:23); oid 1839977410
+09:12 UTC  HG-20260816-01 closed   tp 3,089.6 taker, fee $0.67; position flat; sl 2,900 cancelled 09:13
 10:00 UTC  limits                  risk-limits v3 -> v4: max positions 3 -> 4 (user, reason: adding HYPE)
-11:40 UTC  incident INC-20260817-01 send timeout on HG-20260817-02; not on exchange, waited out expiresAfter 11:41, re-checked clean, re-approved and sent 11:47
+11:40 UTC  incident INC-20260817-01 send timeout on HG-20260817-02; not on exchange, waited out expiresAfter 11:41, re-checked clean; fresh ticket HG-20260817-02-B passed, approved and sent 11:47
 18:00 UTC  note                    maker entries at 10 bps depth filled within 2h on both attempts this week
 ```
 

@@ -489,6 +489,20 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(schema["mode"], "read-only")
         self.assertEqual(schema["exit_codes"]["2"], "invalid arguments")
 
+    def test_missing_collection_arguments_are_listed_together(self):
+        with redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as caught:
+            dataset.main(["--coin", "ETH", "--json"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("required for collection: --interval, --start, --end, --output", json.loads(out.getvalue())["error"]["message"])
+
+    def test_sources_without_requests_or_parameters_fail_with_a_sentence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "sources.json").write_text('{"schema_version": 1}', encoding="utf-8")
+            with redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(dataset.main(["--verify", directory, "--json"]), 1)
+        error = json.loads(out.getvalue())["error"]
+        self.assertEqual((error["code"], error["message"]), ("verification_failed", "sources.json lacks its requests or parameters"))
+
     def test_invalid_arguments_do_not_read_or_create_output(self):
         cases = [["--coin", "@107"], ["--coin", "xyz:ETH", "--dex", "abc"],
                  ["--start", "2024-01-01T00:00:01Z"], ["--end", "2024-01-01T00:00:00Z"],

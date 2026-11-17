@@ -3,7 +3,7 @@ name: hyperliquid-orders
 description: Place, cancel and modify Hyperliquid orders correctly from the desk computer - limit and IOC (market-style) orders, take-profit and stop-loss trigger orders with grouping, client order ids, reduce-only, batch actions, price and size rounding, and how to read every response status. Write path - Execution Trader only, on an approved ticket. Use for any order action and for reconciling by cloid.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -180,7 +180,7 @@ res = exchange.modify_order(oid, "ETH", True, round_sz("ETH", 0.51), round_px("E
 print(res)   # statuses like an order response: resting / filled / error
 ```
 
-Limits that matter: without the raw `always_place` flag (which the SDK's `modify_order` never sets and the desk does not use), the replacement **must be a non-trigger order that will rest** - `Alo`, or a `Gtc` that would not execute immediately. So `modify` is for moving or resizing a resting limit order. **Stops and take-profits cannot be modified**: place the new trigger order first, confirm it is resting, then cancel the old one, so the position is never unprotected. If the original order was already filled or cancelled, the modify fails and nothing new is placed.
+Without the raw `always_place` flag (which the SDK's `modify_order` never sets and the desk does not use), the replacement **must be a non-trigger order that will rest** - `Alo`, or a `Gtc` that would not execute immediately, whose tif the exchange then overrides to `Alo`. So `modify` is for moving or resizing a resting limit order. **Stops and take-profits cannot be modified**: place the new trigger order first, confirm it is resting, then cancel the old one, so the position is never unprotected. If the original order was already filled or cancelled, the modify fails and nothing new is placed.
 
 ### Read the response
 
@@ -304,4 +304,4 @@ A whole-batch rejection (empty batch, non-reduce-only TP/SL, price far from refe
 - `Alo` orders that would cross are rejected, not converted.
 - Using the API wallet's address as `account_address`. It must be the main account.
 - Frontend market orders show up in reads as `orderType: "Market"`, `tif: "FrontendMarket"`; do not send those values from the API.
-- Address rate limits are volume-based (see `hyperliquid-api-reference`); a fresh account has a buffer of 10,000 actions, then 1 per 1 USDC traded. Cancels get extra headroom when limited (`min(limit + 100000, 2 x limit)`), not unlimited.
+- Address rate limits are volume-based (see `hyperliquid-api-reference`); a fresh account has a buffer of 10,000 actions, then 1 per 1 USDC traded, and a batch of n orders counts n times. Cancels get extra headroom when limited (`min(limit + 100000, 2 x limit)`), not unlimited.

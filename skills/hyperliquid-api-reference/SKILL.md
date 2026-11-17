@@ -3,7 +3,7 @@ name: hyperliquid-api-reference
 description: Compact reference for the Hyperliquid API as the desk uses it - endpoints and envelopes, desk-used /info request types and /exchange actions with their signing schemes, order and status vocabularies, asset ids, tick and lot rules, rate limits, WebSocket subscription list, error strings, and where the official docs are. Use to look up an exact field, request type or limit before writing a call, and to map an error string to its cause.
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
   author: Galleon Labs
   category: hyperliquid
   docs: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api
@@ -11,7 +11,7 @@ metadata:
 
 # Hyperliquid API reference (desk edition)
 
-Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 ([scope and evidence](../../docs/PROVENANCE.md#hyperliquid-compatibility-review---2026-10-25)). Funding cap, mark-price inputs, market-order notionals and CEX funding intervals were rechecked on 2026-11-12 ([evidence](../../docs/PROVENANCE.md#hyperliquid-factual-recheck---2026-11-12)). This is a scoped reference, not an exhaustive inventory of the exchange's growing API. When in doubt, fetch the page: append `.md` to any docs URL for raw markdown, for example `https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md`.
+Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 ([scope and evidence](../../docs/PROVENANCE.md#hyperliquid-compatibility-review---2026-10-25)). Funding cap, mark-price inputs, market-order notionals and CEX funding intervals were rechecked on 2026-11-12 ([evidence](../../docs/PROVENANCE.md#hyperliquid-factual-recheck---2026-11-12)). Scoped to what the desk uses, not exhaustive. When in doubt, fetch the page: append `.md` to any docs URL for raw markdown, for example `https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md`.
 
 ## Endpoints
 
@@ -21,7 +21,7 @@ Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 (
 | WebSocket | `wss://api.hyperliquid.xyz/ws` | `wss://api.hyperliquid-testnet.xyz/ws` |
 | HyperEVM RPC | `https://rpc.hyperliquid.xyz/evm` (chain 999) | `https://rpc.hyperliquid-testnet.xyz/evm` (chain 998) |
 
-- `POST /info` body `{"type": "<request>", ...}`, unsigned; response is the bare payload. Unknown `type` or missing field: HTTP 422; invalid JSON: HTTP 400.
+- `POST /info` body `{"type": "<request>", ...}`, unsigned; response is the bare payload. Unknown `type` or missing field: HTTP 422; invalid JSON: HTTP 400; unknown `dex`: HTTP 500.
 - `POST /exchange` body `{"action": {...}, "nonce": <ms>, "signature": {"r","s","v"}, "vaultAddress"?: "0x...", "expiresAfter"?: <ms>}`; response `{"status":"ok","response":{"type":"order"|"cancel"|"default"|..., "data"?: {...}}}` or `{"status":"err","response":"<string>"}`, both HTTP 200.
 - Header `Content-Type: application/json`.
 
@@ -30,12 +30,12 @@ Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 (
 | type | params | returns |
 | --- | --- | --- |
 | `allMids` | `dex?` | `{coin: midPx}` |
-| `meta` | `dex?` | `{universe:[{name, szDecimals, maxLeverage, marginTableId?, onlyIsolated?, marginMode?, isDelisted?}], marginTables:[[id,{description, marginTiers:[{lowerBound, maxLeverage}]}]]}` |
-| `metaAndAssetCtxs` | `dex?` | `[meta, [{funding, openInterest, prevDayPx, dayNtlVlm, premium, oraclePx, markPx, midPx, impactPxs}]]` |
+| `meta` | `dex?` | `{universe:[{name, szDecimals, maxLeverage, marginTableId?, onlyIsolated?, marginMode?, isDelisted?}], marginTables:[[id,{description, marginTiers:[{lowerBound, maxLeverage}]}]], collateralToken}` |
+| `metaAndAssetCtxs` | `dex?` | `[meta, [{funding, openInterest, prevDayPx, dayNtlVlm, dayBaseVlm, premium, oraclePx, markPx, midPx, impactPxs}]]` |
 | `spotMeta` | | `{tokens:[{name, szDecimals, weiDecimals, index, tokenId, ...}], universe:[{name, tokens:[base,quote], index}]}` |
-| `spotMetaAndAssetCtxs` | | `[spotMeta, [{dayNtlVlm, markPx, midPx, prevDayPx, circulatingSupply}]]` |
+| `spotMetaAndAssetCtxs` | | `[spotMeta, [{coin, dayNtlVlm, dayBaseVlm, markPx, midPx, prevDayPx, circulatingSupply, totalSupply}]]` |
 | `l2Book` | `coin, nSigFigs? (2-5), mantissa? (1,2,5)` | `{coin, time, levels:[[{px,sz,n}...bids],[...asks]]}` up to 20 a side |
-| `recentTrades` | `coin` | `[{coin, side, px, sz, time, hash, tid}]` |
+| `recentTrades` | `coin` | `[{coin, side, px, sz, time, hash, tid, users}]` |
 | `candleSnapshot` | `req:{coin, interval, startTime, endTime}` | `[{t,T,s,i,o,c,h,l,v,n}]`, most recent 5000 only |
 | `fundingHistory` | `coin, startTime, endTime?` | `[{coin, fundingRate (hourly), premium, time}]` |
 | `predictedFundings` | | `[[coin, [[venue, {fundingRate, nextFundingTime, fundingIntervalHours?}]]]]`; venue is `HlPerp`, `BinPerp` or `BybitPerp`, payload `null` when unlisted there. Normalise by `fundingIntervalHours` (HlPerp always 1; CEX venues 1, 4 or 8 per coin, or omitted), never by a fixed 8 |
@@ -47,7 +47,7 @@ Desk-used contracts rechecked against the official docs and SDKs on 2026-10-25 (
 | `frontendOpenOrders` | `user, dex?` | adds `origSz, cloid, orderType, tif, reduceOnly, isTrigger, triggerPx, triggerCondition, isPositionTpsl, children` |
 | `orderStatus` | `user, oid (number or cloid hex)` | `{status:"order", order:{order, status, statusTimestamp}}` or `{status:"unknownOid"}` |
 | `historicalOrders` | `user` | `[{order, status, statusTimestamp}]` up to 2000 |
-| `userFills` | `user, aggregateByTime?` | `[{coin, px, sz, side, time, startPosition, dir, closedPnl, hash, oid, crossed, fee, feeToken, builderFee?, tid, cloid?}]` up to 2000 |
+| `userFills` | `user, aggregateByTime?` | `[{coin, px, sz, side, time, startPosition, dir, closedPnl, hash, oid, crossed, fee, feeToken, builderFee?, tid, cloid?, twapId}]` up to 2000 |
 | `userFillsByTime` | `user, startTime, endTime?, aggregateByTime?` | same, up to 2000 per call from the last 10000 |
 | `userFunding` | `user, startTime, endTime?` | `[{time, hash, delta:{type:"funding", coin, usdc, szi, fundingRate, nSamples}}]` |
 | `userNonFundingLedgerUpdates` | `user, startTime, endTime?` | deposits, withdrawals, transfers, liquidations, vault flows |
@@ -75,14 +75,14 @@ L1-signed actions can be signed by an API wallet; user-signed actions need the a
 | `order` | `orders:[{a,b,p,s,r,t,c?}], grouping: na|normalTpsl|positionTpsl, builder?` | L1 | yes |
 | `cancel` | `cancels:[{a,o}], f? (fast, omit if false)` | L1 | yes |
 | `cancelByCloid` | `cancels:[{asset, cloid}]` | L1 | yes |
-| `modify` / `batchModify` | `oid (or cloid), order:{...}` / `modifies:[{oid, order}]`; without `a` (always_place) the new order must be non-trigger and rest (`Alo` or non-executable `Gtc`) | L1 | yes, resting limits only |
+| `modify` / `batchModify` | `oid (or cloid), order:{...}` / `modifies:[{oid, order}]`; without `a` (always_place) the new order must be non-trigger and rest (`Alo`, or a non-executable `Gtc`, whose tif the exchange overrides to `Alo`) | L1 | yes, resting limits only |
 | `scheduleCancel` | `time? (ms >= now+5s)` | L1 | yes, on request |
 | `updateLeverage` | `asset, isCross, leverage` | L1 | yes |
 | `updateIsolatedMargin` | `asset, isBuy, ntli (USD x 1e6, negative removes)` | L1 | yes |
 | `twapOrder` / `twapCancel` | `twap:{a,b,s,r,m (minutes),t (randomise)}` / `a, t (twapId)`; 5 min to 7 days, min 100 USD | L1 | yes, on request |
 | `noop` | | L1 | rarely |
 | `reserveRequestWeight` | `weight` | L1 | user's call |
-| `vaultTransfer`, `subAccountTransfer`, `createSubAccount`, `subAccountSpotTransfer` | | L1 | **no** |
+| `vaultTransfer`, `subAccountTransfer`, `createSubAccount`, `subAccountSpotTransfer`, `agentSendAsset`, `cDeposit2`, `agentSetAbstraction` | | L1 | **no** |
 | `approveAgent` | `agentAddress, agentName?` | user | in app |
 | `approveBuilderFee` | `maxFeeRate, builder` | user | **no** |
 | `usdSend`, `spotSend`, `sendAsset`, `withdraw3`, `usdClassTransfer` | | user | **no** |
@@ -105,7 +105,7 @@ Order status vocabulary (`orderStatus`, `historicalOrders`, WS `orderUpdates`): 
 - Perp: index in `meta.universe` (default dex). Read it live; never hardcode.
 - Spot: `10000 + index` in `spotMeta.universe`; coin name `PURR/USDC` or `@<index>`; size decimals from the base token.
 - HIP-3 perps: `100000 + 10000 x dex index + index`; name `dex:COIN`.
-- HIP-4 outcomes: `100000000 + encoding`; names `#<n>`.
+- HIP-4 outcomes: `100000000 + encoding`, where `encoding = 10 x outcome + side` (side 0 or 1); coin `#<encoding>`.
 - Ids differ between mainnet and testnet.
 
 ## Tick and lot
@@ -118,12 +118,12 @@ Order status vocabulary (`orderStatus`, `historicalOrders`, WS `orderUpdates`): 
 ## Rate limits
 
 - Per IP: 1200 weight per minute across REST. `/exchange` weight `1 + floor(n/40)`. `/info` weight 2 for `l2Book, allMids, clearinghouseState, orderStatus, spotClearinghouseState, exchangeStatus`; 60 for `userRole`; 20 for the rest; +1 per 20 items for list queries; `candleSnapshot` +1 per 60 candles.
-- Per address (actions): 10,000 buffer + 1 per 1 USDC cumulative volume; when exhausted, 1 action per 10 s; cancels get `min(limit + 100000, 2 x limit)`. Stale `expiresAfter` rejections cost 5x. Check the live limit reference for mode-specific constraints.
+- Per address (actions): 10,000 buffer + 1 per 1 USDC cumulative volume; when exhausted, 1 action per 10 s; cancels get `min(limit + 100000, 2 x limit)`. Stale `expiresAfter` rejections cost 5x. A batch of n orders or cancels counts once against the IP limit and n times against the address limit. Unified and portfolio-margin accounts are also capped at 50k user actions per day.
 - WebSocket per IP: 10 connections, 30 new per minute, 1000 subscriptions, 10 distinct users, 2000 messages per minute, 100 in-flight posts.
 
 ## WebSocket
 
-`{"method":"subscribe","subscription":{...}}`; heartbeat `{"method":"ping"}` / `{"channel":"pong"}`; idle connections closed after 60 s. Types: `allMids, notification, webData3, candle, l2Book, trades, orderUpdates, userEvents (channel "user"), userFills, userFundings, userNonFundingLedgerUpdates, activeAssetCtx, activeAssetData, userTwapSliceFills, userTwapHistory, twapStates, bbo, clearinghouseState, openOrders, spotState, allDexsClearinghouseState, allDexsAssetCtxs, outcomeMetaUpdates, fastAssetCtxs`. Post `/info` or signed actions over the socket with `{"method":"post","id":n,"request":{"type":"info"|"action","payload":{...}}}`.
+`{"method":"subscribe","subscription":{...}}`; heartbeat `{"method":"ping"}` / `{"channel":"pong"}`; the server closes a connection it has not sent a message to in 60 s. Types: `allMids, notification, webData3, candle, l2Book, trades, orderUpdates, userEvents (channel "user"), userFills, userFundings, userNonFundingLedgerUpdates, activeAssetCtx, activeAssetData, userTwapSliceFills, userTwapHistory, twapStates, bbo, clearinghouseState, openOrders, spotState, allDexsClearinghouseState, allDexsAssetCtxs, outcomeMetaUpdates, fastAssetCtxs`. Post `/info` or signed actions over the socket with `{"method":"post","id":n,"request":{"type":"info"|"action","payload":{...}}}`.
 
 ## Error strings
 

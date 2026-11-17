@@ -11,14 +11,24 @@ import argparse
 import json
 import os
 import sys
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal, DecimalException, InvalidOperation
 
-from cli_contract import ReadOnlyParser, add_network_arguments, describe, emit_error, market_selection, network_settings
+from cli_contract import (
+    MAINNET,
+    ReadOnlyParser,
+    add_network_arguments,
+    describe,
+    emit_error,
+    failure_text,
+    market_selection,
+    network_label,
+    network_settings,
+    price,
+)
 
-DEFAULT_BASE_URL = "https://api.hyperliquid.xyz"
+DEFAULT_BASE_URL = MAINNET
 USER_AGENT = "hypergrok-opening-bell/1.0"
 BANDS_BPS = (5, 10, 25)
 # `l2Book` returns at most this many price levels per side, at whatever price
@@ -211,8 +221,13 @@ def resolve_coin(meta_and_contexts, requested: str, dex: str | None = None) -> s
     matches = [asset.get("name") for asset in universe
                if isinstance(asset, dict) and isinstance(asset.get("name"), str)
                and asset["name"].casefold() == target.casefold()]
-    if len(matches) != 1:
-        raise ValueError(f"{target} is not a unique market in the selected perp universe")
+    if target in matches:
+        matches = [target]  # An exact spelling wins over a case-insensitive twin.
+    if not matches:
+        where = f"on the {dex} DEX" if dex else "in the main perp universe; a HIP-3 market needs its DEX prefix, e.g. xyz:TSLA"
+        raise ValueError(f"{target} is not listed {where}")
+    if len(matches) > 1:
+        raise ValueError(f"{target} matches more than one market ({', '.join(matches)}); use the exact spelling")
     coin = matches[0]
     if dex and not coin.startswith(dex + ":"):
         raise ValueError("market does not belong to the selected DEX")
@@ -325,7 +340,7 @@ def fetch_snapshot(coin: str, base_url: str, timeout: float, fixture_dir: str | 
         network = "fixture"
     else:
         pages = fetch_books(coin, base_url, timeout)
-        network = "mainnet" if base_url == DEFAULT_BASE_URL else "testnet" if base_url == "https://api.hyperliquid-testnet.xyz" else "custom"
+        network = network_label(base_url)
     snapshot = build_snapshot(meta, pages, coin, network)
     snapshot["source"]["base_url"] = base_url
     return snapshot
@@ -353,17 +368,17 @@ def source_note(row: dict) -> str:
 
 
 def render(snapshot: dict) -> str:
-    price = snapshot["prices"]
+    prices = snapshot["prices"]
     funding = snapshot["funding"]
     activity = snapshot["activity"]
     book = snapshot["book"]
     lines = [
-        f"HYPERGROK OPENING BELL — {snapshot['market']}",
+        f"HYPERGROK OPENING BELL · {snapshot['market']}",
         f"READ ONLY · {snapshot['network'].upper()} · {snapshot['source']['observed_at']}",
         "Sources: Hyperliquid /info metaAndAssetCtxs + l2Book",
         "",
-        f"Price       mid {Decimal(price['book_mid']):,.2f} · mark {Decimal(price['mark']):,.2f} · oracle {Decimal(price['oracle']):,.2f}",
-        f"24h change  {Decimal(price['change_24h_pct']):+,.2f}%",
+        f"Price       mid {price(Decimal(prices['book_mid']))} · mark {price(Decimal(prices['mark']))} · oracle {price(Decimal(prices['oracle']))}",
+        f"24h change  {Decimal(prices['change_24h_pct']):+,.2f}%",
         f"Funding     {Decimal(funding['hourly_pct']):+,.5f}%/h · {Decimal(funding['annualized_simple_pct']):+,.2f}% annualized (simple)",
         f"Open int.   {compact(Decimal(activity['open_interest_base']))} {snapshot['market'].removesuffix('-PERP')} · {compact(Decimal(activity['open_interest_usd']), '$')}",
         f"24h volume  {compact(Decimal(activity['volume_24h_usd']), '$')}",
@@ -419,9 +434,9 @@ def main(argv=None) -> int:
         snapshot = fetch_snapshot(coin, base_url, args.timeout, args.fixture_dir, dex)
     except (OSError, ValueError, KeyError, TypeError, DecimalException, OverflowError) as exc:
         if args.json:
-            emit_error("source_unavailable", str(exc))
+            emit_error("source_unavailable", failure_text(exc))
         else:
-            print(f"Opening Bell unavailable: {exc}", file=sys.stderr)
+            print(f"Opening Bell unavailable: {failure_text(exc)}", file=sys.stderr)
         return 1
     print(json.dumps(snapshot, indent=2, sort_keys=True) if args.json else render(snapshot))
     return 0

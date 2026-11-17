@@ -1,21 +1,23 @@
 # Contributing
 
-HyperGrok is instructions and resources for a user's Grok Bot, not software the repository runs. Contributions are prose, prompts and snippets; the bar is accuracy against the live Hyperliquid API and the live Grok Bot product.
+HyperGrok is instructions and resources that a user's agents follow, plus read-only tools. The bar for a change is accuracy against the live Hyperliquid API and the live agent runtimes.
 
 ## Ground rules
 
-+ Original text only. Do not copy third-party skill prose, prompts, fixtures or code. Cite sources in `docs/PROVENANCE.md`.
-+ No strategies, signals, alpha or return claims anywhere in the repository. The Strategist teaches method; users bring ideas.
-+ Every write path stays behind the ticket protocol: Risk PASS, user approval by id, single bounded send, reconciliation. The one alternative to approval by id is a standing mandate the user writes themselves (`docs/STANDING_MANDATE.md`), honoured only where an out-of-band check reads it; it never removes the Risk PASS, the resting stop, the journal or the single send. A change that weakens that, lets the desk write or widen a mandate, or honours a mandate in a runtime without such a check is a rejected change.
-+ Keep the desk's worked example consistent. `HG-20260816-01` runs through `README.md`, `desk-trade-lifecycle`, `desk-risk-limits`, `desk-monitoring`, `desk-post-trade-review`, `agents/risk-manager.md`, `agents/execution-trader.md` and `agents/trade-reviewer.md`. If you change its size, price or costs, change them everywhere and check the derived figures still hold: sizing is proportional, so the R multiple and the cost-in-bps should not move. The generic SDK snippets in `hyperliquid-orders` are not part of that narrative and use a round size on purpose.
-+ Never widen the key model: API wallet only, through the secret store, never in chat or under `/workspace`.
-+ Verify snippets against the current SDK versions named in `docs/PROVENANCE.md` before changing them, and update the version there if you bump it.
++ **Original text only.** Do not copy third-party skill prose, prompts, fixtures or code. Cite sources in `docs/PROVENANCE.md`.
++ **No strategies, signals or return claims** anywhere. The Strategist teaches method; users bring ideas.
++ **Every write stays behind the ticket protocol:** Risk PASS, user approval by id, one bounded send, reconciliation. The one alternative to approval by id is a standing mandate the user writes themselves (`docs/STANDING_MANDATE.md`), honoured only where an out-of-band check reads it. A change that weakens this, lets the desk write or widen a mandate, or honours a mandate in a runtime without such a check is rejected.
++ **Never widen the key model:** a trade-only API wallet, through the secret store, never in chat or under `/workspace`.
++ **Keep the worked example consistent.** `HG-20260816-01` runs through `README.md`, `docs/STOP_COST.md`, `desk-trade-lifecycle`, `desk-risk-limits`, `desk-monitoring`, `desk-post-trade-review` and the Risk Manager, Execution Trader and Trade Reviewer roles. Change its size, price or costs everywhere or nowhere. The SDK snippets in `hyperliquid-orders` use a round size on purpose and are not part of it.
++ **Verify snippets** against the SDK versions named in `docs/PROVENANCE.md`, and update that file when you bump one.
 
 ## Layout
 
-+ `agents/<role>.md` - frontmatter (`name`, `title`, `description`, `seat`, `skills`, `writes_to_exchange`), a **Bot profile** section (Name, Job, Description) and a **System prompt** section.
-+ `skills/<name>/SKILL.md` - frontmatter (`name` equal to the directory, `description` under 1024 characters, `license`, `metadata`), body under 320 lines.
-+ `SETUP.md` - the single entry point a Grok Bot follows. Keep it linear and honest about what Grok Bot can and cannot do.
++ `agents/<role>.md`: frontmatter (`name`, `title`, `description`, `seat`, `skills`, `writes_to_exchange`), a **Bot profile** section and a **System prompt** section. Exactly one role writes to the exchange.
++ `skills/<name>/SKILL.md`: frontmatter (`name` equal to the directory, `description` under 1024 characters, `license`, `metadata`) and a body under 320 lines.
++ `SETUP.md`: the single runbook a Grok Bot follows. Keep it linear and honest about what Grok Bot can and cannot do.
++ `scripts/`: stdlib-only Python. User tools are read-only and keyless and share the `--schema`, `--json` and error contract in `cli_contract.py`.
++ `hooks/`: the Claude Code exchange-write gate. When unsure, it asks.
 
 ## Checks
 
@@ -23,46 +25,31 @@ HyperGrok is instructions and resources for a user's Grok Bot, not software the 
 bash scripts/check.sh
 ```
 
-The required check runs structural validation, retained release/security/financial contracts, and 21 real CLI journeys against an isolated loopback API. The tool unit suites for Opening Bell, research datasets and the doctor remain available through `python3 -m unittest discover -s scripts -p 'test_*.py'`; prefer end-to-end journeys or boundary contracts for new coverage. CI runs the same script.
+CI runs the same script. It needs no network, key or account, and covers:
 
-Retained contracts and reasons: manifest/npm/template checks and their negative fixtures protect installation and publication; release-bump fixtures protect immutable tags and scoped writes; exchange-write-gate and standing-mandate fixtures protect approval, mandate and single-writer boundaries; stop-cost and order-rounding fixtures protect financial arithmetic. The CLI journeys exercise schema/errors without network, offline diagnostics, the offline standing mandate check, market reads, every-DEX account reads in standard and shared-collateral modes, risk sizing, dataset collection, offline replay and tamper refusal. No signing, keys, real account data or exchange request is used. CI-only changes do not change the pinned user instruction release.
++ **Structure:** frontmatter, name and directory agreement, description length, internal links, strict-YAML-safe values and the one-writer rule.
++ **Distribution** (`check_manifests.py`): every plugin manifest agrees on name, version and counts, every declared path exists, and every documented install command, release tag and listing URL resolves to this repository at the current release. `GEMINI.md` must repeat the approval paragraph of `rules/hypergrok-team.mdc` verbatim.
++ **Package and template** (`check_npm_package.py`, `check_grok_template.py`): the npm archive holds exactly the listed files, and `template/grok-bot.json` matches the shipped skill bytes.
++ **Boundary contracts:** fixtures for the exchange-write gate, the standing mandate, release bumps, stop-cost arithmetic and order rounding, each with negative cases.
++ **CLI journeys** (`cli_journeys.py`): the tools run end to end against a loopback API, covering schemas, bad input, market and account reads, sizing, dataset collection, replay and tamper refusal.
 
-Structural validation includes:
-
-+ Instruction files: frontmatter, directory/name agreement, description length, internal links and the one-writer rule.
-+ `scripts/check_manifests.py` - the plugin distribution contract. Every manifest (`plugin.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.cursor-plugin/plugin.json`, `.grok-plugin/plugin.json`, `.grok-plugin/marketplace.json`, `gemini-extension.json`, `.agents/plugins/marketplace.json`) must be valid JSON, name the same plugin at the same version as `plugin.json`, point every declared local source, logo, skills, agents, rules and context-file path at something that exists inside this repository, pin the Grok and Codex marketplace remote source URLs to this repository at the manifest release tag, give the Codex entry its required install policy and category, and claim the counts the repository actually ships. `GEMINI.md` must repeat the approval paragraph of `rules/hypergrok-team.mdc` verbatim. Adding or removing a skill or role means updating the manifests that state the count in prose. Any `/plugin marketplace add` or `/plugin install` command in the documentation must name the repository and the marketplace and plugin ids `.claude-plugin/marketplace.json` actually declares, so a rename cannot leave the install instructions pointing at nothing. `gemini extensions install` must name this repository, `codex plugin marketplace add` and `codex plugin add` must name this repository and the ids `.agents/plugins/marketplace.json` declares, and a `--ref` on either must be the manifest release tag. A `skills add` argument or a skills.sh listing URL must name this repository or one of its skill directories; the plugin id `hypergrok` is not a skill, so a trailing `/hypergrok` on skills.sh is a missing listing.
-+ `scripts/test_check_manifests.py` - negative fixtures that prove the manifest check fails on a version mismatch, a missing component path, invalid JSON, inventory drift, a documented install command that no longer resolves, a skills.sh listing or `skills add` argument that names a slug this repository does not ship, a `SETUP.md` clone pin left behind by a version bump, a Grok or Codex marketplace root source, a wrong remote URL or missing/stale release ref, an unpinned or moving-ref Grok install command, a Codex entry without policy or category, a missing Gemini context file or one that paraphrases the approval rule, and a Gemini or Codex install command that names the wrong repository, id or ref.
+After a skill edit, also run `validate-agent-skills skills`. The per-tool unit suites run with `python3 -m unittest discover -s scripts -p 'test_*.py'`. For new coverage, prefer a journey or a boundary contract over more unit tests. Never use a live trade to test prose.
 
 ## Releasing
 
-`SETUP.md` clones a **pinned tag**, so the desk a user builds is the desk that was reviewed. That pin drifts the moment `main` moves ahead of the tag, and a drifted pin is worse than none: the user reads one set of instructions and installs another. Cutting a release is therefore the only way changed instructions reach anyone, and these steps go together in one commit.
+`SETUP.md` clones a pinned tag, so the desk a user builds is the desk that was reviewed. Changed instructions reach users only through a release, and these steps land in one commit.
 
-1. Move everything in `## Unreleased` in `CHANGELOG.md` under a new version heading with today's date. Say what changed and why, not just what moved.
-2. Bump `version` in `package.json` and every manifest that declares one to the new version, and `plugins[].source.ref` in `.grok-plugin/marketplace.json` and `.agents/plugins/marketplace.json` to the matching tag. `check_manifests.py` fails if they disagree.
-3. Bump `metadata.version` in the frontmatter of each skill whose body actually changed. Skills version independently; leave the untouched ones alone.
-4. Update the `--branch` pin in `SETUP.md` section 1 to the new tag, and every other release tag the instruction files name, including the `grok plugin install` command’s `@vX.Y.Z` ref in README, SETUP, FAQ and ARCHITECTURE. Keep the Grok marketplace `source.ref` from step 2 aligned with that pin. `check_manifests.py` fails if any of them disagree with the version from step 2; only `CHANGELOG.md` and this file may name older tags.
+1. **Changelog.** Move `## Unreleased` under a new version heading with today's date.
+2. **Skill versions.** Bump `metadata.version` in each skill whose body changed. Leave the others alone.
+3. **Pins and hashes.** Preview with `python3 scripts/release_bump.py X.Y.Z --dry-run`, then run it without `--dry-run`. It updates the manifests, the marketplace `source.ref` values, the install pins and the template skill hashes together or not at all, then runs the check. It refuses ambiguous prose versions until you reconcile them by hand, and refuses a version whose tag already exists. Only `CHANGELOG.md` and this file may name older tags.
+4. **Tag.** Commit, then `git tag -a vX.Y.Z -m "..." && git push origin main vX.Y.Z`.
+5. **GitHub release.** Publish one for the tag. Gemini CLI installs the latest release and, when it has exactly one asset, installs that asset instead of the source, so do not attach the npm archive as the only asset.
+6. **npm.** `gh workflow run publish.yml -R galleonlabs/hypergrok-trading-desk` is a dry run; add `-f dry_run=false` to publish. The workflow uses npm trusted publishing and no token. It runs only from `main`, needs green CI and the release tag on the exact commit, verifies the packed archive, publishes it and compares the registry bytes. Run it before `main` moves on. If Actions is unavailable, stage the reviewed archive with `npx -y npm@11.21.1 stage publish <archive> --access public`; the owner approves it with 2FA on npmjs.com.
+7. **Grok Bot template.** Update the public template from `template/grok-bot.json` following `docs/GROK_BOT_TEMPLATE.md`, then run `python3 scripts/check_public_template.py --live`. If the share link changes, update it in the README, FAQ and template file, and set it as the repository homepage: `gh repo edit galleonlabs/hypergrok-trading-desk --homepage <link>`.
+8. **Prove it.** In an empty directory, run `SETUP.md` section 1 verbatim: clone the tag, then `bash scripts/check.sh`.
 
-   `python3 scripts/release_bump.py X.Y.Z --dry-run` previews explicit install-pin and manifest edits plus the template hash sync without changing files. Version-changing writes refuse ambiguous prose tags and backticked versions before any mutation. Reconcile those claims manually using actual release evidence; never turn a dated publication or verification into a claim about an unreleased version. The existing manifest checker remains authoritative. After manual reconciliation, run without `--dry-run` to apply safe pins and run `bash scripts/check.sh`. The files are replaced together or not at all: a failed write restores any file already replaced, while a failing check leaves the applied edits in place for review. Bare prose versions are listed for review, never rewritten. Steps 1 and 3 stay manual. Every mode refuses an existing effective target tag, including an explicit same-version argument. Missing or broken Git in a checkout fails closed; unpacked packages without Git metadata remain supported. Use a trusted, quiescent checkout: the helper executes its local check script and rejects symlinks that leave the checkout, linked or hardlinked files it reads or writes, and escaping hash paths before writing; it is not a sandbox for untrusted code or concurrent filesystem changes.
-
-5. Run `bash scripts/check.sh`, then commit, then tag: `git tag -a vX.Y.Z -m "..." && git push origin main vX.Y.Z`.
-6. Publish a GitHub release for the tag, re-author the public Grok Bot template from `template/grok-bot.json` (`templateSkillNames` lists the exported bootstrap; `skills` retains all seventeen files installed from the release), and run `python3 scripts/check_public_template.py --live` so its logged-out profile and deep link are proved against the same release contract. When the share link changes, also set it as the GitHub repository homepage (`gh repo edit galleonlabs/hypergrok-trading-desk --homepage <link>`). Gemini CLI installs the latest GitHub release and, when that release has exactly one asset, installs the asset instead of the tagged source; it extracts only `.tar.gz` and `.zip`. Do not attach the npm archive as a release's only asset.
-7. Publish the npm resource package through the `publish.yml` workflow, which authenticates with npm trusted publishing and uses no npm token. It runs only from `main`, requires successful CI on the exact commit and, for a real publish, the `vX.Y.Z` tag on that commit, so run it before `main` moves on. It packs the archive, verifies its contents and bytes with `scripts/check_npm_package.py`, runs `scripts/check.sh` in the unpacked package, publishes that archive and compares the registry integrity with it. Check first with the default dry run: `gh workflow run publish.yml -R galleonlabs/hypergrok-trading-desk`, then add `-f dry_run=false`. The npm package is instructions/resources, not an exchange executor, and has no install lifecycle hooks or dependencies.
-
-   **First release under trusted publishing:** the owner creates the trusted publisher with 2FA, then the release must follow within 2 days, because npm expires a configuration that has not completed a publish by then. A 2FA-bypass token cannot do this. From the home directory, not the personal workspace, whose `.npmrc` would override the login:
-
-   ```bash
-   U=$(mktemp); npm login --userconfig "$U" --auth-type=web && npm trust github hypergrok-trading-desk --userconfig "$U" --repo galleonlabs/hypergrok-trading-desk --file publish.yml --env npm-release --allow-publish --yes; rm -f "$U"
-   ```
-
-   Once that release has landed, set the package's npm **Settings → Publishing access** to "Require two-factor authentication and disallow tokens".
-
-   If Actions is unavailable, stage the reviewed archive from a trusted local machine with `npx -y npm@11.21.1 stage publish <archive> --access public`; it goes live only when the owner approves it with 2FA on npmjs.com. npm removes direct publishing by 2FA-bypass tokens around January 2027.
-8. Verify the published instructions actually work by running section 1 verbatim in an empty directory: clone the tag, then `bash scripts/check.sh` inside it.
-
-The tag must contain a `SETUP.md` that pins to that same tag. If step 4 is skipped, the release ships instructions pointing at the previous one, so the check enforces it rather than leaving it to whoever cuts the release: step 2 without step 4 fails the build, and so does a pin that names a moving branch or no ref at all.
-
-Version numbers are for this repository's instruction set, not for anything it installs. There is no `v1.0.0` tag: the 1.0.0 entry in the changelog is this markdown desk, while the tag of that name pointed at an earlier, unrelated Python CLI on a lineage that is not an ancestor of `main` (`53aae9f`). It was removed in 1.1.0. `v1.1.0` is the first tag that matches what this repository ships.
+Versions number this repository's instruction set, not anything it installs. `v1.1.0` is the first tag: the 1.0.0 changelog entry describes this desk, but the tag of that name pointed at an unrelated earlier project and was removed.
 
 ## Credit and reuse
 
-Retain existing authorship and license notices in contributions and derived work. [ATTRIBUTION.md](ATTRIBUTION.md) explains MIT notice requirements and offers an optional visible credit line.
+Keep existing authorship and licence notices in contributions and derived work. [ATTRIBUTION.md](ATTRIBUTION.md) explains the MIT notice and offers an optional credit line.

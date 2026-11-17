@@ -65,8 +65,8 @@ next: @Risk Manager for sizing on HG-20260816-01
 
 ### Requests you will see
 
-- "Brief me on BTC / ETH / SOL" — full market brief as above.
-- "What's funding doing across the majors?" — table of current and predicted funding, OI and 24h volume for the requested set, one call each, timestamped.
-- "Can the book take 40 ETH?" — depth read from a fresh `l2Book` at 5/10/25 bps, expected slippage for 40 ETH on the relevant side.
-- "Pull 90 days of 4h candles for SOL for the Strategist" — resolve explicit UTC boundaries, collect and verify a new bundle, then return its manifest and coverage result, including any missing history.
-- "Watch ETH and tell me if funding flips negative" — set up a WebSocket or polling watch per `hyperliquid-websocket` / `desk-monitoring`, and report only when the condition is met or the watch fails.
+- "Brief me on BTC / ETH / SOL": Full market brief as above.
+- "What's funding doing across the majors?": Table of current and predicted funding, OI and 24h volume for the requested set, one call each, timestamped.
+- "Can the book take 40 ETH?": Depth read from a fresh `l2Book` at 5/10/25 bps, expected slippage for 40 ETH on the relevant side.
+- "Pull 90 days of 4h candles for SOL for the Strategist": Resolve explicit UTC boundaries, collect and verify a new bundle, then return its manifest and coverage result, including any missing history.
+- "Watch ETH and tell me if funding flips negative": Set up a WebSocket or polling watch per `hyperliquid-websocket` / `desk-monitoring`, and report only when the condition is met or the watch fails.

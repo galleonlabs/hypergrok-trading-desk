@@ -33,8 +33,8 @@ flx    USDH                200.00     $199.80           0
 1 other DEX empty.
 
 Positions
-  ETH  long 0.1 @ 3,000.00 · value 300.10 · uPnL +0.10 · cross 20x · liq none
-  xyz:TSLA  short 2.0 @ 250.00 · value 490.00 · uPnL +10.00 · isolated 10x · liq 300.00
+  ETH       long  0.1 @ 3,000.00 · value 300.10 · uPnL  +0.10 · cross 20x    · liq none
+  xyz:TSLA  short 2.0 @   250.00 · value 490.00 · uPnL +10.00 · isolated 10x · liq 300.00
 
 Spot        $180.00 across 2 balances
 Equity      perps $1,699.80 + spot $180.00 = $1,879.80
@@ -66,7 +66,7 @@ total_usd  = sum of dex_usd over every DEX + spot_usd
 
 In the `unifiedAccount` and `portfolioMargin` modes, one balance backs spot and perps, and Hyperliquid documents that `spotClearinghouseState` then holds all balances and that per-DEX user states are not meaningful. Adding them would count collateral twice, so the script reports the positions, per-DEX states and spot value with `total_usd` null. It does the same for any other mode, including the discontinued DEX abstraction.
 
-Not included: staked HYPE, vault deposits and sub-accounts, which have their own reads in `hyperliquid-account`. Reads are sequential, so prices can move between them.
+Not included: staked HYPE, vault deposits and sub-accounts, which have their own reads in `hyperliquid-account`. Reads are separate requests, so prices can move between them.
 
 ## Comparing with the Hyperliquid app
 

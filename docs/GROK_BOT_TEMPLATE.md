@@ -80,7 +80,7 @@ Do not describe the template as a zero-interaction installer. **Add to Grok Bot*
 
 ## Publication verification - 2026-11-16
 
-The [1.8.0 public template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) was authored from the v1.8.0 release tag at commit `0a1f9c0e3a1aae9b2ec10e1ef6976b6ce4e3536b`. The Bot behind the 1.7.1 share could no longer be opened from grok.com, so a fresh Bot and link were used; keep this Bot so the next release can use **Update template**. The publishing Bot has the manifest name, title and description and the default geometric avatar. The template Context panel holds the public description and one skill, `hypergrok-bootstrap`; no plugins, memories or routines are exported.
+The [1.8.0 public template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) was authored from the 1.8.0 release at commit `0a1f9c0e3a1aae9b2ec10e1ef6976b6ce4e3536b`. The Bot behind the 1.7.1 share could no longer be opened from grok.com, so a fresh Bot and link were used; keep this Bot so the next release can use **Update template**. The publishing Bot has the manifest name, title and description and the default geometric avatar. The template Context panel holds the public description and one skill, `hypergrok-bootstrap`; no plugins, memories or routines are exported.
 
 Independent native readback opened **View Details → Context → hypergrok-bootstrap** in the staged template before publishing and hashed the complete rendered content. The source name and description matched. The normalized Markdown body matched the source: 9,658 UTF-8 bytes, SHA-256 `ac93ae90e94db3f259572029e134ef7eaa618bc0f7cf8479500a3ba089c11067`. The logged-out preview shows **HyperGrok Desk Lead**, the 1.8.0 description and **Add to Grok Bot**.
 

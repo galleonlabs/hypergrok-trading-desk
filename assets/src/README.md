@@ -16,4 +16,6 @@ python3 -m venv /tmp/hg-fonts && /tmp/hg-fonts/bin/pip install fonttools brotli
 /tmp/hg-fonts/bin/python assets/src/build_graphics.py --fonts <font-directory>
 ```
 
+`record_opening_bell.py` re-records `assets/opening-bell.gif` from a live run of `scripts/opening_bell.py --coin ETH`. It needs Pillow and a monospace font: `python3 assets/src/record_opening_bell.py --font /System/Library/Fonts/Menlo.ttc`. Update the capture time under the image in `README.md` afterwards.
+
 The stages, owners and timeline live in `STAGES` and `STOPS`, and the banner line in `TAGLINE`. Stages and owners must match the trade path in `README.md` and `docs/ARCHITECTURE.md`; change them together.

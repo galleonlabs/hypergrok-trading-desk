@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -91,6 +93,49 @@ class ExchangeWriteGateTest(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertIsNone(gate.decide(bash(command)))
+
+    def test_any_receiver_asks_once_the_text_builds_an_exchange_client(self):
+        for command in (
+            "node -e \"const client = new hl.ExchangeClient({ wallet, transport }); await client.order({ orders, grouping: 'na' })\"",
+            "python3 - <<'PY'\nfrom hyperliquid.exchange import Exchange\nclient = make()\nclient.usd_transfer(10, dest)\nPY",
+            "python3 -c 'c = Exchange(wallet, constants.MAINNET_API_URL); c.market_open(\"ETH\", True, 1)'",
+        ):
+            with self.subTest(command=command):
+                self.assertAsks(bash(command))
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "send.ts"), "w", encoding="utf-8") as handle:
+                handle.write('import { ExchangeClient, HttpTransport } from "@nktkas/hyperliquid";\nawait client.order({ orders });\n')
+            self.assertIn("order()", self.assertAsks(bash("npx tsx send.ts # ticket", cwd=directory)))
+        # Without an exchange client in the text an unrelated receiver stays quiet, and so does the gate's own source.
+        self.assertIsNone(gate.decide(bash("python3 -c 'client.order(1); task.cancel()'")))
+        self.assertIsNone(gate.decide(bash("python3 hooks/exchange_write_gate.py < event.json")))
+
+    def test_joined_exchange_paths_ask(self):
+        for command in (
+            'curl -s -X POST "$HL_URL/exchange" -d @signed.json',
+            'curl -s -X POST "$HL"/exchange -d @signed.json',
+            'curl -s -X POST "${HL}"/exchange -d @signed.json',
+            'node -e "const c = new hl.ExchangeClient({ wallet }); c.cDeposit2({ wei: 1 })"',
+            "python3 -c 'requests.post(urljoin(BASE, \"/exchange\"), json=payload)'",
+            "python3 -c 'self.post(\"/exchange\", payload)'",
+            "node -e 'fetch(BASE + `/exchange`, opts)'",
+        ):
+            with self.subTest(command=command):
+                self.assertAsks(bash(command))
+        self.assertIsNone(gate.decide(bash("grep -rn '/exchange' docs/")))
+
+    def test_a_crash_inside_the_gate_asks_instead_of_staying_silent(self):
+        for tool, asks in (("Bash", True), ("Edit", True), ("Read", False)):
+            event = json.dumps({"tool_name": tool, "tool_input": {"command": "ls", "file_path": "x"}})
+            with self.subTest(tool=tool), patch.object(gate, "decide", side_effect=RuntimeError("boom")), \
+                    patch.object(sys, "stdin", io.StringIO(event)), redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(gate.main(), 0)
+            if asks:
+                decision = json.loads(output.getvalue())["hookSpecificOutput"]
+                self.assertEqual(decision["permissionDecision"], "ask")
+                self.assertNotIn("boom", decision["permissionDecisionReason"])
+            else:
+                self.assertEqual(output.getvalue(), "")
 
     def test_exchange_host_is_case_insensitive_and_reads_stay_quiet(self):
         self.assertAsks(bash("curl -s -X POST https://api.hyperliquid.XYZ/exchange -d @signed.json"))
@@ -365,10 +410,14 @@ class StandingMandateGateTest(unittest.TestCase):
 
     def test_bash_writes_to_the_desk_record_ask(self):
         for command in ("echo '- max leverage: 10x' >> trading-desk/desk.md", "sed -i '' 's/3x/10x/' desk.md",
-                        "cp /tmp/new.md desk.md", "python3 -c \"open('desk.md','a').write('x')\""):
+                        "cp /tmp/new.md desk.md", "python3 -c \"open('desk.md','a').write('x')\"",
+                        "echo x >| desk.md", "cat new.md > Desk.md", "rsync new.md desk.md",
+                        "python3 -c \"shutil.copy('new.md', 'DESK.MD')\"", "node -e \"fs.appendFileSync('desk.md', x)\""):
             with self.subTest(command=command):
                 self.assertIn("desk.md", self.reason(gate.decide(bash(command))))
-        for command in ("cat desk.md", "grep -n mandate trading-desk/desk.md", "python3 scripts/standing_mandate.py --desk-root trading-desk"):
+        upper = {"tool_name": "Write", "tool_input": {"file_path": os.path.join(self.desk, "Desk.md"), "content": mandate_record()}}
+        self.assertIn("desk.md", self.reason(gate.decide(upper)))
+        for command in ("cat desk.md", "cat desk.md 2>/dev/null | head", "grep -n mandate trading-desk/desk.md", "python3 scripts/standing_mandate.py --desk-root trading-desk"):
             with self.subTest(command=command):
                 self.assertIsNone(gate.decide(bash(command)))
 

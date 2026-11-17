@@ -3,7 +3,7 @@ name: desk-execution-protocol
 description: The Execution Trader's procedure for turning an approved ticket into one Hyperliquid action and reconciling it - the pre-send checklist, order construction rules, single-send discipline, unknown-result handling and the execution report. Use before and after every send, cancel, modify, leverage change or close.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   author: Galleon Labs
   category: desk
 ---
@@ -58,7 +58,7 @@ Immediately after the response, and again when fills arrive:
 - `userFills` (or `userFillsByTime` for the window): fill price, size, fee, `crossed` (taker or maker), timestamp.
 - `clearinghouseState`: position size, entry, leverage, liquidation price, margin used.
 
-Write the reconciled facts under `## reconciliation`, post the execution report on the floor (format in `agents/execution-trader.md`), and DM the Trade Reviewer with the id and the report.
+Write the reconciled facts under `## reconciliation`, post the execution report on the floor (the block in `agents/execution-trader.md`: sent, response, reconciled, fees/funding, next), and DM the Trade Reviewer with the id and the report. The raw response stays in the proposal file, not in chat.
 
 Update the risk reservation with those same facts. A resting remainder or unknown send retains its allocation; a cancellation response alone does not free it. Filled exposure moves into the position calculation, and only reconciled unused capacity is released. Record the change so a restarted desk can reconstruct it from proposals and the exchange.
 
@@ -75,10 +75,6 @@ Each is its own ticket (suffix `-B`, `-C`...) with its own PASS and approval by 
 ## Rehearsal rule
 
 Any action type the desk has not performed before (first TP/SL bracket, first modify, first close, first isolated-margin trade) is rehearsed on testnet with the same ticket format before it is done on mainnet. Record the rehearsal in the journal. A user who writes a standing mandate has chosen not to require this for actions inside it; the desk still recommends a rehearsal and does not block on it.
-
-## Report
-
-Post the block from `agents/execution-trader.md` on the floor: sent, response, reconciled, fees/funding, next. Keep the raw response in the proposal file, not in chat.
 
 ## Never
 

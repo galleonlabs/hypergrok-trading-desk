@@ -2,7 +2,17 @@
 
 ## Unreleased
 
-+ Publish the 1.8.0 native Grok Bot template on a new share, https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr, with its exported bootstrap independently read back and matched to the release. The 1.7.1 and 1.7.0 shares keep installing their own releases.
+## 1.9.0 - 2026-11-17
+
+A quality sweep across the tools, skills, roles and docs. No approval, key or risk boundary was loosened.
+
++ **Tools.** Opening Bell and the account read print prices below 1 instead of `0.00` (`--coin kPEPE`). An unknown coin now says where to look (`tsla is not listed in the main perp universe; a HIP-3 market needs its DEX prefix, e.g. xyz:TSLA`). Timeouts, refused connections and HTTP 500s read as plain sentences instead of urllib wrapper text. The account read fetches DEXs four at a time (about 3s instead of 9s for 11 DEXs), aligns positions and labels the default mode `STANDARD MODE (abstraction disabled)`. The doctor counts skips separately and fails clearly on a missing `--desk-root`. The stop cost, dataset and mandate tools get clearer sizes, labels and errors.
++ **Exchange-write gate.** It now asks in five cases it missed: a crash inside the gate, a write on any receiver once the text builds or imports an `Exchange` client, `Desk.md` in any letter case, more ways of writing the desk record (`>|`, `rsync`, `shutil`, `appendFile`), and raw `/exchange` posts built from a variable or `urljoin`. `cDeposit2` joins the write list. Every change makes it ask more, never less.
++ **Hyperliquid skills** rechecked against the live API and official docs: book reach, agent-signable staking and abstraction actions (forbidden by desk rule), `modify` converting to post-only, the WebSocket 60-second rule, batch and daily action limits, partial liquidation steps, HIP-4 ids and missing response fields. Details in `docs/PROVENANCE.md`. SDK pins are unchanged and still current.
++ **Desk skills and roles** now agree with each other and with the scripts: the workspace tree, who writes `risk-limits.md` (the Risk Manager, only on the user's own quoted instruction), who journals a mandate suspension (the Trade Reviewer, while the Risk Manager rejects new mandate tickets at once), the eight-item pre-send checklist, and a fresh ticket after an unknown send. The worked example's review now adds up: fees $0.89, funding $0.31 over 17.1h, +$42.05 = +0.87R, with the take-profit placed on its own `-B` ticket.
++ **Docs.** A shorter README with the runtimes beside the Grok Bot start, a tools table and a freshly recorded Opening Bell (`assets/src/record_opening_bell.py` re-records it). `CONTRIBUTING.md` is cut to the rules, checks and release steps.
++ 24 CLI journeys (three new: unknown market, unreachable API, printed output). Skill versions: `desk-execution-protocol` 1.2.1, `desk-incident-response` 1.2.1, `desk-operating-model` 1.2.1, `desk-post-trade-review` 1.1.1, `desk-risk-limits` 1.2.1, `hypergrok-bootstrap` 1.0.15, `hyperliquid-account` 1.0.3, `hyperliquid-advanced` 1.1.2, `hyperliquid-api-reference` 1.0.2, `hyperliquid-market-data` 1.2.3, `hyperliquid-orders` 1.2.1, `hyperliquid-positions` 1.2.1, `hyperliquid-setup` 1.0.3, `hyperliquid-websocket` 1.0.2. Template skill hashes are synced at release.
++ Publish the 1.8.0 native Grok Bot template on a new share, https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr, with its exported bootstrap independently read back and matched to the release. That share keeps its verified 1.8.0 bootstrap until the template is updated; direct pinned and package installs carry 1.9.0.
 
 ## 1.8.0 - 2026-11-16
 

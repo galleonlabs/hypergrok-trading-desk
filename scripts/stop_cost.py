@@ -31,8 +31,10 @@ from cli_contract import (
     add_network_arguments,
     describe,
     emit_error,
+    failure_text,
     market_selection,
     network_settings,
+    price,
 )
 from opening_bell import (
     COARSER_RESOLUTIONS,
@@ -252,14 +254,6 @@ def fetch_report(coin: str, base_url: str, network: str, timeout: float, plan: d
     return build_report(meta, coin, read_page, network, base_url, plan)
 
 
-def price(value: Decimal) -> str:
-    """Two decimals from 1 up; four significant figures, never an exponent, below."""
-    if abs(value) >= 1 or value == 0:
-        return f"{value:,.2f}"
-    rounded = value.quantize(Decimal(1).scaleb(value.adjusted() - 3)).normalize()
-    return f"{rounded:.2f}" if rounded.as_tuple().exponent > -2 else f"{rounded:f}"
-
-
 def usd(value: Decimal) -> str:
     return f"${value:,.2f}"
 
@@ -292,7 +286,7 @@ def render(report: dict) -> str:
         "",
         f"Plan        entry {price(entry)} · stop {price(stop)} · risk {Decimal(inputs['risk_pct']):g}% of {usd(Decimal(inputs['equity']))} = {usd(d['risk_usd'])}",
         f"Book now    mark {price(Decimal(book['mark']))} · spread {Decimal(book['spread_bps']):,.1f} bps",
-        f"            {Decimal(book['size_walked']):.{places}f} {unit} {verb}: {impact_text}",
+        f"            {Decimal(book['size_walked']):,.{places}f} {unit} {verb}: {impact_text}",
         f"Stop fill   {price(d['stop_fill'])} = {price(stop)} {sign} {price(d['slip'])} slippage"
         f" ({d['slip_bps']:,.1f} bps of entry, {slip_label(sizing['slip_source'], Decimal(inputs['slip_floor_bps']))})",
         f"Fees        {price(d['fees_per_unit'])} per {unit} = ({price(entry)} + {price(d['stop_fill'])}) x {Decimal(inputs['taker_fee_pct']):g}% taker, both legs",
@@ -309,7 +303,7 @@ def render(report: dict) -> str:
                        if over > 0 else "under $0.01 over budget")
         else:
             verdict = "within budget" if complete else "budget unproven: the book read is too shallow"
-        rows.append((label, f"{row['size']:.{places}f} {unit}", usd(row["loss_if_triggered"]),
+        rows.append((label, f"{row['size']:,.{places}f} {unit}", usd(row["loss_if_triggered"]),
                      f"{row['loss_pct_of_equity']:.3f}%", verdict))
     header = ("Sized on", "size", "stop costs", "of equity", "")
     widths = [max(len(row[i]) for row in (header, *rows)) for i in range(4)]
@@ -405,7 +399,7 @@ def main(argv=None) -> int:
     except UnpriceableStop as exc:
         code, heading, error = "unpriceable_stop", "Stop cannot be priced", exc
     except (OSError, ValueError, KeyError, TypeError, DecimalException, OverflowError) as exc:
-        code, heading, error = "source_unavailable", "Stop cost unavailable", exc
+        code, heading, error = "source_unavailable", "Stop cost unavailable", failure_text(exc)
     else:
         print(json.dumps(report, indent=2, sort_keys=True) if args.json else render(report))
         return 0

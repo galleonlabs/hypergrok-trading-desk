@@ -1,6 +1,6 @@
 # Skills
 
-Seventeen skills in the portable `SKILL.md` format (`name` and `description` frontmatter, body under 320 lines). Grok Bot installs them as shared skills from the pinned checkout. The [runtime guides](../README.md#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli) cover plugin and extension installation in Grok Build, Cursor, Claude Code, Codex and Gemini CLI. Start with `desk-operating-model`; install `hypergrok-bootstrap` to build the native Grok Bot desk.
+Seventeen skills in the portable `SKILL.md` format (`name` and `description` frontmatter, body under 320 lines). Grok Bot installs them as shared skills from the pinned checkout. The [runtime guides](../README.md#other-runtimes) cover plugin and extension installation in Grok Build, Cursor, Claude Code, Codex and Gemini CLI. Start with `desk-operating-model`; install `hypergrok-bootstrap` to build the native Grok Bot desk.
 
 ## Bootstrap
 

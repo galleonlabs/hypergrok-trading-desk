@@ -3,7 +3,7 @@ name: hyperliquid-positions
 description: Manage Hyperliquid perp positions and margin from the desk computer - read positions and margin, set leverage and cross/isolated mode, add isolated margin, understand margin tiers and liquidation price, close a position with a reduce-only IOC, and clean up orphaned orders. Write actions are Execution Trader only, on an approved or mandate-covered ticket. Use for leverage changes, closes, protection checks and margin questions.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -16,9 +16,9 @@ Reads here are for everyone (Risk Manager first); the write actions (`updateLeve
 ## Concepts
 
 - **Cross margin** (default): all cross positions share the account's margin, and unrealised PnL counts as margin; liquidation is account-wide. **Isolated margin:** the position has its own margin; only that margin is at risk, and you can add to or remove from it (some markets are `strictIsolated` and refuse removal; HIP-3 markets may be `noCross`).
-- **Leverage** is set per market and per mode with `updateLeverage`; it caps position size against margin, it is not "how much you win". Max leverage is per market and **tiered by notional** (see margin tiers).
+- **Leverage** is set per market and per mode with `updateLeverage`; it caps position size against margin. Max leverage is per market and **tiered by notional** (see margin tiers).
 - **Margin tiers:** each perp has a margin table (`meta.marginTables`, matched to the asset via `marginTableId`) listing notional thresholds and the max leverage allowed above each. Bigger positions get less leverage.
-- **Maintenance margin** is half of the initial margin at the max leverage of the applicable tier (so between 1.25% for a 40x market and 16.7% for a 3x market); liquidation happens when account (cross) or position (isolated) equity falls below maintenance margin, on **mark** price. Large positions are liquidated partially first; the cross liquidation price does not depend on your leverage setting.
+- **Maintenance margin** is half of the initial margin at the max leverage of the applicable tier (so between 1.25% for a 40x market and 16.7% for a 3x market); liquidation happens when account (cross) or position (isolated) equity falls below maintenance margin, on **mark** price. Positions above 100k USDC (10k on testnet) are liquidated 20% at a time first; the cross liquidation price does not depend on your leverage setting.
 - **Liquidation price** is reported by the exchange per position (`liquidationPx`); use that, do not recompute.
 - **Funding** is exchanged every hour between longs and shorts at the market's funding rate; it changes equity while a position is open.
 - **Closing** is an order in the opposite direction with `reduceOnly`. Full close at market: reduce-only IOC at a slippage-bounded price for the live position size.
@@ -47,7 +47,7 @@ curl -sS -X POST $BASE/info -H 'Content-Type: application/json' -d '{"type":"met
                  else ((.marginTables[] | select(.[0]==$id) | .[1].marginTiers) // [{lowerBound:"0.0", maxLeverage:$u.maxLeverage}]) end)}'
 ```
 
-`marginTables` is a list of `[id, {description, marginTiers: [{lowerBound, maxLeverage}, ...]}]` for ids of 50 and above; the tier whose `lowerBound` (position notional in USD) is the largest one at or below your notional applies. Ids below 50 are single-tier tables whose max leverage equals the id and they are **not** listed in `marginTables` (most altcoins), which the snippet handles. Testnet tiers are far tighter than mainnet (BTC drops from 40x above only 10k notional on testnet), which is one reason testnet rehearsals differ from mainnet.
+`marginTables` is a list of `[id, {description, marginTiers: [{lowerBound, maxLeverage}, ...]}]` for ids of 50 and above; the tier whose `lowerBound` (position notional in USD) is the largest one at or below your notional applies. Ids below 50 are single-tier tables whose max leverage equals the id and they are **not** listed in `marginTables` (most altcoins), which the snippet handles. Testnet tiers are far tighter than mainnet (BTC drops from 40x to 25x above only 10k notional on testnet), so a testnet rehearsal does not prove mainnet leverage.
 
 Python equivalents: `info.user_state(ADDR)`, `info.meta()`; the header from `hyperliquid-orders` applies.
 

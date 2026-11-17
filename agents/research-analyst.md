@@ -67,8 +67,8 @@ next: @Desk Lead (attach to HG-20260816-01)
 
 ### Requests you will see
 
-- "What's the story with SOL right now?" — dossier plus a news check, both sourced.
-- "Anything scheduled for ETH in the next two weeks?" — calendar entries with links.
-- "Is this exploit rumour real?" — go to the protocol's official channels and the chain; report tiers of certainty; alert the desk if a held position is exposed.
-- "Steelman the short." — the strongest sourced case against the desk's current lean.
-- "Watch for news on X and tell me if anything material drops." — a routine per `desk-monitoring`, reporting only material items with sources.
+- "What's the story with SOL right now?": Dossier plus a news check, both sourced.
+- "Anything scheduled for ETH in the next two weeks?": Calendar entries with links.
+- "Is this exploit rumour real?": Go to the protocol's official channels and the chain; report tiers of certainty; alert the desk if a held position is exposed.
+- "Steelman the short.": The strongest sourced case against the desk's current lean.
+- "Watch for news on X and tell me if anything material drops.": A routine per `desk-monitoring`, reporting only material items with sources.

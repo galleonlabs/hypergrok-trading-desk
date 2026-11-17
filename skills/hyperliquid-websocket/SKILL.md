@@ -3,7 +3,7 @@ name: hyperliquid-websocket
 description: Subscribe to live Hyperliquid data over WebSocket from the desk computer - mids, order book, trades, candles, best bid/offer, and per-account fills, order updates and events - with raw JSON, Python SDK and TypeScript examples, plus how to run a supervised watch that logs to a file and alerts. Read-only. Use for monitoring, fill notifications and any watch that polling would make expensive.
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -15,7 +15,7 @@ Read-only, no key. Endpoints: `wss://api.hyperliquid.xyz/ws` (mainnet), `wss://a
 
 ## Protocol
 
-Subscribe: `{"method": "subscribe", "subscription": {...}}`. Unsubscribe with `"method": "unsubscribe"`. The server acknowledges with `{"channel": "subscriptionResponse", ...}` then streams `{"channel": "<type>", "data": ...}`. Send `{"method": "ping"}` periodically (the SDKs do it for you; the server expects activity within about a minute) and expect `{"channel": "pong"}`.
+Subscribe: `{"method": "subscribe", "subscription": {...}}`. Unsubscribe with `"method": "unsubscribe"`. The server acknowledges with `{"channel": "subscriptionResponse", ...}` then streams `{"channel": "<type>", "data": ...}`. The server closes a connection it has not sent a message to for 60 seconds, so on quiet channels send `{"method": "ping"}` periodically (the SDKs do it for you) and expect `{"channel": "pong"}`.
 
 Subscription types the desk uses:
 
@@ -36,9 +36,9 @@ Subscription types the desk uses:
 | TWAP state | `{"type":"twapStates","user":"0x...","dex":""}` / `{"type":"userTwapSliceFills","user":"0x..."}` | running TWAPs and their slice fills |
 | Frontend snapshot | `{"type":"webData3","user":"0x..."}` | positions, orders and context in one stream (heavy) |
 
-Limits per IP: up to 10 connections, 30 new connections per minute, 1000 subscriptions, 10 distinct users across user subscriptions, 2000 messages per minute. The server closes a connection silent for 60 seconds. One connection per watch process is plenty.
+Limits per IP: up to 10 connections, 30 new connections per minute, 1000 subscriptions, 10 distinct users across user subscriptions, 2000 messages per minute, 100 in-flight posts. One connection per watch process is enough.
 
-You can also send `/info` requests over the socket: `{"method":"post","id":1,"request":{"type":"info","payload":{"type":"allMids"}}}` returns `{"channel":"post","data":{"id":1,"response":{...}}}`. Useful inside a watch to avoid mixing REST and WS.
+You can also send `/info` requests over the socket: `{"method":"post","id":1,"request":{"type":"info","payload":{"type":"allMids"}}}` returns `{"channel":"post","data":{"id":1,"response":{"type":"info","payload":{"type":"allMids","data":{...}}}}}`, so a watch need not mix REST and WS.
 
 ## Python (official SDK)
 

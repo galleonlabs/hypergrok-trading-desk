@@ -140,6 +140,44 @@ class AccountReadTest(unittest.TestCase):
         self.assertNotIn("unpriced", rendered)
         self.assertIn("$0.00", equity_line(built))
 
+    def test_render_names_standard_mode_and_never_prints_a_negative_zero(self):
+        dust = {**LONG, "coin": "kPEPE", "szi": "-1500", "entryPx": "0.003863", "unrealizedPnl": "-0.004", "liquidationPx": "0.0051234"}
+        text = account_read.render(report("disabled", {"": state("10", [LONG, dust])}))
+        self.assertIn("STANDARD MODE (abstraction disabled)", text)
+        self.assertNotIn("DISABLED MODE", text)
+        self.assertIn("  ETH    long    0.1 @ 3,000.00 · value 300.00 · uPnL 0.00 · cross 5x · liq none", text)
+        self.assertIn("  kPEPE  short 1,500 @ 0.003863 · value 300.00 · uPnL 0.00 · cross 5x · liq 0.005123", text)
+        self.assertNotIn("-0.00", text)
+        self.assertIn("DEFAULT MODE", account_read.render(report("default", {"": state("10")})))
+
+    def test_per_dex_reads_keep_their_dex_whatever_order_they_finish_in(self):
+        import time
+        names = ["", "aaa", "bbb", "ccc", "ddd", "eee"]
+        states = {name: state(str(index + 1)) for index, name in enumerate(names)}
+        built = report("default", states)
+        slow = dict(states)
+
+        def read(payload):
+            if payload["type"] == "clearinghouseState" and payload.get("dex", "") in ("", "aaa"):
+                time.sleep(0.05)  # the first DEXs answer last
+            if payload["type"] == "perpDexs":
+                return [None, *({"name": name} for name in names if name)]
+            if payload["type"] == "userAbstraction":
+                return "default"
+            if payload["type"] == "clearinghouseState":
+                return slow[payload.get("dex", "")]
+            if payload["type"] == "spotClearinghouseState":
+                return {"balances": []}
+            if payload["type"] == "spotMetaAndAssetCtxs":
+                return [{"tokens": [{"name": "USDC", "index": 0}], "universe": []}, []]
+            return {"collateralToken": 0}
+
+        raw = account_read.read_account(read, ADDRESS)
+        self.assertEqual(list(raw["states"]), names)
+        again = account_read.build_report(raw, ADDRESS, "mainnet", "https://api.hyperliquid.xyz")
+        self.assertEqual([(dex["dex"], dex["account_value"]) for dex in again["dexes"]],
+                         [(dex["dex"], dex["account_value"]) for dex in built["dexes"]])
+
     def test_disabled_mode_sums_and_shared_modes_do_not(self):
         balances = [{"coin": "USDC", "token": 0, "total": "1", "hold": "0", "entryNtl": "0"}]
         separate = report("disabled", {"": state("10")}, balances=balances)

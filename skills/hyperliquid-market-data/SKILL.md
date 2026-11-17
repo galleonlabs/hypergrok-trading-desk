@@ -3,7 +3,7 @@ name: hyperliquid-market-data
 description: Read live Hyperliquid market data from the desk computer with curl or the Python SDK - mid, mark and oracle prices, order book depth, funding (current, predicted, historical), open interest, volume, candles, perp and spot metadata, margin tiers, and how to save datasets for the strategy lab. Read-only, no key. Use for any market brief, depth read, funding question or data pull.
 license: MIT
 metadata:
-  version: "1.2.2"
+  version: "1.2.3"
   author: Galleon Labs
   category: hyperliquid
   network-default: mainnet-for-reads
@@ -56,7 +56,7 @@ hl '{"type":"metaAndAssetCtxs"}' | jq -r '
   | [$m.name, $e.value.midPx, $e.value.markPx, $e.value.oraclePx, $e.value.funding, $e.value.openInterest, $e.value.dayNtlVlm, $e.value.premium, $m.maxLeverage, $m.szDecimals] | @tsv'
 ```
 
-Fields per asset (same order as `meta.universe`): `midPx`, `markPx`, `oraclePx`, `funding` (**hourly** rate as a decimal: `0.0000125` = 0.00125%/h), `openInterest` (coin units), `dayNtlVlm` (24h USD volume), `premium` (impact bid/ask versus oracle, the input to funding), `prevDayPx`, `impactPxs`. Universe fields: `name`, `szDecimals`, `maxLeverage`, `marginTableId`, `onlyIsolated`/`marginMode`, `isDelisted`.
+Fields per asset (same order as `meta.universe`): `midPx`, `markPx`, `oraclePx`, `funding` (**hourly** rate as a decimal: `0.0000125` = 0.00125%/h), `openInterest` (coin units), `dayNtlVlm` (24h USD volume), `dayBaseVlm` (24h volume in coin units), `premium` (impact bid/ask versus oracle, the input to funding), `prevDayPx`, `impactPxs`. Universe fields: `name`, `szDecimals`, `maxLeverage`, `marginTableId`, `onlyIsolated`/`marginMode`, `isDelisted`.
 
 Python: `meta, ctxs = info.meta_and_asset_ctxs()`.
 
@@ -81,7 +81,7 @@ hl '{"type":"l2Book","coin":"ETH"}' | jq '{time, bids: .levels[0][:5], asks: .le
 
 Up to 20 levels per side; each level is `{px, sz, n}` (`n` = number of orders). Optional `nSigFigs` (2-5) aggregates price levels; `mantissa` (1, 2 or 5) only with `nSigFigs: 5`.
 
-**Twenty levels is a page, not the book.** On a liquid perp those levels stop a few bps from the mid - around 8 bps on ETH and under 3 bps on BTC at normal spreads - so a 25 bps band summed from the default response is whatever the page happened to contain, not the depth within 25 bps. Read the reach before quoting a band: when the side came back with 20 levels and the furthest one is nearer than the band, the number is a floor. To reach further, re-request with `nSigFigs: 4`, which buckets prices coarsely enough to push 20 levels out to roughly 20-25 bps on a major perp (measured live: 82 bps ETH, 25 BTC, 24 HYPE, 20 SOL), and drop to `nSigFigs: 3` when even that stops short. Read each band off the finest page that reaches it - the coarse page moves the band edges by up to one bucket, and its top of book is not the real one - and say which page a figure came from. `scripts/opening_bell.py` is that ladder in code.
+**Twenty levels is a page, not the book.** On a liquid perp those levels stop a few bps from the mid (about 11 bps on ETH and 3 bps on BTC on 2026-11-17), so a 25 bps band summed from the default response is whatever the page happened to contain, not the depth within 25 bps. Read the reach before quoting a band: when the side came back with 20 levels and the furthest one is nearer than the band, the number is a floor. To reach further, re-request with `nSigFigs: 4`. Its bucket is one unit of the price's fourth significant figure, so 20 full levels reach between about 20 and 200 bps depending on the price's leading digits (measured 2026-11-17: 107 bps ETH near 1,817, 30 BTC, 28 HYPE, 27 SOL). Drop to `nSigFigs: 3` when that stops short. Read each band off the finest page that reaches it, because the coarse page moves the band edges by up to one bucket and its top of book is not the real one, and say which page a figure came from. `scripts/opening_bell.py` is that ladder in code.
 
 Depth within a band, the way the Risk Manager and Execution Trader want it:
 
@@ -141,7 +141,7 @@ hl '{"type":"predictedFundings"}' | jq -r '.[] | select(.[0]=="ETH") | .[1][] | 
 
 `fundingHistory` returns hourly rates (up to 500 per call; paginate from the last returned timestamp, retaining overlap and checking duplicates). For research, use `research_dataset.py --with-funding`: actual millisecond timestamps are preserved and coverage is checked by UTC hour bucket. Requests are paced; `--max-pages` bounds funding collection (default 100, range 1-250). A page limit, missing hour or failed read is not a complete dataset.
 
-`predictedFundings` compares venues, and the venue rates are over **different periods**, so never compare them raw. Every coin carries the same three slots in the same order - `BinPerp`, `HlPerp`, `BybitPerp` - but match on the venue name rather than the position, and each slot is either a payload or `null` when the coin is not listed on that venue. Divide `fundingRate` by the payload's own `fundingIntervalHours` to get a per-hour rate. `HlPerp` is always 1. A CEX interval is that payload's own `fundingIntervalHours`: 1, 4 or 8 hours depending on the coin, not a fixed 8. On mainnet on 2026-08-28, BinPerp was 4h for 126 coins and 8h for 63, BybitPerp 4h for 118 and 8h for 69. On 2026-11-12, `INIT` was 1h on both BinPerp and BybitPerp, while BTC, ETH and DOGE were still 8h, so an assumed 8 looks right on the majors, is wrong by 2x where the venue is 4h, and by 8x where it is 1h. A few BinPerp payloads omit `fundingIntervalHours` (19 on 2026-08-28; 21 on 2026-11-12, still including `TON`, `MKR` and `IP`). BybitPerp returned `null` for those three on 2026-11-12, which means unlisted, not a missing interval. Treat a missing interval as unknown and say so rather than defaulting it.
+`predictedFundings` compares venues whose rates cover **different periods**, so never compare them raw. Every coin carries three slots, `BinPerp`, `HlPerp` and `BybitPerp`; match on the venue name, not the position. Each slot is a payload, or `null` when the coin is not listed on that venue. Divide `fundingRate` by the payload's own `fundingIntervalHours` to get a per-hour rate. `HlPerp` is always 1; a CEX interval is 1, 4 or 8 hours depending on the coin, not a fixed 8. On mainnet on 2026-08-28, BinPerp was 4h for 126 coins and 8h for 63, BybitPerp 4h for 118 and 8h for 69. On 2026-11-12, `INIT` was 1h on both BinPerp and BybitPerp, while BTC, ETH and DOGE were still 8h, so an assumed 8 looks right on the majors, is wrong by 2x where the venue is 4h, and by 8x where it is 1h. A few BinPerp payloads omit `fundingIntervalHours` (19 on 2026-08-28; 21 on 2026-11-12, still including `TON`, `MKR` and `IP`). BybitPerp returned `null` for those three on 2026-11-12, which means unlisted, not a missing interval. Report a missing interval as unknown; never default it.
 
 Funding is paid every hour at `size x oracle price x hourly rate`; longs pay shorts when positive. Python: `info.funding_history(coin, start_ms)`.
 
@@ -158,7 +158,7 @@ Spot pairs are named `PURR/USDC` or `@<index>` on the API (the app shows `HYPE/U
 
 ## HIP-3 builder perps
 
-Other perp dexs exist beside the main one: `hl '{"type":"perpDexs"}'` lists them; coins are named `dex:COIN`, and `meta`, `metaAndAssetCtxs`, `clearinghouseState` accept `"dex": "<name>"`. The desk uses the default dex unless the user says otherwise.
+Other perp dexs exist beside the main one: `hl '{"type":"perpDexs"}'` lists them (the first entry is `null`, the main dex); coins are named `dex:COIN`, and `meta`, `metaAndAssetCtxs`, `allMids`, `clearinghouseState` accept `"dex": "<name>"`. An unknown dex name returns HTTP 500. The desk uses the default dex unless the user says otherwise.
 
 ## Brief format
 
@@ -166,7 +166,7 @@ Use the block in `agents/market-analyst.md`: sources and time on the first line,
 
 ## Rate limits
 
-REST shares an IP budget of 1200 weight per minute. `allMids`, `l2Book`, `clearinghouseState`, `orderStatus`, `spotClearinghouseState` and `exchangeStatus` cost 2; `userRole` costs 60; other documented `/info` requests cost 20. History/list endpoints add weight per 20 returned items, and `candleSnapshot` per 60 candles. Batch questions, pace pagination, and prefer `hyperliquid-websocket` for continuous data. HTTP 429 means back off; see the official rate-limit page before sizing a collector.
+REST shares an IP budget of 1200 weight per minute. `allMids`, `l2Book`, `clearinghouseState`, `orderStatus`, `spotClearinghouseState` and `exchangeStatus` cost 2; `userRole` costs 60; other documented `/info` requests cost 20. History/list endpoints add weight per 20 returned items, and `candleSnapshot` per 60 candles. Pace pagination and prefer `hyperliquid-websocket` for continuous data. HTTP 429 means back off; read the official rate-limit page before sizing a collector.
 
 ## Pitfalls
 

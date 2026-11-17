@@ -172,6 +172,14 @@ class StopCostTest(unittest.TestCase):
         self.assertRegex(output, r"Drawn stop +3 ETH")
         self.assertRegex(output, r"Stressed stop +2 ETH")
 
+    def test_render_groups_thousands_in_large_sizes(self):
+        deep = {**BOOK, "levels": [[{"px": "3000", "sz": "50000", "n": 1}], BOOK["levels"][1]]}
+        code, output, _ = run("--fixture-dir", fixture_dir(self, deep), "--entry", "3000", "--stop", "2900",
+                              "--equity", "50000000", "--risk-pct", "5")
+        self.assertEqual(code, 0)
+        self.assertIn("25,000.0000 ETH sold into the bids", output)
+        self.assertRegex(output, r"Drawn stop +25,000\.0000 ETH")
+
     def test_render_marks_a_shallow_read_as_unproven(self):
         thin = {**BOOK, "levels": [[{"px": "3000", "sz": "0.1", "n": 1}], BOOK["levels"][1]]}
         code, output, _ = run("--fixture-dir", fixture_dir(self, thin), *WORKED)

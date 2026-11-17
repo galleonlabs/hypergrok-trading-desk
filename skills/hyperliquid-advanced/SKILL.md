@@ -3,7 +3,7 @@ name: hyperliquid-advanced
 description: Less common Hyperliquid actions and their rules - dead-man's switch (scheduleCancel), TWAP orders, spot orders, expiresAfter and nonces, API wallet approval from code, sub-account and vault addressing, HIP-3 dexs, and what the desk deliberately does not do (transfers, withdrawals, builder fees, staking). Write actions are Execution Trader only, on an approved ticket. Use when a ticket asks for one of these or when a user asks whether the desk can.
 license: MIT
 metadata:
-  version: "1.1.1"
+  version: "1.1.2"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -101,7 +101,7 @@ Read balances with `spotClearinghouseState` (`hyperliquid-account`). Spot has no
 
 ## Approving an API wallet from code
 
-The desk's normal path is the app (`hyperliquid-setup` section 4), because approval must be signed by the **main** wallet and that key never touches the desk computer. For completeness: `Exchange(main_wallet).approve_agent(name)` in Python generates a fresh agent key and returns `(result, agent_private_key)`; TypeScript `exchange.approveAgent({ agentAddress, agentName })` approves an address you generated. Named agents can carry an expiry via `"name valid_until <ms>"` (up to 180 days); an account may hold 1 unnamed and up to 3 named agents, plus 2 named per sub-account; re-approving the same name (or a new unnamed agent) replaces the previous key. Never reuse a revoked agent address.
+The desk's path is the app (`hyperliquid-setup` section 4), because approval must be signed by the **main** wallet and that key never touches the desk computer. For reference only: `Exchange(main_wallet).approve_agent(name)` in Python generates a fresh agent key and returns `(result, agent_private_key)`; TypeScript `exchange.approveAgent({ agentAddress, agentName })` approves an address you generated. Named agents can carry an expiry via `"name valid_until <ms>"` (up to 180 days); an account may hold 1 unnamed and up to 3 named agents, plus 2 named per sub-account; re-approving the same name (or a new unnamed agent) replaces the previous key. Never reuse a revoked agent address.
 
 ## Sub-accounts and vaults
 
@@ -113,7 +113,7 @@ Other perp dexs exist beside the main one (`perpDexs`). Coins are `dex:COIN`, as
 
 ## Rate limits and `reserveRequestWeight`
 
-Address-based limits for actions: a buffer of 10,000 plus 1 per 1 USDC of cumulative volume; when exhausted, 1 action per 10 seconds (cancels get extra headroom). Check `userRateLimit`. An account can buy more with `reserveRequestWeight` (0.0005 USDC each) - the desk does not do this automatically; mention it if the user hits the limit. Per-IP `/exchange` weight is `1 + floor(batch size / 40)`.
+Address-based limits for actions: a buffer of 10,000 plus 1 per 1 USDC of cumulative volume; when exhausted, 1 action per 10 seconds (cancels get extra headroom). A batch of n orders or cancels counts n times. Check `userRateLimit`. An account can buy more with `reserveRequestWeight` (0.0005 USDC each, paid from the perp balance). The desk does not do this automatically; mention it if the user hits the limit. Per-IP `/exchange` weight is `1 + floor(batch size / 40)`.
 
 ## Deliberately not on this desk
 
@@ -126,8 +126,8 @@ These exist in the API and SDKs; the desk does not use them, and the user does t
 | `usdClassTransfer` | move USDC between perp and spot balances |
 | `vaultTransfer`, `subAccountTransfer`, `createSubAccount` | move funds into or out of vaults and sub-accounts (L1-signed, so an API wallet technically can; the desk's rule is the guard) |
 | `approveBuilderFee`, `builder` on orders | let a builder charge a fee on your orders |
-| `cDeposit`, `cWithdraw`, `tokenDelegate` | HYPE staking |
-| `userSetAbstraction` and friends | change the account's margin mode |
+| `cDeposit`, `cWithdraw`, `tokenDelegate` | HYPE staking (`cDeposit2`, the agent deposit variant, is L1-signed, so an API wallet technically can; the desk's rule is the guard) |
+| `userSetAbstraction` and friends | change the account's margin mode (`agentSetAbstraction` is L1-signed and agent-capable; same guard) |
 
 If a ticket asks for one of these, the Execution Trader declines and the Desk Lead explains why (`desk-operating-model`, "Excluded on purpose").
 

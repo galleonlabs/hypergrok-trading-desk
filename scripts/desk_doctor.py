@@ -8,11 +8,18 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 
-from cli_contract import ReadOnlyParser, add_network_arguments, describe, emit_error, network_settings
+from cli_contract import (
+    ReadOnlyParser,
+    add_network_arguments,
+    describe,
+    emit_error,
+    failure_text,
+    network_label,
+    network_settings,
+)
 import standing_mandate
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -184,6 +191,8 @@ def check_repository(root: str) -> list[Check]:
 
 
 def check_workspace(root: str) -> list[Check]:
+    if not os.path.isdir(root):
+        return [Check("FAIL", "desk root", f"{root} is not a directory; pass the prepared trading-desk directory")]
     checks = []
     missing = [path for path in REQUIRED_DESK_DIRS if not os.path.isdir(os.path.join(root, path))]
     checks.append(result(not missing, "desk folders", "working folders present", f"missing: {', '.join(missing)}"))
@@ -232,19 +241,20 @@ def check_public_api(base_url: str, timeout: float) -> Check:
             payload = json.load(response)
         if not isinstance(payload, dict) or not payload.get("ETH"):
             return Check("FAIL", "public API", "allMids response did not contain ETH")
-        network = "mainnet" if base_url == "https://api.hyperliquid.xyz" else "testnet" if base_url == "https://api.hyperliquid-testnet.xyz" else "custom"
-        return Check("PASS", "public API", f"{network} /info allMids answered without a key")
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return Check("FAIL", "public API", f"unavailable: {exc}")
+        return Check("PASS", "public API", f"{network_label(base_url)} /info allMids answered without a key")
+    except (OSError, json.JSONDecodeError) as exc:
+        return Check("FAIL", "public API", f"unavailable: {failure_text(exc)}")
 
 
 def render(checks: list[Check]) -> str:
     width = max(len(check.name) for check in checks)
     lines = ["HYPERGROK DESK DOCTOR", "READ ONLY · no key access · no writes", ""]
     lines.extend(f"{check.status:<4}  {check.name:<{width}}  {check.detail}" for check in checks)
-    failed = sum(check.status == "FAIL" for check in checks)
-    warned = sum(check.status == "WARN" for check in checks)
-    lines.extend(["", f"Result: {len(checks) - failed - warned} passed, {warned} warnings, {failed} failed."])
+    count = {status: sum(check.status == status for check in checks) for status in ("PASS", "WARN", "FAIL", "SKIP")}
+    # A skipped check proved nothing, so it is not counted as passed.
+    skipped = f", {count['SKIP']} skipped" if count["SKIP"] else ""
+    lines.extend(["", f"Result: {count['PASS']} passed, {count['WARN']} warning{'' if count['WARN'] == 1 else 's'}, "
+                      f"{count['FAIL']} failed{skipped}."])
     return "\n".join(lines)
 
 

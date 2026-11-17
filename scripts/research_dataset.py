@@ -329,6 +329,8 @@ def verify_bundle(directory):
     sources = json.loads((directory / "sources.json").read_bytes())
     if not isinstance(sources, dict) or sources.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported sources schema")
+    if "requests" not in sources or "parameters" not in sources:
+        raise ValueError("sources.json lacks its requests or parameters")
     replay = ReplayReader(sources["requests"])
     p = sources["parameters"]
     result, candles, funding = collect(p, replay)
@@ -388,9 +390,9 @@ def main(argv=None):
         output = {"schema_version": SCHEMA_VERSION, "mode": "read-only", "verification": "verified", "manifest": manifest}
         print(json.dumps(output, indent=2, sort_keys=True) if args.json else f'Verified local evidence: {args.verify} | {manifest["result"]["status"]}')
         return 0 if manifest["result"]["status"] == "complete" else 1
-    for name in ("coin", "interval", "start", "end", "output"):
-        if getattr(args, name) is None:
-            parser.error(f"--{name} is required for collection")
+    missing = [f"--{name}" for name in ("coin", "interval", "start", "end", "output") if getattr(args, name) is None]
+    if missing:
+        parser.error(f"required for collection: {', '.join(missing)}")
     base, network = network_settings(args, parser)
     try:
         p = {"coin": args.coin, "dex": args.dex or (args.coin.split(":")[0] if ":" in args.coin else None),
@@ -427,7 +429,7 @@ def main(argv=None):
         if counts["funding"]:
             print(f'Funding hours: {counts["funding"]["observed"]}/{counts["funding"]["expected"]}')
         for issue in result["issues"]:
-            print(f"Unavailable: {issue}")
+            print(f"{'Unavailable' if result['status'] == 'unavailable' else 'Incomplete'}: {issue}")
         print("Inspect manifest.json for missing ranges and limitations; local integrity is not a trading approval.")
     return 0 if result["status"] == "complete" else 1
 

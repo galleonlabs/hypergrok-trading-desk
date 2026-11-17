@@ -104,15 +104,19 @@ class OpeningBellTest(unittest.TestCase):
     def test_coin_resolution_preserves_mixed_case_and_refuses_unknown_delisted_ambiguous(self):
         meta = [{"universe": [{"name": "kPEPE"}]}, [META[1][1]]]
         self.assertEqual(opening_bell.resolve_coin(meta, "KPEPE"), "kPEPE")
-        with self.assertRaisesRegex(ValueError, "unique market"):
+        with self.assertRaisesRegex(ValueError, "OTHER is not listed in the main perp universe"):
             opening_bell.resolve_coin(meta, "OTHER")
+        with self.assertRaisesRegex(ValueError, "xyz:OTHER is not listed on the xyz DEX"):
+            opening_bell.resolve_coin(meta, "OTHER", "xyz")
         meta[0]["universe"][0]["isDelisted"] = True
         with self.assertRaisesRegex(ValueError, "delisted"):
             opening_bell.resolve_coin(meta, "kpepe")
         meta[0]["universe"].append({"name": "KPEPE"})
         meta[1].append(META[1][1])
-        with self.assertRaisesRegex(ValueError, "unique market"):
+        with self.assertRaisesRegex(ValueError, "more than one market"):
             opening_bell.resolve_coin(meta, "kpepe")
+        with self.assertRaisesRegex(ValueError, "delisted"):
+            opening_bell.resolve_coin(meta, "kPEPE")  # the exact spelling selects one market
 
     def test_custom_origin_is_not_labelled_mainnet_or_testnet(self):
         with patch.object(opening_bell, "post_info", return_value=META), patch.object(opening_bell, "fetch_books", return_value=[(None, BOOK)]):
@@ -148,6 +152,26 @@ class OpeningBellTest(unittest.TestCase):
         self.assertIn("HYPERGROK OPENING BELL", text)
         self.assertIn("metaAndAssetCtxs + l2Book", text)
         self.assertIn("not a trading signal", text)
+
+    def test_render_keeps_the_figures_of_a_price_below_one(self):
+        meta = [{"universe": [{"name": "kPEPE"}]},
+                [{"markPx": "0.003863", "oraclePx": "0.003861", "prevDayPx": "0.0038", "funding": "0", "openInterest": "1", "dayNtlVlm": "1"}]]
+        book = {"coin": "kPEPE", "time": 1704067200000, "levels": [[{"px": "0.003862", "sz": "1", "n": 1}], [{"px": "0.003864", "sz": "1", "n": 1}]]}
+        text = opening_bell.render(opening_bell.build_snapshot(meta, [(None, book)], "kPEPE", "fixture"))
+        self.assertIn("mid 0.003863 · mark 0.003863 · oracle 0.003861", text)
+        self.assertNotIn("\u2014", text)  # no em dash in printed copy
+
+    def test_failed_reads_are_reported_in_plain_words(self):
+        import urllib.error
+        cases = ((urllib.error.HTTPError("u", 500, "Internal Server Error", None, None), "HTTP 500, which it does for a coin or DEX it does not list"),
+                 (urllib.error.URLError(TimeoutError("timed out")), "timed out; check the connection or raise --timeout"),
+                 (urllib.error.URLError(ConnectionRefusedError(61, "Connection refused")), "cannot reach the API: Connection refused"))
+        for error, expected in cases:
+            with self.subTest(expected=expected), patch.object(opening_bell, "post_info", side_effect=error), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(opening_bell.main(["--coin", "nodex:ETH"]), 1)
+            self.assertIn(expected, errors.getvalue())
+            self.assertNotIn("urlopen", errors.getvalue())
 
     def test_fixture_cli_path(self):
         with tempfile.TemporaryDirectory() as directory:

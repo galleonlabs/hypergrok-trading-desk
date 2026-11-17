@@ -204,6 +204,18 @@ class DeskDoctorTest(unittest.TestCase):
             checks = desk_doctor.check_repository(root)
             self.assertTrue(any(check.status == "FAIL" and check.name == "setup pin" for check in checks), checks)
 
+    def test_result_line_does_not_count_a_skip_as_passed(self):
+        checks = [desk_doctor.Check("PASS", "release", "ok"), desk_doctor.Check("WARN", "risk limits", "not written"),
+                  desk_doctor.Check("SKIP", "public API", "offline mode")]
+        self.assertIn("Result: 1 passed, 1 warning, 0 failed, 1 skipped.", desk_doctor.render(checks))
+        self.assertIn("Result: 1 passed, 0 warnings, 0 failed.", desk_doctor.render(checks[:1]))
+
+    def test_missing_desk_root_is_named_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            checks = desk_doctor.check_workspace(os.path.join(root, "absent"))
+        self.assertEqual([(check.status, check.name) for check in checks], [("FAIL", "desk root")])
+        self.assertIn("is not a directory", checks[0].detail)
+
     def test_workspace_warns_without_record_but_does_not_fail(self):
         with tempfile.TemporaryDirectory() as root:
             for path in desk_doctor.REQUIRED_DESK_DIRS:

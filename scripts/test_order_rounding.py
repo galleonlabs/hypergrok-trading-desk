@@ -6,6 +6,7 @@ from io import StringIO
 from types import SimpleNamespace
 from decimal import Decimal, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 from pathlib import Path
+import random
 import re
 import unittest
 
@@ -208,6 +209,154 @@ class OrderRoundingTest(unittest.TestCase):
         for invalid in ('NaN', 'Infinity', '-Infinity', '-0.1', '1', '2'):
             with self.subTest(slippage=invalid), self.assertRaises(ValueError):
                 spot_namespace['bounded_px_spot']('0.1234', invalid, True)
+
+
+# Seeded generated inputs for the properties below. A failure prints its case, and the
+# fixed seed regenerates the same cases on every run.
+SEED = 20261117
+CASES = 1500
+MODES = (ROUND_DOWN, ROUND_UP, ROUND_HALF_UP)
+generated_decimals = {f'D{places}': places for places in range(7)}
+generated = dict(namespace, SZ_DECIMALS=generated_decimals)
+exec(compile(helpers, '<published order helpers>', 'exec'), generated)
+generated_spot = dict(spot_namespace)
+exec(compile(spot_helpers, '<published spot helpers>', 'exec'), generated_spot)
+
+
+def random_decimal(rng, low=-6, high=6):
+    """One to nine significant digits with the leading digit between 1e-6 and 1e6."""
+    digits = rng.randint(1, 10 ** rng.randint(1, 9) - 1)
+    return Decimal(digits).scaleb(rng.randint(low, high) - len(str(digits)) + 1)
+
+
+def random_slippage(rng):
+    return Decimal(0) if rng.random() < 0.2 else Decimal(rng.randint(1, 9999)) / Decimal(10000)
+
+
+def price_tick(value, max_decimals):
+    """The venue grid at this price: five significant figures, capped decimals, whole numbers allowed."""
+    return Decimal(1).scaleb(min(0, max(value.adjusted() - 4, -max_decimals)))
+
+
+def sdk_wire(value):
+    """SDK 0.24.0 float_to_wire: eight decimals, refusing a value that rounding would change."""
+    rounded = f'{float(value):.8f}'
+    if abs(float(rounded) - float(value)) >= 1e-12:
+        raise ValueError(rounded)
+    return Decimal(rounded)
+
+
+class GeneratedOrderRoundingTest(unittest.TestCase):
+    def assert_on_grid(self, price, max_decimals, case):
+        self.assertGreater(price, 0, case)
+        if price != price.to_integral_value():
+            shape = price.normalize().as_tuple()
+            self.assertLessEqual(len(shape.digits), 5, case)
+            self.assertGreaterEqual(shape.exponent, -max_decimals, case)
+
+    def test_perp_bound_holds_stays_within_one_tick_and_survives_the_wire(self):
+        rng = random.Random(SEED)
+        bound_px, round_px = generated['bounded_px'], generated['round_px']
+        accepted = 0
+        for index in range(CASES):
+            coin = rng.choice(sorted(generated_decimals))
+            max_decimals = 6 - generated_decimals[coin]
+            reference, slippage = random_decimal(rng), random_slippage(rng)
+            for buy in (True, False):
+                case = f'seed={SEED} case={index} {coin} reference={reference} slippage={slippage} buy={buy}'
+                approved = reference * (1 + slippage if buy else 1 - slippage)
+                tick = price_tick(approved, max_decimals)
+                try:
+                    sent = bound_px(coin, str(reference), str(slippage), buy)
+                except ValueError:
+                    # Only a buy whose ceiling sits under the first tick has no price to send.
+                    self.assertTrue(buy and approved < tick, case)
+                    continue
+                accepted += 1
+                price = Decimal(str(sent))
+                self.assertTrue(price <= approved if buy else price >= approved, case)
+                self.assertLess(abs(price - approved), tick, case)
+                self.assert_on_grid(price, max_decimals, case)
+                self.assertEqual(sdk_wire(sent), price, case)
+                for mode in MODES:
+                    self.assertEqual(round_px(coin, sent, rounding=mode), sent, f'{case} mode={mode}')
+        self.assertGreater(accepted, CASES)
+
+    def test_perp_nearest_price_is_within_half_a_tick(self):
+        rng = random.Random(SEED + 1)
+        for index in range(CASES):
+            coin = rng.choice(sorted(generated_decimals))
+            max_decimals = 6 - generated_decimals[coin]
+            value = random_decimal(rng)
+            case = f'seed={SEED + 1} case={index} {coin} price={value}'
+            tick = price_tick(value, max_decimals)
+            try:
+                price = Decimal(str(generated['round_px'](coin, str(value))))
+            except ValueError:
+                self.assertLess(value, tick / 2, case)
+                continue
+            self.assertLessEqual(abs(price - value), tick / 2, case)
+            self.assert_on_grid(price, max_decimals, case)
+
+    def test_perp_size_rounds_down_by_less_than_one_lot(self):
+        rng = random.Random(SEED + 2)
+        for index in range(CASES):
+            coin = rng.choice(sorted(generated_decimals))
+            lot = Decimal(1).scaleb(-generated_decimals[coin])
+            requested = random_decimal(rng, -7, 7)
+            case = f'seed={SEED + 2} case={index} {coin} size={requested}'
+            try:
+                sent = generated['round_sz'](coin, str(requested))
+            except ValueError:
+                self.assertLess(requested, lot, case)
+                continue
+            size = Decimal(str(sent))
+            self.assertLessEqual(size, requested, case)
+            self.assertLess(requested - size, lot, case)
+            self.assertEqual(size % lot, 0, case)
+            self.assertEqual(generated['round_sz'](coin, sent), sent, case)
+
+    def test_spot_bound_holds_stays_within_one_tick_and_survives_the_wire(self):
+        rng = random.Random(SEED + 3)
+        accepted = 0
+        for index in range(CASES):
+            base_dec = rng.randint(0, 8)
+            generated_spot['base_dec'] = base_dec
+            max_decimals = 8 - base_dec
+            reference, slippage = random_decimal(rng), random_slippage(rng)
+            for buy in (True, False):
+                case = f'seed={SEED + 3} case={index} base_dec={base_dec} reference={reference} slippage={slippage} buy={buy}'
+                approved = reference * (1 + slippage if buy else 1 - slippage)
+                tick = price_tick(approved, max_decimals)
+                try:
+                    price = generated_spot['bounded_px_spot'](str(reference), str(slippage), buy)
+                except ValueError:
+                    self.assertTrue(buy and approved < tick, case)
+                    continue
+                accepted += 1
+                self.assertTrue(price <= approved if buy else price >= approved, case)
+                self.assertLess(abs(price - approved), tick, case)
+                self.assert_on_grid(price, max_decimals, case)
+                self.assertEqual(sdk_wire(float(price)), price, case)
+                for mode in MODES:
+                    self.assertEqual(generated_spot['round_px_spot'](price, rounding=mode), price, f'{case} mode={mode}')
+            requested = random_decimal(rng, -7, 7)
+            lot = Decimal(1).scaleb(-base_dec)
+            case = f'seed={SEED + 3} case={index} base_dec={base_dec} size={requested}'
+            try:
+                size = generated_spot['round_sz_spot'](str(requested))
+            except ValueError:
+                self.assertLess(requested, lot, case)
+                continue
+            self.assertLessEqual(size, requested, case)
+            self.assertLess(requested - size, lot, case)
+            self.assertEqual(size % lot, 0, case)
+            # A float holds about sixteen digits, so eight wire decimals are exact only
+            # below ten million units; above that the published snippet's own assert
+            # (wire string equals the approved size) is what stops a changed size.
+            if size < 10 ** 7:
+                self.assertEqual(sdk_wire(float(size)), size, case)
+        self.assertGreater(accepted, CASES)
 
 
 if __name__ == '__main__':

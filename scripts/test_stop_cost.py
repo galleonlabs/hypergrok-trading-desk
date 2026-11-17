@@ -2,11 +2,14 @@
 import importlib.util
 import io
 import json
+import math
 import os
+import random
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
+from fractions import Fraction
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -237,6 +240,167 @@ class StopCostTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(output)["error"]["code"], "source_unavailable")
         self.assertEqual(errors, "")
+
+
+# Seeded generated inputs for the properties below. A failure prints its case, and the
+# fixed seed regenerates the same cases on every run.
+SEED = 20261117
+CASES = 1500
+
+
+def random_decimal(rng, low, high, max_digits=7):
+    digits = rng.randint(1, 10 ** rng.randint(1, max_digits) - 1)
+    return Decimal(digits).scaleb(rng.randint(low, high) - len(str(digits)) + 1)
+
+
+def random_plan(rng):
+    """A long or short plan with the stop up to 50% from an entry between 1e-4 and 1e6."""
+    entry = random_decimal(rng, -4, 6)
+    while True:
+        stop = (entry * (1 + Decimal(rng.randint(-5000, 5000)) / Decimal(10000))).quantize(
+            Decimal(1).scaleb(entry.adjusted() - 5))
+        if stop > 0 and stop != entry:
+            break
+    return {
+        "entry": entry, "stop": stop, "equity": random_decimal(rng, 1, 8, 6),
+        "risk_pct": Decimal(rng.randint(1, 1000)) / Decimal(100),
+        "taker_fee_pct": Decimal(rng.randint(0, 100)) / Decimal(1000),
+        "slip_bps": Decimal(rng.randint(0, 500)), "sz_decimals": rng.randint(0, 6),
+    }
+
+
+def random_book(rng, mid, levels=None):
+    """A two-sided book around `mid`: bids descend, asks ascend, sizes are positive."""
+    step = mid / Decimal(rng.choice((2000, 10000, 50000)))
+    tick = Decimal(1).scaleb(mid.adjusted() - 6)
+    sides = []
+    for direction in (-1, 1):
+        price, side = mid, []
+        for _ in range(levels or rng.randint(1, 8)):
+            price += direction * step * rng.randint(1, 5)
+            side.append({"px": str(price.quantize(tick)), "sz": str(random_decimal(rng, -3, 3, 4)), "n": 1})
+        sides.append(side)
+    return {"coin": "ETH", "time": 1704067200000, "levels": sides}
+
+
+class GeneratedStopCostTest(unittest.TestCase):
+    def test_sizing_matches_exact_fractions_and_never_exceeds_the_budget(self):
+        rng = random.Random(SEED)
+        priced_cases = 0
+        for index in range(CASES):
+            plan = random_plan(rng)
+            case = f"seed={SEED} case={index} {plan}"
+            entry, stop = Fraction(plan["entry"]), Fraction(plan["stop"])
+            long = stop < entry
+            slip = entry * Fraction(plan["slip_bps"]) / 10000
+            stop_fill = stop - slip if long else stop + slip
+            try:
+                priced = stop_cost.price_stop(plan["entry"], plan["stop"], plan["equity"], plan["risk_pct"],
+                                              plan["taker_fee_pct"], plan["slip_bps"], plan["sz_decimals"])
+            except stop_cost.UnpriceableStop:
+                self.assertLessEqual(stop_fill, 0, case)
+                continue
+            priced_cases += 1
+            self.assertGreater(stop_fill, 0, case)
+            # The same arithmetic in exact fractions, with the size floored to whole lots.
+            stressed = abs(entry - stop_fill) + (entry + stop_fill) * Fraction(plan["taker_fee_pct"]) / 100
+            budget = Fraction(plan["equity"]) * Fraction(plan["risk_pct"]) / 100
+            lot = Fraction(1, 10 ** plan["sz_decimals"])
+            self.assertEqual(priced["side"], "long" if long else "short", case)
+            self.assertEqual(Fraction(priced["stop_fill"]), stop_fill, case)
+            self.assertEqual(Fraction(priced["stressed_distance"]), stressed, case)
+            self.assertEqual(Fraction(priced["risk_usd"]), budget, case)
+            for key, distance in (("stressed_stop", stressed), ("drawn_stop", abs(entry - stop))):
+                row = priced[key]
+                self.assertEqual(Fraction(row["size"]), math.floor(budget / distance / lot) * lot, f"{case} {key}")
+                # Decimal keeps 28 digits, so a very large position's loss is exact to that precision.
+                exact_loss = Fraction(row["size"]) * stressed
+                self.assertLessEqual(abs(Fraction(row["loss_if_triggered"]) - exact_loss),
+                                     exact_loss / 10 ** 27, f"{case} {key}")
+                self.assertEqual(row["at_least_one_lot"], Fraction(row["size"]) >= lot, f"{case} {key}")
+                self.assertEqual(row["meets_min_order_value"], Fraction(row["size"]) * entry >= 10, f"{case} {key}")
+            sized, drawn = priced["stressed_stop"], priced["drawn_stop"]
+            self.assertLessEqual(sized["over_budget_usd"], 0, case)
+            self.assertLessEqual(sized["loss_if_triggered"], priced["risk_usd"], case)
+            # One more lot would break the budget, so the size is not needlessly small.
+            self.assertGreater((Fraction(sized["size"]) + lot) * stressed, budget, case)
+            self.assertLessEqual(sized["size"], drawn["size"], case)
+            self.assertGreaterEqual(drawn["loss_if_triggered"], sized["loss_if_triggered"], case)
+        self.assertGreater(priced_cases, CASES // 2)
+
+    def test_walk_fills_what_the_side_holds_at_the_exact_notional(self):
+        rng = random.Random(SEED + 1)
+        for index in range(CASES):
+            book = random_book(rng, random_decimal(rng, -3, 5))
+            side = book["levels"][rng.randint(0, 1)]
+            size = random_decimal(rng, -3, 4, 4)
+            case = f"seed={SEED + 1} case={index} size={size} side={side}"
+            filled, notional = stop_cost.walk(side, size)
+            remaining, expected = Fraction(size), Fraction(0)
+            for level in side:
+                take = min(remaining, Fraction(level["sz"]))
+                expected += take * Fraction(level["px"])
+                remaining -= take
+            self.assertEqual(Fraction(filled), Fraction(size) - remaining, case)
+            self.assertEqual(Fraction(notional), expected, case)
+            prices = [Decimal(level["px"]) for level in side]
+            self.assertTrue(min(prices) * filled <= notional <= max(prices) * filled, case)
+            # A larger order never gets a better average on the side it exits into.
+            more_filled, more_notional = stop_cost.walk(side, size * 2)
+            worse = Fraction(more_notional) / Fraction(more_filled) - expected / Fraction(filled)
+            self.assertTrue(worse <= 0 if side is book["levels"][0] else worse >= 0, case)
+
+    def test_report_uses_the_largest_slippage_source_and_stays_within_budget(self):
+        rng = random.Random(SEED + 2)
+        reports = 0
+        for index in range(300):
+            plan = random_plan(rng)
+            sz_decimals = plan["sz_decimals"]
+            book = random_book(rng, plan["entry"])
+            meta = [{"universe": [{"name": "ETH", "szDecimals": sz_decimals}]},
+                    [{"markPx": str(plan["entry"])}]]
+            case = f"seed={SEED + 2} case={index} {plan} book={book['levels']}"
+            cli_plan = {**{key: plan[key] for key in ("entry", "stop", "equity", "risk_pct", "taker_fee_pct")},
+                        "slip_floor_bps": plan["slip_bps"]}
+            try:
+                report = stop_cost.build_report(meta, "ETH", lambda n_sig_figs: None if n_sig_figs else book,
+                                                "fixture", "", cli_plan)
+            except stop_cost.UnpriceableStop:
+                continue
+            reports += 1
+            long = plan["stop"] < plan["entry"]
+            self.assertEqual(report["side"], "long" if long else "short", case)
+            self.assertEqual(report["book"]["exit_side"], "bid" if long else "ask", case)
+            side = book["levels"][0 if long else 1]
+            walked = Decimal(report["book"]["size_walked"])
+            self.assertEqual(report["book"]["impact_complete"],
+                             sum(Decimal(level["sz"]) for level in side) >= walked, case)
+            spread, impact = Decimal(report["book"]["spread_bps"]), Decimal(report["book"]["impact_bps"])
+            # The exit side starts half a spread from the mid, so a fill is never closer than that.
+            self.assertGreaterEqual(impact * 2, spread * (1 - Decimal("1e-20")), case)
+            applied = Decimal(report["sizing"]["slip_bps"])
+            self.assertEqual(applied, max(plan["slip_bps"], spread, impact), case)
+            source = {"floor": plan["slip_bps"], "spread": spread, "book": impact}[report["sizing"]["slip_source"]]
+            self.assertEqual(source, applied, case)
+            self.assertLessEqual(Decimal(report["stressed_stop"]["over_budget_usd"]), 0, case)
+            self.assertLessEqual(Decimal(report["stressed_stop"]["size"]), Decimal(report["drawn_stop"]["size"]), case)
+            self.assertEqual(json.loads(json.dumps(report)), report, case)
+            rendered = stop_cost.render(report)
+            self.assertIn("Stressed stop", rendered, case)
+            self.assertNotRegex(rendered, r"\d[Ee][+-]?\d", case)
+        self.assertGreater(reports, 150)
+
+    def test_printed_prices_never_use_an_exponent_and_keep_four_figures(self):
+        rng = random.Random(SEED + 3)
+        for index in range(CASES):
+            value = random_decimal(rng, -12, 9, 12)
+            case = f"seed={SEED + 3} case={index} value={value}"
+            shown = stop_cost.price(value)
+            self.assertRegex(shown, r"^[0-9][0-9,]*\.[0-9]+$", case)
+            printed = Decimal(shown.replace(",", ""))
+            # Two decimals from 1 up; four significant figures below.
+            tolerance = Decimal("0.005") if value >= 1 else Decimal(1).scaleb(value.adjusted() - 3) / 2
+            self.assertLessEqual(abs(printed - value), tolerance, case)
 
 
 if __name__ == "__main__":

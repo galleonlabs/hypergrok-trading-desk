@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ Update the public Grok Bot template to 1.9.0 in place on the same link, https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr, with its exported bootstrap independently read back and matched to the release.
+
 ## 1.9.0 - 2026-11-17
 
 A quality sweep across the tools, skills, roles and docs. No approval, key or risk boundary was loosened.

@@ -70,28 +70,35 @@ WRITE_METHODS = (
     "usdClassTransfer", "subAccountTransfer", "vaultTransfer", "approveAgent",
     "approveBuilderFee", "sendAsset", "agentSendAsset", "subAccountSpotTransfer", "tokenDelegate",
     "createSubAccount", "userSetAbstraction", "agentSetAbstraction", "userDexAbstraction",
-    "agentEnableDexAbstraction", "topUpIsolatedOnlyMargin", "reserveRequestWeight", "cDeposit",
+    "agentEnableDexAbstraction", "topUpIsolatedOnlyMargin", "reserveRequestWeight", "cDeposit", "cDeposit2",
     "cWithdraw", "borrowLend", "sendToEvmWithData", "userPortfolioMargin", "convertToMultiSigUser",
     "setReferrer", "userOutcome", "claimRewards", "createVault", "vaultDistribute", "vaultModify",
     "subAccountModify", "hip3LiquidatorTransfer",
 )
 _METHODS = "|".join(WRITE_METHODS)
-# The receiver has to look like an exchange client. Matching every `.order(`
+# The receiver has to look like an exchange client. Matching every `.order` call
 # would ask on unrelated code; `ex` and `hl` are the short names that otherwise
-# miss the `exch` requirement. `getattr` is matched separately.
+# miss the `exch` requirement. `getattr` is matched separately. Text that builds
+# or imports an exchange client is the exception: there the receiver can have
+# any name (the TypeScript SDK's own examples call theirs `client`), so every
+# write method asks.
 SDK_WRITE_RE = re.compile(
     r"\b(?:\w*exch\w*|ex|hl)\s*\.\s*(" + _METHODS + r")\s*\(",
     re.IGNORECASE,
 )
+EXCHANGE_CLIENT_RE = re.compile(r"\bExchange(?:Client)?\s*\(|\bimport\b[^\n;]*\bExchange(?:Client)?\b")
+ANY_RECEIVER_WRITE_RE = re.compile(r"\.\s*(" + _METHODS + r")\s*\(", re.IGNORECASE)
 GETATTR_WRITE_RE = re.compile(
     r"""getattr\s*\(\s*\w+\s*,\s*["'](""" + _METHODS + r""")["']\s*\)\s*\(""",
     re.IGNORECASE,
 )
-# A raw POST: the API host's /exchange path, or a base URL joined to it.
+# A raw POST: the API host's /exchange path, or a base URL joined to it by a
+# template, a shell variable, string concatenation or a call argument.
 # Hosts are case-insensitive, so `API.HYPERLIQUID.XYZ` is the same exchange.
 # Built from pieces so this file's own source is not itself an /exchange match.
 ENDPOINT_RE = re.compile(
-    r"\.xyz(?::\d+)?" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\+\s*[\"']" + r"/exchange[\"']",
+    r"\.xyz(?::\d+)?" + r"/exchange\b|" + r"\}" + r"/exchange\b|" + r"\$\{?\w+\}?[\"']*" + r"/exchange\b|"
+    + r"[+(,]\s*[\"'`]" + r"/exchange[\"'`]",
     re.IGNORECASE,
 )
 _SCRIPT_EXT = r"py|ts|mts|cts|js|mjs|cjs|sh|bash|zsh"
@@ -116,9 +123,11 @@ RISK_VERDICT_RE = re.compile(r"^\s*RISK\b[^\n]*?\|\s*(PASS|REJECT)\s*(?:\||$)", 
 CONSTRUCTOR_RE = re.compile(r"\b(Exchange|HttpTransport|WebSocketTransport)\s*\(")
 LEVERAGE_CALL_RE = re.compile(r"\b(?:update_leverage|updateLeverage)\s*\(")
 TICKET_RE = re.compile(r"\b(HG-\d{8}-\d{2})(?:-[A-Z]+)?\b")
+# The record's name is matched without case: macOS and Windows file systems open
+# `Desk.md` and `DESK.MD` as the same file.
 DESK_RECORD_WRITE_RE = re.compile(
-    r">>?\s*['\"]?[^\s&|;'\"]*desk\.md|\btee\b|\bsed\s+-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i|"
-    r"\b(?:mv|cp|rm|truncate|ln|dd|install)\s|open\s*\(|write_text|writeFile|os\.replace|os\.rename"
+    r">>?\|?\s*['\"]?[^\s&|;'\"]*(?i:desk\.md)|\btee\b|\bsed\s+-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i|"
+    r"\b(?:mv|cp|rm|truncate|ln|dd|install|rsync)\s|open\s*\(|write_text|writeFile|appendFile|os\.replace|os\.rename|shutil\."
 )
 EDIT_TOOLS = ("Write", "Edit", "MultiEdit")
 MAX_SCRIPT_BYTES = 2_000_000
@@ -134,8 +143,13 @@ def redact(text):
     return KEY_RE.sub("0x[redacted]", text)
 
 
+def _sdk_writes(text):
+    pattern = ANY_RECEIVER_WRITE_RE if EXCHANGE_CLIENT_RE.search(text) else SDK_WRITE_RE
+    return pattern.finditer(text)
+
+
 def find_write(text):
-    match = SDK_WRITE_RE.search(text) or GETATTR_WRITE_RE.search(text)
+    match = next(_sdk_writes(text), None) or GETATTR_WRITE_RE.search(text)
     if match:
         return match.group(1)
     if ENDPOINT_RE.search(text):
@@ -145,7 +159,7 @@ def find_write(text):
 
 def all_writes(text):
     """Every write in the text: (SDK method names, any write a mandate cannot cover)."""
-    methods = {match.group(1).lower() for match in SDK_WRITE_RE.finditer(text)}
+    methods = {match.group(1).lower() for match in _sdk_writes(text)}
     uncoverable = bool(GETATTR_WRITE_RE.search(text) or ENDPOINT_RE.search(text))
     return methods, uncoverable
 
@@ -248,14 +262,13 @@ def mandate_refusal(command, texts, uncoverable, methods):
     if authority not in record:
         return "the ticket does not record the current standing mandate's authority line"
     return None
-    return None
 
 
 def desk_record_change(event):
     """Ask before a file edit adds or changes a standing mandate in desk.md."""
     tool_input = event.get("tool_input") or {}
     path = tool_input.get("file_path")
-    if not isinstance(path, str) or os.path.basename(path) != "desk.md":
+    if not isinstance(path, str) or os.path.basename(path).lower() != "desk.md":
         return False
     try:
         with open(path, encoding="utf-8") as handle:
@@ -371,7 +384,7 @@ def decide(event):
     command = (event.get("tool_input") or {}).get("command")
     if not isinstance(command, str) or not command:
         return None
-    if "desk.md" in command and DESK_RECORD_WRITE_RE.search(command):
+    if "desk.md" in command.lower() and DESK_RECORD_WRITE_RE.search(command):
         return ask(
             "HyperGrok: this command may change desk.md, which holds any standing mandate. "
             "Only you write, widen or renew a mandate; approve only if this is your own change."
@@ -419,7 +432,13 @@ def main():
         return 0
     if not isinstance(event, dict):
         return 0
-    decision = decide(event)
+    try:
+        decision = decide(event)
+    except Exception:  # A crash exits non-zero, which Claude Code treats as no opinion: ask instead.
+        decision = ask(
+            "HyperGrok: the exchange write gate could not check this call. Approve only if it is not an "
+            "exchange write or a change to desk.md, or it is the single send for a ticket you approved by id."
+        ) if event.get("tool_name") in ("Bash", *EDIT_TOOLS) else None
     if decision:
         print(json.dumps(decision))
     return 0

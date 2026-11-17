@@ -8,88 +8,86 @@
 <p align="center">
   <a href="https://github.com/galleonlabs/hypergrok-trading-desk/releases"><img src="https://img.shields.io/github/v/release/galleonlabs/hypergrok-trading-desk?style=flat-square&labelColor=071815&color=1d4a43&label=release" alt="Latest release"></a>
   <a href="https://www.npmjs.com/package/hypergrok-trading-desk"><img src="https://img.shields.io/npm/v/hypergrok-trading-desk?style=flat-square&labelColor=071815&color=1d4a43&label=npm" alt="npm version"></a>
+  <a href="https://github.com/galleonlabs/hypergrok-trading-desk/stargazers"><img src="https://img.shields.io/github/stars/galleonlabs/hypergrok-trading-desk?style=flat-square&labelColor=071815&color=1d4a43&label=stars" alt="GitHub stars"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1d4a43?style=flat-square&labelColor=071815" alt="MIT license"></a>
   <a href="https://www.hypurr.co/ecosystem-projects/hypergrok"><img src="https://img.shields.io/badge/HypurrCollective-ecosystem%20map-1d4a43?style=flat-square&labelColor=071815" alt="Listed on the HypurrCollective Hyperliquid Ecosystem Map"></a>
 </p>
 
 <p align="center">Works in <a href="#start">Grok Bot</a> · <a href="docs/hyperliquid-claude-code.md">Claude Code</a> · <a href="docs/hyperliquid-cursor.md">Cursor</a> · <a href="docs/hyperliquid-codex.md">Codex</a> · <a href="docs/hyperliquid-gemini-cli.md">Gemini CLI</a> · <a href="docs/hyperliquid-grok-build.md">Grok Build</a></p>
 
-HyperGrok gives your AI agents a shared process for Hyperliquid research, risk, execution and review. It includes seven role profiles, seventeen skills and read-only Python tools. Start with public market data, then set up the desk in Grok Bot or [your preferred agent tool](#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli). Trading requires your own API wallet, verified approval controls and an exact ticket you approve.
+HyperGrok turns your AI agents into a Hyperliquid trading desk. Seven roles take each trade from your idea through evidence, risk sign-off, your approval, one send and review. It starts on public market data with no keys. Trading needs your own trade-only API wallet, and by default every order waits for a ticket you approve.
 
 ## Try it now, no keys
 
 ```bash
-git clone --depth 1 --branch v1.8.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.9.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
 
-A live ETH snapshot from Hyperliquid's public `/info` endpoint: price, funding, open interest, spread and depth. It needs no wallet, account or key, and runs on Python 3's standard library.
+A live ETH snapshot from Hyperliquid's public `/info` endpoint: price, funding, open interest, spread and depth. No wallet, account or key; only Python 3's standard library.
 
 <p align="center">
   <img src="assets/opening-bell.gif" width="800" alt="Recorded output of python3 scripts/opening_bell.py --coin ETH showing a sourced market snapshot with prices, funding and book depth.">
 </p>
 
-Recorded from the command above on 25 October 2026 at 13:09 UTC. The figures are a historical snapshot; run it yourself for current data.
+Recorded on 17 November 2026 at 12:09 UTC. Run it yourself for current figures.
 
 ## Start
 
-For the seven-Bot desk with a shared Trading Floor, open Grok Bot and paste:
+**Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** Or paste this into any Bot:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.8.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.8.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
-Or add the [public HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr), then send **Start the desk.** Its 1.8.0 bootstrap installs the complete seventeen-skill release. See the [publication and native content checks](docs/GROK_BOT_TEMPLATE.md#publication-verification---2026-11-16).
+The Desk Lead rings the Opening Bell, installs the skills, builds the team and returns a receipt of what it verified. Setup is read-only. The desk starts in research mode; add a testnet API wallet to practise with play money, and a mainnet one when you decide to trade. [Setup runbook](SETUP.md) · [template verification](docs/GROK_BOT_TEMPLATE.md)
 
-The Desk Lead runs Opening Bell, installs the shared skills, prepares the team and returns a setup receipt. The desk starts in research mode. Add a testnet API wallet when you want to practise with play money; mainnet uses the same ticket process after its approval controls are verified. See the [full setup runbook](SETUP.md) for each step.
+<a id="other-runtimes"></a>**Other runtimes.** The same skills and ticket process, with the roles and controls each tool supports:
 
-<details>
-<summary><strong>Opening Bell and desk doctor for scripts</strong></summary>
+| Runtime | Install | What loads |
+| --- | --- | --- |
+| Claude Code | [Plugin marketplace](docs/hyperliquid-claude-code.md) | Skills, seven subagents and a backstop hook that asks before likely exchange writes; it cannot see imported helpers or check sizing |
+| Cursor | [Pinned checkout and plugin](docs/hyperliquid-cursor.md) | Skills, seven role profiles and the desk rules |
+| Codex | [Codex marketplace](docs/hyperliquid-codex.md) | Skills, with roles run as labelled passes |
+| Gemini CLI | [Extension](docs/hyperliquid-gemini-cli.md) | Skills and `GEMINI.md`, with roles run as labelled passes |
+| Grok Build | [Pinned release](docs/hyperliquid-grok-build.md) | Skills and agent directories; rule loading is unverified |
 
-Opening Bell reports source and UTC time, mid/mark/oracle prices, 24-hour change and volume, hourly funding, open interest, spread and depth at 5/10/25 bps. It requests coarser book pages when twenty levels cannot cover a band, identifies each figure's source page and marks unreached depth as a floor. `scripts/desk_doctor.py` checks the release, roles, skill hashes, desk folders and public connectivity. Both use only Python's standard library.
-
-For automation, inspect the offline `--schema`, then use `--json`. Failed reads, partial depth and doctor warnings remain explicit. Snapshots accept canonical mixed-case names and HIP-3 markets:
-
-```bash
-python3 scripts/opening_bell.py --schema
-python3 scripts/opening_bell.py --coin xyz:TSLA --json
-python3 scripts/desk_doctor.py --offline --json
-```
-
-`--testnet` explicitly selects testnet. A custom API origin is labelled `custom`. HIP-3 discovery stays read-only; execution remains opt-in under the desk's normal ticket rules.
-
-</details>
+After installing, load `desk-operating-model` first. Skills alone do not enforce exchange permissions: verify your runtime's own approval control covers exchange writes before you provision a key.
 
 <details>
-<summary><strong>Collect history you can check</strong></summary>
+<summary><strong>Skills-only and npm installs</strong></summary>
 
-Before a backtest, collect the exact period into a research bundle:
+As portable skills:
 
-```bash
-python3 scripts/research_dataset.py --coin ETH --interval 4h \
-  --start 2026-09-01T00:00:00Z --end 2026-10-01T00:00:00Z \
-  --with-funding --output ../hypergrok-data/eth-september --json
-python3 scripts/research_dataset.py --verify ../hypergrok-data/eth-september --json
+```
+npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-desk
 ```
 
-The bundle keeps requests, captured responses, observed CSV rows and a hashed manifest. Closed UTC windows, explicit missing ranges and bounded funding pagination distinguish `complete`, `incomplete` and `unavailable` history. Offline verification replays the saved responses; it checks consistency, not source authenticity or strategy quality. The tool needs no key and never fills a gap with synthetic data. See [Research datasets](docs/RESEARCH_DATASETS.md) for the supported intervals, market selection, exit codes and analyst handoff.
+As an npm resource package:
+
+```bash
+npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.9.0
+python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
+```
+
+The package holds the instructions, role profiles, plugin manifests and Python tools. It has no JavaScript entry point, dependencies or install hooks, and installing it does not start a desk or connect a wallet.
 
 </details>
 
 ## Meet the desk
 
-You supply the ideas. Each role owns a stage and hands its evidence to the next.
+You bring the ideas. Each role owns one stage and hands its evidence to the next.
 
-| Bot | What they do for you |
+| Role | What it does for you |
 | --- | --- |
-| **Desk Lead** | Your main contact. Runs the floor, keeps every trade moving through the same clean process. |
-| **Market Analyst** | Live Hyperliquid data on demand: price, depth, funding, open interest, candles. Timestamped and sourced. |
-| **Research Analyst** | What is happening and what is scheduled: fundamentals, news, catalysts, onchain and social context. |
-| **Strategist** | Turns your idea into explicit rules, backtests it honestly on Hyperliquid history, paper-trades it on testnet. |
-| **Risk Manager** | Keeps your written limits, sizes every trade from your live account, watches the book, and can say no. |
-| **Execution Trader** | The one Bot with the keys. Sends the ticket you approved, once, and reconciles it from the exchange record. |
-| **Trade Reviewer** | Keeps the desk journal and grades every trade on process and outcome, separately. |
+| **Desk Lead** | Your main contact. Routes work and keeps every trade on the same path. |
+| **Market Analyst** | Live Hyperliquid data: price, depth, funding, open interest, candles. Timestamped and sourced. |
+| **Research Analyst** | Fundamentals, news, catalysts, onchain and social context. |
+| **Strategist** | Turns your idea into explicit rules, backtests it on Hyperliquid history and paper-trades it on testnet. |
+| **Risk Manager** | Keeps your written limits, sizes every trade from your live account, and can say no. |
+| **Execution Trader** | The one role with the keys. Sends the approved ticket once and reconciles it from the exchange record. |
+| **Trade Reviewer** | Keeps the journal and grades process and outcome separately. |
 
-Six sit together on the **Trading Floor** group chat; the Trade Reviewer works by DM. Every trade follows the same path:
+In Grok Bot, six sit on the **Trading Floor** group chat and the Trade Reviewer works by DM.
 
 <p align="center">
   <picture>
@@ -100,9 +98,9 @@ Six sit together on the **Trading Floor** group chat; the Trade Reviewer works b
 
 ## A day on the desk
 
-**"Brief me on ETH."** The Market Analyst pulls mid, mark, funding, open interest, 24h volume and depth at 5/10/25 bps from the exchange, and posts a brief with sources and UTC times.
+**"Brief me on ETH."** The Market Analyst posts price, funding, open interest, volume and depth from the exchange, with sources and UTC times.
 
-**"I want to long ETH at 3,000 with a stop at 2,900."** In this illustrative example, the Desk Lead opens `HG-20260816-01`. The Risk Manager reads the account and returns a sized ticket:
+**"I want to long ETH at 3,000 with a stop at 2,900."** The Desk Lead opens a proposal. The Risk Manager reads the account and returns a sized ticket (illustrative figures):
 
 ```
 TICKET HG-20260816-01 | mainnet
@@ -113,115 +111,70 @@ sized on a stressed stop: 100 + 3.00 slippage + 2.65 fees = 105.65 per ETH
 approve with: "approve HG-20260816-01"
 ```
 
-You type `approve HG-20260816-01`. After the pre-send checks and native approval gate pass, the Execution Trader sends entry and stop in one grouped order, reconciles the exchange response and reports the order ids. The Trade Reviewer records costs, process and outcome.
+You type `approve HG-20260816-01`. Once the pre-send checks and your runtime's approval gate pass, the Execution Trader sends entry and stop as one grouped order, reconciles the exchange response and reports the order ids. The Trade Reviewer records costs, process and outcome.
 
 <p align="center">
   <img src="assets/ticket-hg-20260816-01.png" width="760" alt="Worked example: the Risk Manager posts ticket HG-20260816-01 for 0.4827 ETH, sized on a stressed stop of 105.65 per ETH; the user replies approve HG-20260816-01; the Execution Trader sends entry and stop once as one grouped order and confirms it on the book.">
 </p>
 
-**"Can we test whether funding extremes mean-revert?"** The Strategist writes the rules with you, collects and verifies the agreed history, then reports costs, funding assumptions, holdout results and the trade distribution. Missing history stays visible. Testnet paper trading follows the same ticket process.
+**"Can we test whether funding extremes mean-revert?"** The Strategist writes the rules with you, collects and verifies the history, then reports costs, funding assumptions, holdout results and the trade distribution. Missing history stays visible.
 
-**"Watch ETH and tell me if funding flips negative."** A routine on the desk computer watches the WebSocket feed and pings you when it happens.
-
-## What the desk knows
-
-Seventeen skills, in the portable `SKILL.md` format, shared by all your Bots.
-
-**Bootstrap** - pinned release install, Opening Bell, team construction, desk doctor and a receipt that distinguishes what happened from what still needs a manual step.
-
-**Hyperliquid** - setup and API wallets, market data, account state, orders (limit, IOC, take-profit and stop-loss with grouping, client order ids), positions and margin, WebSocket feeds, advanced actions (dead-man's switch, TWAP, spot), and a compact API reference. Copy-pasteable `curl` for reads; the official Python SDK and `@nktkas/hyperliquid` for anything that signs.
-
-**Desk** - how the team works: operating model, the trade lifecycle and ticket, risk limits and sizing arithmetic, the execution protocol, monitoring and routines, post-trade review, incident playbooks, and the strategy lab.
-
-## Other agent setups
-
-HyperGrok is for a coordinated Hyperliquid desk in Grok Bot. For a different setup, these Galleon projects can help:
-
-- [Boomkin](https://github.com/galleonlabs/boomkin#get-started) sets up a native Hermes DeFi profile with modular skill packs and official tool connections.
-- [crypto-defi-skills](https://github.com/galleonlabs/crypto-defi-skills#install-only-what-you-need) lets you add individual workflows to an existing agent: lending, liquidity provision, routing, portfolio review and more.
-
-Neither is required to use HyperGrok. Installing instructions does not connect a wallet or authorize a trade.
+**"Watch ETH and tell me if funding flips negative."** A routine watches the WebSocket feed and pings you when it happens.
 
 ## Trading controls
 
-- **You approve each trade by default**, by ticket id, after seeing the exact order. The line you type is evidence; the gate that enforces it sits outside the chat, in a Grok Bot Auto-review **Ask first** rule, because a Bot that can read an approval could also write one. In Claude Code you can opt in to a [standing mandate](docs/STANDING_MANDATE.md) you write yourself, with your own markets and limits; orders inside it go out without asking, still with a Risk PASS, a resting stop and a journal entry.
-- **A trade-only API wallet**, provisioned through Grok Bot's secure secret store, is the only key the desk ever holds. It can trade; it cannot withdraw.
-- **Sized on a stressed stop.** The desk includes assumed adverse stop fills and taker fees on both legs when sizing. Actual losses can exceed that assumption. [See what a stop costs](docs/STOP_COST.md).
-- **Ceilings you cannot trade through.** Your limits file may only tighten the desk's own caps, never loosen them.
-- **Testnet first by default.** Every new kind of action is rehearsed with play money before it touches mainnet, unless you have written a standing mandate, which leaves that to you.
-- **One writer.** Six Bots read; one Bot sends, once per approval, and reconciles by client order id.
-- **Separate process and outcome.** The Trade Reviewer records both in a journal you can read.
+- **You approve each trade**, by ticket id, after seeing the exact order. The gate that enforces it sits outside the chat (in Grok Bot, an Auto-review **Ask first** rule), because a Bot that can read an approval could also write one.
+- **A trade-only API wallet** is the only key the desk holds, kept in your runtime's secret store. It can trade; it cannot withdraw.
+- **One writer.** Six roles read; one sends, once per approval, and reconciles by client order id.
+- **Sized on a stressed stop.** Sizing includes assumed stop slippage and taker fees on both legs. Actual losses can exceed that assumption. [What a stop costs](docs/STOP_COST.md)
+- **Ceilings you cannot trade through.** Your limits file can tighten the desk's caps, never loosen them.
+- **Testnet first.** Each new kind of action is rehearsed with play money before mainnet.
+- **Process and outcome graded separately**, in a journal you can read.
+
+**Opt-in automation.** In Claude Code only, you can write a [standing mandate](docs/STANDING_MANDATE.md): your own markets, limits and daily loss stop. Orders inside it go out without asking. Its limits are yours and may exceed the default ceilings, and testnet rehearsal becomes your call. Each order still needs a Risk PASS, a resting stop and a journal entry. The desk never writes or widens a mandate, and one line revokes it.
 
 Perpetual futures can liquidate an account. HyperGrok is documentation and instructions, not financial advice.
 
-## Also runs in Grok Build, Cursor, Claude Code, Codex and Gemini CLI
+## Tools
 
-Choose the guide for your runtime. Each uses the same skills and ticket process; support for roles, rules and hooks differs.
+Six read-only Python tools ship with the desk. Each uses only the standard library, needs no key, signs nothing, and offers `--schema` and `--json` for scripts. Network reads go to Hyperliquid's public `/info` endpoint.
 
-| Runtime | Setup | Roles and controls |
-| --- | --- | --- |
-| Claude Code | [Install from the plugin marketplace](docs/hyperliquid-claude-code.md) | Seven subagents and an exchange-write confirmation hook; load the operating model explicitly |
-| Cursor | [Open the pinned checkout and enable the plugin](docs/hyperliquid-cursor.md) | Seven role profiles and desk rules; no Claude Code hook |
-| Grok Build | [Install the pinned release](docs/hyperliquid-grok-build.md) | Skills and agent directories; rule loading is unverified |
-| Codex | [Install from the Codex marketplace](docs/hyperliquid-codex.md) | Skills, with the seven roles run as labelled passes |
-| Gemini CLI | [Install the extension](docs/hyperliquid-gemini-cli.md) | Skills and `GEMINI.md`, with roles run as labelled passes |
-
-The Claude Code hook asks for confirmation when a Bash command or a named script looks like an exchange write, unless a valid [standing mandate](docs/STANDING_MANDATE.md) covers it. It cannot inspect every imported path or check sizing. Every runtime still needs verified native approval coverage before an API wallet is provisioned. The guides distinguish manifest support from observed native installation.
-
-The same pack installs as a skill:
-
-```
-npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-desk
-```
-
-The complete resources also install from npm:
-
-```bash
-npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.8.0
-python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
-```
-
-The package contains the instructions, role profiles, plugin manifests and read-only Python tools. It has no JavaScript entry point, runtime dependencies or install hooks; installation does not start a desk or connect a wallet.
-
-Live listings: [HypurrCollective ecosystem map](https://www.hypurr.co/ecosystem-projects/hypergrok) · [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk) · [cursor.directory](https://cursor.directory/plugins/hypergrok) · [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk)
-
-After installation, load `desk-operating-model` using the command or context mechanism in your runtime guide.
-
-## Inside the repository
-
-```
-SETUP.md     what your Grok Bot follows to build the desk
-agents/      seven roles: Bot profile card + full system prompt
-skills/      seventeen skills (bootstrap, hyperliquid-*, desk-*)
-template/    exact public Grok Bot profile and skill hashes
-scripts/     zero-key market, history, stop-cost and every-DEX account reads, offline verification, release checks
-docs/        how it works, FAQ, install pages, stop cost, account read, provenance
-assets/      the mascot, logo, README graphics and their generator
-```
-
-| Doc | |
+| Tool | What it answers |
 | --- | --- |
-| [How the desk works](docs/ARCHITECTURE.md) | roles, files, trust boundaries |
-| [FAQ](docs/FAQ.md) | keys, approvals, testnet, customising the team |
-| [Research datasets](docs/RESEARCH_DATASETS.md) | collect, verify and hand off historical evidence |
-| [Stop cost](docs/STOP_COST.md) | what a triggered stop costs, from the live book |
-| [Account read](docs/ACCOUNT_READ.md) | positions and equity across the main DEX, every HIP-3 DEX and spot |
-| [Skills index](skills/README.md) | every skill and who uses it |
-| [Grok Bot template](docs/GROK_BOT_TEMPLATE.md) | public profile, publish contract and clean-install evaluation |
-| [Provenance](docs/PROVENANCE.md) | sources and licences |
-| [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) | |
+| [`opening_bell.py`](scripts/opening_bell.py) | What is this market doing now? Prices, funding, open interest, spread and depth at 5/10/25 bps, including HIP-3 markets such as `xyz:TSLA`. |
+| [`stop_cost.py`](docs/STOP_COST.md) | What does my stop really cost? Sizes one trade on the drawn and the stressed stop from the live book. |
+| [`account_read.py`](docs/ACCOUNT_READ.md) | What does this account hold? Positions and equity across the main DEX, every HIP-3 DEX and spot. |
+| [`research_dataset.py`](docs/RESEARCH_DATASETS.md) | Is my backtest history complete? Collects candles and funding into a hashed bundle and replays it offline. |
+| [`desk_doctor.py`](scripts/desk_doctor.py) | Is my install intact? Checks the release, roles, skill hashes, desk folders and public connectivity. |
+| [`standing_mandate.py`](docs/STANDING_MANDATE.md) | Is the mandate I wrote valid? An offline check of every field. |
 
-## Get help and keep up
+## Docs
 
-- **Updates:** use GitHub's **Watch → Custom → Releases** to follow [new releases](https://github.com/galleonlabs/hypergrok-trading-desk/releases).
-- **Setup help:** check the [FAQ](docs/FAQ.md), then ask in [Discussions](https://github.com/galleonlabs/hypergrok-trading-desk/discussions). Share your runtime, release and failing command; keep keys and private account details out.
-- **Bugs:** [open an issue](https://github.com/galleonlabs/hypergrok-trading-desk/issues/new/choose) with a reproduction and sanitized output. Follow the [community guidelines](CODE_OF_CONDUCT.md).
-- **Contribute:** see [Contributing](CONTRIBUTING.md), the [fork review](docs/FORK_REVIEW.md) and [security policy](SECURITY.md). Share reproducible fixes and source-backed documentation improvements.
+| | |
+| --- | --- |
+| [How the desk works](docs/ARCHITECTURE.md) | Roles, files and trust boundaries |
+| [FAQ](docs/FAQ.md) | Keys, approvals, testnet, customising the team |
+| [Skills index](skills/README.md) | All seventeen skills and who uses them |
+| [Setup runbook](SETUP.md) | What a Grok Bot follows to build the desk |
+| [Grok Bot template](docs/GROK_BOT_TEMPLATE.md) | Public profile and publication checks |
+| [Provenance](docs/PROVENANCE.md) | Sources, SDK versions and licences |
+| [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) | |
+
+Listed on the [HypurrCollective ecosystem map](https://www.hypurr.co/ecosystem-projects/hypergrok), [skills.sh](https://www.skills.sh/galleonlabs/hypergrok-trading-desk), [cursor.directory](https://cursor.directory/plugins/hypergrok) and [botdirectory.ai](https://botdirectory.ai/bots/hypergrok-trading-desk).
+
+## Help and updates
+
+- **Releases:** GitHub **Watch → Custom → Releases**, or the [release page](https://github.com/galleonlabs/hypergrok-trading-desk/releases).
+- **Setup help:** the [FAQ](docs/FAQ.md), then [Discussions](https://github.com/galleonlabs/hypergrok-trading-desk/discussions). Share your runtime, release and failing command; keep keys and account details out.
+- **Bugs:** [open an issue](https://github.com/galleonlabs/hypergrok-trading-desk/issues/new/choose) with a reproduction and sanitized output.
+- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md), the [fork review](docs/FORK_REVIEW.md) and the [community guidelines](CODE_OF_CONDUCT.md).
+
+## What HyperGrok is not
+
+There is no HyperGrok token and there will not be one. There is no `hypergrok` command-line binary, no bundled strategy or signal, and no profit claim. Posts showing otherwise are not from this project. [FAQ](docs/FAQ.md#what-it-is-not)
 
 ## License and credit
 
-[MIT licensed](LICENSE), with the copyright and permission notice retained when reusing copies or substantial portions. Created by [Andrew Wilkinson](https://andrewwilkinson.io) and [Galleon Labs](https://github.com/galleonlabs).
+[MIT](LICENSE). Created by [Andrew Wilkinson](https://andrewwilkinson.io) and [Galleon Labs](https://github.com/galleonlabs). Keep the copyright and permission notice when you reuse it; [ATTRIBUTION.md](ATTRIBUTION.md) has a ready-to-copy credit line. A [star](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and optional.
 
-See [reuse and attribution](ATTRIBUTION.md) for a ready-to-copy credit line. If HyperGrok Trading Desk helps your work, [a star on the original repository](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and entirely optional.
-
-HyperGrok has no token and will not launch one. [Read the FAQ](docs/FAQ.md#token). It also has no `hypergrok` command-line binary, sends nothing to the exchange without a Risk PASS and your approval or a standing mandate you wrote yourself, and makes no profit claim; posts showing otherwise are not from this project. [What HyperGrok is not](docs/FAQ.md#what-it-is-not).
+Also from Galleon Labs: [Boomkin](https://github.com/galleonlabs/boomkin#get-started), a Hermes DeFi profile with modular skill packs, and [crypto-defi-skills](https://github.com/galleonlabs/crypto-defi-skills#install-only-what-you-need), individual DeFi workflows for an existing agent.

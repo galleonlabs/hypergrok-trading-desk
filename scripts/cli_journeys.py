@@ -102,6 +102,15 @@ def command(name, *args, expected=0, env=None):
     return json.loads(result.stdout)
 
 
+def text(name, *args):
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / f"{name}.py"), *args],
+                            cwd=ROOT, env={"PATH": os.environ.get("PATH", ""), "PYTHONUTF8": "1"},
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, f"{name}: exit {result.returncode}; {result.stderr}; {result.stdout}"
+    assert "\u2014" not in result.stdout, f"{name}: em dash in printed copy"
+    return result.stdout
+
+
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -141,6 +150,15 @@ def main():
         assert bell["mode"] == "read-only" and bell["coin"] == "ETH" and bell["network"] == "custom"
         assert bell["prices"]["mark"] == "3001"
         checked += 1
+        unknown = command("opening_bell", "--coin", "NOPE", "--json", "--base-url", base, expected=1)
+        assert unknown["error"]["code"] == "source_unavailable" and "NOPE is not listed" in unknown["error"]["message"]
+        closed = command("opening_bell", "--coin", "ETH", "--json", "--base-url", "http://127.0.0.1:1", expected=1)
+        assert closed["error"]["message"].startswith("cannot reach the API"), closed
+        printed = text("opening_bell", "--coin", "ETH", "--base-url", base)
+        assert "HYPERGROK OPENING BELL · ETH-PERP" in printed and "mid 3,000.50 · mark 3,001.00" in printed
+        printed = text("desk_doctor", "--offline", "--base-url", base)
+        assert " failed, 1 skipped." in printed, "An offline skip is not a pass"
+        checked += 3
         stop = command("stop_cost", "--coin", "ETH", "--entry", "3000", "--stop", "2900", "--equity", "10000", "--risk-pct", "0.5", "--json", "--base-url", base)
         assert stop["mode"] == "read-only" and stop["side"] == "long"
         assert Decimal(stop["stressed_stop"]["loss_if_triggered"]) <= Decimal("50")
@@ -182,7 +200,7 @@ def main():
             assert tampered["error"]["code"] == "verification_failed"
             checked += 3
         assert not failures, failures
-        print(f"Passed {checked} read-only CLI journeys: schemas, invalid input, offline doctor, offline standing mandate check, market read, every-DEX account read, risk sizing, dataset collection/replay/tamper refusal; only loopback POST /info used.")
+        print(f"Passed {checked} read-only CLI journeys: schemas, invalid input, offline doctor, offline standing mandate check, market read, every-DEX account read, risk sizing, dataset collection/replay/tamper refusal, unknown market, unreachable API and printed output; only loopback POST /info used.")
     finally:
         server.shutdown()
         server.server_close()

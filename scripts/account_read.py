@@ -30,16 +30,28 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal, DecimalException
 
-from cli_contract import ReadOnlyParser, add_network_arguments, describe, emit_error, network_settings
+from cli_contract import (
+    ReadOnlyParser,
+    add_network_arguments,
+    describe,
+    emit_error,
+    failure_text,
+    network_settings,
+    price,
+)
 from opening_bell import decimal, post_info
 
 USER_AGENT = "hypergrok-account-read/1.0"
 ADDRESS_ENV = "HYPERGROK_ACCOUNT"
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 USDC_TOKEN = 0
+# Eleven DEXs read one after another took about nine seconds; four at a time is
+# well inside the public rate limit and keeps the reads a few seconds apart at most.
+READ_WORKERS = 4
 # Hyperliquid's account abstraction modes with separate spot and per-DEX
 # balances. Any other mode shares collateral, so a sum could count it twice.
 SEPARATE_MODES = ("default", "disabled")
@@ -110,25 +122,29 @@ def position(entry) -> dict:
 
 
 def read_account(read, address: str) -> dict:
-    """Every request this read makes, in order; `read` posts one `/info` payload."""
+    """Every request this read makes; `read` posts one `/info` payload.
+
+    The per-DEX reads run a few at a time. Results keep `perpDexs` order.
+    """
     names = dex_names(read({"type": "perpDexs"}))
     mode = read({"type": "userAbstraction", "user": address})
     if not isinstance(mode, str) or not mode:
         raise ValueError("userAbstraction did not return a mode")
-    states = {}
-    for name in names:
-        payload = {"type": "clearinghouseState", "user": address}
-        if name:
-            payload["dex"] = name
-        states[name] = mapping(read(payload), f"clearinghouseState for {name or 'main'}")
+    requests = [{"type": "clearinghouseState", "user": address, **({"dex": name} if name else {})} for name in names]
+    with ThreadPoolExecutor(max_workers=READ_WORKERS) as pool:
+        states = {name: mapping(state, f"clearinghouseState for {name or 'main'}")
+                  for name, state in zip(names, pool.map(read, requests))}
     spot = mapping(read({"type": "spotClearinghouseState", "user": address}), "spotClearinghouseState")
     tokens, prices = spot_prices(read({"type": "spotMetaAndAssetCtxs"}))
+    held = [name for name, state in states.items()
+            if state.get("assetPositions")
+            or decimal(mapping(state.get("marginSummary"), "marginSummary").get("accountValue"), "accountValue") != 0]
     collateral = {}
-    for name, state in states.items():
-        held = decimal(mapping(state.get("marginSummary"), "marginSummary").get("accountValue"), "accountValue")
-        if held != 0 or state.get("assetPositions"):
-            token = mapping(read({"type": "meta", "dex": name}), f"meta for {name or 'main'}").get("collateralToken")
-            if not isinstance(token, int):
+    with ThreadPoolExecutor(max_workers=READ_WORKERS) as pool:
+        for name, meta in zip(held, pool.map(read, [{"type": "meta", "dex": name} for name in held])):
+            token = mapping(meta, f"meta for {name or 'main'}").get("collateralToken")
+            # bool is an int subclass; a JSON true is not a token index.
+            if type(token) is not int:
                 raise ValueError(f"meta for {name or 'main'} has no collateralToken")
             collateral[name] = token
     return {"names": names, "mode": mode, "states": states, "spot": spot,
@@ -264,8 +280,11 @@ def usd(value: str | None) -> str:
 def render(report: dict) -> str:
     equity, spot = report["equity"], report["spot"]
     address = report["account"]
+    mode = report["abstraction"]
+    # `disabled` is the account abstraction setting, not the account: say what it means.
+    label = "STANDARD MODE (abstraction disabled)" if mode == "disabled" else f"{mode.upper()} MODE"
     lines = [
-        f"HYPERGROK ACCOUNT READ · {address[:6]}...{address[-4:]} · {report['abstraction'].upper()} MODE",
+        f"HYPERGROK ACCOUNT READ · {address[:6]}...{address[-4:]} · {label}",
         f"READ ONLY · {report['network'].upper()} · {report['source']['observed_to']}",
         f"Sources: Hyperliquid /info perpDexs, userAbstraction, clearinghouseState x{report['source']['clearinghouse_reads']},"
         " spotClearinghouseState, spotMetaAndAssetCtxs, meta",
@@ -287,12 +306,19 @@ def render(report: dict) -> str:
     positions = [p for dex in report["dexes"] for p in dex["positions"]]
     if positions:
         lines.extend(["", "Positions"])
+        cells = []
         for p in positions:
-            liq = "none" if p["liquidation_px"] is None else amount(p["liquidation_px"])
-            pnl = Decimal(p["unrealized_pnl"])
-            lines.append(f"  {p['coin']}  {p['side']} {Decimal(p['size']):f} @ {amount(p['entry_px'])}"
-                         f" · value {amount(p['position_value'])} · uPnL {'+' if pnl >= 0 else '-'}{abs(pnl):,.2f}"
-                         f" · {p['leverage_type']} {p['leverage']}x · liq {liq}")
+            liq = "none" if p["liquidation_px"] is None else price(Decimal(p["liquidation_px"]))
+            pnl = Decimal(p["unrealized_pnl"]).quantize(Decimal("0.01"))
+            cells.append((p["coin"], p["side"], f"{Decimal(p['size']):,f}", price(Decimal(p["entry_px"])),
+                          amount(p["position_value"]), "0.00" if pnl == 0 else f"{pnl:+,.2f}",
+                          f"{p['leverage_type']} {p['leverage']}x", liq))
+        widths = [max(len(row[i]) for row in cells) for i in range(8)]
+        for row in cells:
+            coin, side, size, entry, value, pnl, leverage, liq = (
+                cell.ljust(width) if i in (0, 1, 6, 7) else cell.rjust(width)
+                for i, (cell, width) in enumerate(zip(row, widths)))
+            lines.append(f"  {coin}  {side} {size} @ {entry} · value {value} · uPnL {pnl} · {leverage} · liq {liq}".rstrip())
     lines.extend(["", f"Spot        {usd(spot['value_usd'])} across {len(spot['balances'])} balance{'s' if len(spot['balances']) != 1 else ''}"])
     if equity["unpriced"]:
         lines.append(f"Unpriced    {', '.join(equity['unpriced'])} (no USDC pair price; left out of the sum)")
@@ -301,7 +327,7 @@ def render(report: dict) -> str:
         lines.append(f"Equity      perps {usd(equity['perp_usd'])} + spot {usd(equity['spot_usd'])} = {prefix}{usd(equity['total_usd'])}")
     else:
         lines.append(f"Equity      not summed: {equity['note']}")
-    lines.extend(["", "Reads are sequential, not one atomic snapshot. Staking, vaults and sub-accounts are not included.",
+    lines.extend(["", "Reads are separate requests, not one atomic snapshot. Staking, vaults and sub-accounts are not included.",
                   SAFETY, "Facts only. This is not a trading signal."])
     return "\n".join(lines)
 
@@ -340,9 +366,9 @@ def main(argv=None) -> int:
         report = fetch_report(address.lower(), base_url, network, args.timeout)
     except (OSError, ValueError, KeyError, TypeError, DecimalException, OverflowError) as exc:
         if args.json:
-            emit_error("source_unavailable", str(exc))
+            emit_error("source_unavailable", failure_text(exc))
         else:
-            print(f"Account read unavailable: {exc}", file=sys.stderr)
+            print(f"Account read unavailable: {failure_text(exc)}", file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, sort_keys=True) if args.json else render(report))
     return 0

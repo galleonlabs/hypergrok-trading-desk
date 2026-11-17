@@ -43,7 +43,7 @@ The Execution Trader treats the result as unknown and does not resend. It checks
 Settings, General, Auto-review: add an **Ask first** rule for financial actions and for commands that call the Hyperliquid exchange endpoint. **Ask first** wins over **Allow automatically**.
 
 **Does it work outside Grok Bot?**
-Yes. Use the guide for [Claude Code](hyperliquid-claude-code.md), [Cursor](hyperliquid-cursor.md), [Grok Build](hyperliquid-grok-build.md), [Codex](hyperliquid-codex.md) or [Gemini CLI](hyperliquid-gemini-cli.md). The [runtime table](../README.md#also-runs-in-grok-build-cursor-claude-code-codex-and-gemini-cli) shows which roles, rules and hooks each loads. The ticket process and verified native approval requirement apply in all runtimes. Skills alone do not enforce exchange permissions.
+Yes. Use the guide for [Claude Code](hyperliquid-claude-code.md), [Cursor](hyperliquid-cursor.md), [Grok Build](hyperliquid-grok-build.md), [Codex](hyperliquid-codex.md) or [Gemini CLI](hyperliquid-gemini-cli.md). The [runtime table](../README.md#other-runtimes) shows which roles, rules and hooks each loads. The ticket process and verified native approval requirement apply in all runtimes. Skills alone do not enforce exchange permissions.
 
 **<a id="token"></a>Does HyperGrok have a token?**
 HyperGrok has no token and will not launch one. Coins using the name were launched by third parties and are not part of this project.

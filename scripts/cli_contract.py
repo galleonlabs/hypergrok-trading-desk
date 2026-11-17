@@ -4,6 +4,9 @@ import argparse
 import json
 import math
 import re
+import socket
+import urllib.error
+from decimal import Decimal
 from urllib.parse import urlsplit
 
 MAINNET = "https://api.hyperliquid.xyz"
@@ -50,8 +53,35 @@ def network_settings(args, parser):
         valid = False
     if not valid:
         parser.error("base-url must be an HTTP(S) origin without credentials, path, query or fragment")
-    network = "mainnet" if base == MAINNET else "testnet" if base == TESTNET else "custom"
-    return base, network
+    return base, network_label(base)
+
+
+def network_label(base_url):
+    return "mainnet" if base_url == MAINNET else "testnet" if base_url == TESTNET else "custom"
+
+
+def failure_text(exc):
+    """One plain sentence for a failed public read, without urllib's wrapper text."""
+    if isinstance(exc, urllib.error.HTTPError):
+        hint = "; it does that for a coin or DEX it does not list" if exc.code == 500 else ""
+        return f"the API answered HTTP {exc.code}{hint}"
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "the request timed out; check the connection or raise --timeout"
+    if isinstance(exc, urllib.error.URLError):
+        detail = reason.strerror if isinstance(reason, OSError) and reason.strerror else reason
+        return f"cannot reach the API: {detail}"
+    return str(exc)
+
+
+def price(value: Decimal) -> str:
+    """Two decimals from 1 up; four significant figures, never an exponent, below."""
+    if value == 0:
+        return "0.00"
+    if abs(value) >= 1:
+        return f"{value:,.2f}"
+    rounded = value.quantize(Decimal(1).scaleb(value.adjusted() - 3)).normalize()
+    return f"{rounded:.2f}" if rounded.as_tuple().exponent > -2 else f"{rounded:f}"
 
 
 def market_selection(parser, coin, dex):

@@ -452,11 +452,12 @@ def render(report: dict) -> str:
     lines = ["HYPERGROK STANDING MANDATE", "READ ONLY · no key access · no writes · no network", "",
              f"verdict   {report['verdict']}{' (in force)' if report['in_force'] else ''}"]
     if report["mandate"]:
-        lines.append(f"mandate   written {report['mandate']['written']} · fingerprint {report['mandate']['fingerprint']}")
-    for entry in report["fields"]:
-        value = entry["value"]
-        shown = ", ".join(value) if isinstance(value, list) else value
-        lines.append(f"{entry['status']:<8}  {entry['field']:<24} {shown if shown is not None else '-'}  {entry['detail']}")
+        lines.append(f"mandate   written {report['mandate']['written'] or 'unreadable'} · fingerprint {report['mandate']['fingerprint']}")
+    shown = [", ".join(entry["value"]) if isinstance(entry["value"], list) else "-" if entry["value"] is None else str(entry["value"])
+             for entry in report["fields"]]
+    width = max((len(text) for text in shown if len(text) <= 12), default=0)
+    for entry, text in zip(report["fields"], shown):
+        lines.append(f"{entry['status']:<8}  {entry['field']:<24} {text:<{width}}  {entry['detail']}")
     lines.extend(["", *report["reasons"], *report["notes"]])
     return "\n".join(lines)
 

@@ -3,7 +3,7 @@ name: hyperliquid-account
 description: Read a Hyperliquid account from the desk computer - positions and margin, spot balances, open orders including trigger details, fills, funding paid, ledger updates, order status by oid or cloid, historical orders, portfolio history, fee tier and rate-limit budget - with curl and Python SDK examples. Read-only, needs only the account address. Use for sizing inputs, book checks, reconciliation and reviews.
 license: MIT
 metadata:
-  version: "1.0.2"
+  version: "1.0.3"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -41,7 +41,7 @@ hl "{\"type\":\"clearinghouseState\",\"user\":\"$ADDR\"}" | jq '{
 
 Python: `info.user_state(ADDR)`. `szi` is signed size; `leverage` is `{type: cross|isolated, value, rawUsd?}`; `crossMarginSummary` mirrors `marginSummary` for the cross portion. Margin ratio for a book check: `crossMaintenanceMarginUsed / crossMarginSummary.accountValue` (`marginSummary` also counts isolated margin).
 
-Read the account's abstraction mode first: `{"type":"userAbstraction","user":ADDR}` returns `default`, `disabled`, `unifiedAccount`, `portfolioMargin` or `dexAbstraction`. Record it with the sizing inputs. The separate spot/perp balance model must not be assumed for unified, portfolio-margin or DEX-abstraction accounts. Check the mode's documented collateral basis and relevant account states, and compare with `activeAssetData` for trading capacity. Do not add spot USDC to perp equity or use `spot total - hold` as universal free margin: collateral can be shared, and a balance alone does not establish capacity. If the mode's equity or margin interpretation cannot be verified, report it as unavailable and reject new risk.
+Read the account's abstraction mode first: `{"type":"userAbstraction","user":ADDR}` returns `default`, `disabled`, `unifiedAccount`, `portfolioMargin` or `dexAbstraction`. Record it with the sizing inputs. The separate spot/perp balance model must not be assumed for unified, portfolio-margin or DEX-abstraction accounts: unified and portfolio-margin accounts show all balances and holds in `spotClearinghouseState`, and their per-DEX `clearinghouseState` is not meaningful by itself. Check the mode's documented collateral basis and compare with `activeAssetData` for trading capacity. Do not add spot USDC to perp equity or use `spot total - hold` as universal free margin: collateral can be shared, and a balance alone does not establish capacity. If the mode's equity or margin interpretation cannot be verified, report it as unavailable and reject new risk.
 
 ## Spot balances
 
@@ -117,7 +117,7 @@ To verify signing scope, query `userRole` for the public **API wallet** address 
 
 ## Sub-accounts and vaults (read only on this desk)
 
-`{"type":"subAccounts","user":ADDR}` lists sub-accounts with their states; `{"type":"userVaultEquities","user":ADDR}` lists vault deposits; `{"type":"vaultDetails","vaultAddress":"0x..."}` describes a vault. The desk reads these for completeness and does not move funds between them.
+`{"type":"subAccounts","user":ADDR}` lists sub-accounts with their states; `{"type":"userVaultEquities","user":ADDR}` lists vault deposits; `{"type":"vaultDetails","vaultAddress":"0x..."}` describes a vault. The desk reads these and does not move funds between them.
 
 ## Book check recipe (Risk Manager)
 

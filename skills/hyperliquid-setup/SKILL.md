@@ -3,7 +3,7 @@ name: hyperliquid-setup
 description: Prepare the desk computer to work with Hyperliquid - install the SDKs, pick testnet or mainnet, verify connectivity, and (only when the user asks) provision a trade-only API wallet through the secure secret store and verify it is approved. Use during desk setup, when moving between research, testnet and mainnet levels, when a key is rotated, or when any Hyperliquid call fails with an environment problem.
 license: MIT
 metadata:
-  version: "1.0.2"
+  version: "1.0.3"
   author: Galleon Labs
   category: hyperliquid
   network-default: testnet
@@ -38,7 +38,7 @@ python3 -m pip install "hyperliquid-python-sdk==0.24.0"
 python3 -c "import hyperliquid, eth_account; print('ok', hyperliquid.__name__)"
 ```
 
-Activate the same environment with `source ~/.hypergrok/venv/bin/activate` in each new shell before SDK snippets. The public Python tools shipped here need no SDK or activation. These are the versions reviewed on 2026-10-25; review API and snippet compatibility before upgrading them.
+Activate it with `source ~/.hypergrok/venv/bin/activate` in each new shell before SDK snippets. The public Python tools shipped here need no SDK or activation. These are the versions reviewed on 2026-10-25; review API and snippet compatibility before upgrading them.
 
 Optional TypeScript (if the user prefers TS or wants the WebSocket client from `@nktkas/hyperliquid`):
 
@@ -69,7 +69,7 @@ Both lines should read `ok`. Record the time and result in the desk record. If o
 
 Before creating or provisioning any key, verify and record native out-of-band approval coverage for the actual SDK, script and HTTP send paths, per `desk-operating-model` and `SETUP.md` section 7. If it cannot be verified, continue research without a key. An existing key or chat approval does not remove this prerequisite.
 
-An **API wallet** (Hyperliquid also calls it an agent wallet) is a separate key the user authorises to sign trading actions for their account. It can place, modify and cancel orders and change leverage and margin; it cannot withdraw to Arbitrum, cannot send USDC or tokens to another wallet, and cannot approve other agents or builders (those need the main wallet's signature). It *can* still move funds inside the user's own account (perp to spot and across dexs via `agentSendAsset`, into sub-accounts and vaults, and it can spend USDC on `reserveRequestWeight`), all of which the desk forbids by rule. That is the only kind of key that ever reaches the desk computer.
+An **API wallet** (Hyperliquid also calls it an agent wallet) is a separate key the user authorises to sign trading actions for their account. It can place, modify and cancel orders and change leverage and margin; it cannot withdraw to Arbitrum, cannot send USDC or tokens to another wallet, and cannot approve other agents or builders (those need the main wallet's signature). It *can* still move funds inside the user's own account (perp to spot and across dexs via `agentSendAsset`, into sub-accounts and vaults, into staking via `cDeposit2`, and it can spend USDC on `reserveRequestWeight`) and change the account's abstraction mode via `agentSetAbstraction`, all of which the desk forbids by rule. That is the only kind of key that ever reaches the desk computer.
 
 Why: all of the user's Bots share one computer, so anything on it is readable by every Bot. A trade-only key bounds the damage; a seed phrase or main-wallet key would not.
 

@@ -225,7 +225,7 @@ def resolve_coin(meta_and_contexts, requested: str, dex: str | None = None) -> s
         matches = [target]  # An exact spelling wins over a case-insensitive twin.
     if not matches:
         where = f"on the {dex} DEX" if dex else "in the main perp universe; a HIP-3 market needs its DEX prefix, e.g. xyz:TSLA"
-        raise ValueError(f"{target} is not listed {where}")
+        raise ValueError(f"{target} is not listed {where}. Use --find {requested} to search all perp venues.")
     if len(matches) > 1:
         raise ValueError(f"{target} matches more than one market ({', '.join(matches)}); use the exact spelling")
     coin = matches[0]
@@ -333,6 +333,32 @@ def read_market(coin: str, base_url: str, timeout: float, fixture_dir: str | Non
     return meta, resolve_coin(meta, coin, dex)
 
 
+def find_markets(query: str, base_url: str, timeout: float, fixture_dir: str | None, dex: str | None) -> dict:
+    """Search canonical perp symbols without choosing a venue or reading a book."""
+    payload = (read_json(os.path.join(fixture_dir, "allPerpMetas.json")) if fixture_dir
+               else post_info(base_url, {"type": "allPerpMetas"}, timeout, USER_AGENT))
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("allPerpMetas returned no venue metadata")
+    matches = []
+    for venue in payload:
+        # Live servers return metadata directly. The API reference also shows
+        # a [metadata, contexts] pair for each venue.
+        meta = venue[0] if isinstance(venue, list) and len(venue) == 2 else venue
+        if not isinstance(meta, dict) or not isinstance(meta.get("universe"), list):
+            raise ValueError("allPerpMetas returned invalid venue metadata")
+        for asset in meta["universe"]:
+            if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+                raise ValueError("allPerpMetas returned an unnamed market")
+            symbol = asset["name"]
+            venue_name, _, _ = symbol.rpartition(":")
+            if not asset.get("isDelisted") and query.casefold() in symbol.casefold() and (not dex or dex == venue_name):
+                matches.append(symbol)
+    return {"schema_version": 1, "mode": "read-only", "network": "fixture" if fixture_dir else network_label(base_url),
+            "query": query, "markets": sorted(matches),
+            "source": {"request": "allPerpMetas", "base_url": None if fixture_dir else base_url,
+                       "retrieved_at": datetime.now(timezone.utc).isoformat()}}
+
+
 def fetch_snapshot(coin: str, base_url: str, timeout: float, fixture_dir: str | None = None, dex: str | None = None) -> dict:
     meta, coin = read_market(coin, base_url, timeout, fixture_dir, dex)
     if fixture_dir:
@@ -411,13 +437,19 @@ def render(snapshot: dict) -> str:
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = ReadOnlyParser(description=__doc__, machine_readable="--json" in argv or "--schema" in argv)
-    parser.add_argument("--coin", default="ETH", help="perp coin, e.g. ETH, kPEPE or xyz:TSLA")
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument("--find", metavar="TEXT", help="find active perp symbols across venues, without fetching a book")
+    selector.add_argument("--coin", default="ETH", help="perp coin, e.g. ETH, kPEPE or xyz:TSLA")
     parser.add_argument("--dex", help="explicit HIP-3 DEX; also inferred from a prefixed coin")
     add_network_arguments(parser)
     parser.add_argument("--fixture-dir", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
     args = parser.parse_args(argv)
     if args.schema:
+        if args.find is not None:
+            print(json.dumps(describe("opening_bell", {"markets": "sorted canonical perp symbols; empty when none match",
+                "query": "search text", "source": "API origin and request", "network": "mainnet | testnet | custom | fixture"}), indent=2))
+            return 0
         print(json.dumps(describe("opening_bell", {
             "schema_version": 1, "mode": "read-only", "network": "mainnet | testnet | custom | fixture",
             "coin": "canonical metadata name", "dex": "DEX name or empty string", "market": "<coin>-PERP",
@@ -429,8 +461,17 @@ def main(argv=None) -> int:
         }), indent=2))
         return 0
     base_url, _ = network_settings(args, parser)
-    coin, dex = market_selection(parser, args.coin, args.dex)
+    coin, dex = market_selection(parser, args.find if args.find is not None else args.coin, args.dex)
     try:
+        if args.find is not None:
+            report = find_markets(coin, base_url, args.timeout, args.fixture_dir, dex)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print(f"{len(report['markets'])} matching perp markets on {report['network']} for {coin}")
+                for symbol in report["markets"]:
+                    print(symbol)
+            return 0
         snapshot = fetch_snapshot(coin, base_url, args.timeout, args.fixture_dir, dex)
     except (OSError, ValueError, KeyError, TypeError, DecimalException, OverflowError) as exc:
         if args.json:

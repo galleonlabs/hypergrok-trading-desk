@@ -75,6 +75,8 @@ class Fixture(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append((self.path, payload))
         responses = {"meta": META, "metaAndAssetCtxs": [META, [CONTEXT]], "l2Book": BOOK, "candleSnapshot": CANDLES}
+        responses["allPerpMetas"] = [META, [{"universe": [{"name": "xyz:TSLA"}, {"name": "xyz:TSLAOLD", "isDelisted": True}]}, []],
+                                     {"universe": [{"name": "flx:TSLA"}]}]
         kind = payload.get("type")
         if kind == "meta" and "dex" in payload:
             response = {**META, "collateralToken": DEX_COLLATERAL[payload["dex"]]} if payload["dex"] in DEX_COLLATERAL else None
@@ -159,6 +161,13 @@ def main():
         assert bell["mode"] == "read-only" and bell["coin"] == "ETH" and bell["network"] == "custom"
         assert bell["prices"]["mark"] == "3001"
         checked += 1
+        before = len(requests)
+        found = command("opening_bell", "--find", "tsla", "--json", "--base-url", base)
+        assert found["markets"] == ["flx:TSLA", "xyz:TSLA"] and found["network"] == "custom"
+        assert requests[before:] == [("/info", {"type": "allPerpMetas"})]
+        assert command("opening_bell", "--find", "xyz:tsla", "--json", "--base-url", base)["markets"] == ["xyz:TSLA"]
+        assert command("opening_bell", "--find", "missing", "--json", "--base-url", base)["markets"] == []
+        checked += 3
         unknown = command("opening_bell", "--coin", "NOPE", "--json", "--base-url", base, expected=1)
         assert unknown["error"]["code"] == "source_unavailable" and "NOPE is not listed" in unknown["error"]["message"]
         closed = command("opening_bell", "--coin", "ETH", "--json", "--base-url", "http://127.0.0.1:1", expected=1)

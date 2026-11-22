@@ -1,18 +1,18 @@
 {
   "schemaVersion": 2,
-  "status": "published",
-  "publicShareUrl": "https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr",
+  "status": "ready-to-publish",
+  "publicShareUrl": null,
   "name": "HyperGrok Desk Lead",
   "title": "Seven-agent Hyperliquid trading desk",
-  "description": "Builds and verifies a seven-agent Hyperliquid trading desk from the reviewed HyperGrok v1.9.1 release. Starts research-only with live public market data: no wallet, secret or order.",
+  "description": "Builds and verifies a seven-agent Hyperliquid trading desk from the reviewed HyperGrok v1.10.0 release. Starts research-only with live public market data: no wallet, secret or order.",
   "author": "Galleon Labs",
   "avatar": "assets/mascot.jpg",
   "startMessage": "Start the desk.",
   "source": {
     "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",
-    "release": "v1.9.1",
-    "bootstrap": "https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/skills/hypergrok-bootstrap/SKILL.md",
-    "runbook": "https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/SETUP.md"
+    "release": "v1.10.0",
+    "bootstrap": "https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.10.0/skills/hypergrok-bootstrap/SKILL.md",
+    "runbook": "https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.10.0/SETUP.md"
   },
   "templateSkillNames": [
     "hypergrok-bootstrap"
@@ -26,11 +26,11 @@
     {"name": "desk-risk-limits", "path": "skills/desk-risk-limits/SKILL.md", "sha256": "0759e23359f533b0b99562239f6fd50490891b519fadd83777498efa8bf0b996"},
     {"name": "desk-strategy-lab", "path": "skills/desk-strategy-lab/SKILL.md", "sha256": "785673898009c11a375ef5ef9585494e6d0ff9dcc5bcd9a7e102f0974f6ede99"},
     {"name": "desk-trade-lifecycle", "path": "skills/desk-trade-lifecycle/SKILL.md", "sha256": "898bf8975ab9d8b9e7a1d9e809dfe8525c6eb7b3492993cb80d7e52356332ac0"},
-    {"name": "hypergrok-bootstrap", "path": "skills/hypergrok-bootstrap/SKILL.md", "sha256": "9ffde3113a4339e9c27c1f65d3aef951da335d6955521b276ea28edb06b0beb8"},
+    {"name": "hypergrok-bootstrap", "path": "skills/hypergrok-bootstrap/SKILL.md", "sha256": "6eb05a5c479f1b622c1d664fd95c72dd321150175adca3af26aefa43bfb2881e"},
     {"name": "hyperliquid-account", "path": "skills/hyperliquid-account/SKILL.md", "sha256": "1bee4b199d7fc8010449be264349faf11b99db06b70573540be2f104a8952c47"},
     {"name": "hyperliquid-advanced", "path": "skills/hyperliquid-advanced/SKILL.md", "sha256": "aeb3bac229fc15d171a87799864184e183c980b29f182f33c8b6dd3f60d47842"},
     {"name": "hyperliquid-api-reference", "path": "skills/hyperliquid-api-reference/SKILL.md", "sha256": "dd063e8f55bc637368fadad96062c2df22e86764df693f131994187dbea28748"},
-    {"name": "hyperliquid-market-data", "path": "skills/hyperliquid-market-data/SKILL.md", "sha256": "9da447b6ddc5e18c7facefe889fca558732ffc6901e84377aeb2912dbb4833f9"},
+    {"name": "hyperliquid-market-data", "path": "skills/hyperliquid-market-data/SKILL.md", "sha256": "1d37af943838dc6f47da9687641351a63fc2cda4c55274e3e6d3b563b3482ab0"},
     {"name": "hyperliquid-orders", "path": "skills/hyperliquid-orders/SKILL.md", "sha256": "0aa37487481d174130390e5e927e1790edea97af5eb14d76b72202e21547371e"},
     {"name": "hyperliquid-positions", "path": "skills/hyperliquid-positions/SKILL.md", "sha256": "4714780ddebd13459426607ecd5e489cc246f521e56401861b1324d34a4d6603"},
     {"name": "hyperliquid-setup", "path": "skills/hyperliquid-setup/SKILL.md", "sha256": "75c73b69f4f79323bf86c3a879e44353292e5481c616b1a3aa14d56d550d8ed8"},

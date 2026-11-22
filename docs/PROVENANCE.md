@@ -15,6 +15,10 @@ Everything here is original prose and original snippets, written against public 
 
 Order price/size precision was rechecked against the official [tick and lot size](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size) contract on 2026-09-21. `scripts/test_order_rounding.py` executes only the published pure Decimal helpers, including buy-ceiling and sell-floor cases. No signed order was submitted for this validation.
 
+## Cross-venue market discovery - 2026-11-22
+
+Opening Bell searches active symbols with one public `allPerpMetas` request. Hyperliquid’s example wraps each venue’s metadata with asset contexts. On mainnet the response returned eleven metadata objects directly. The search handles both shapes, excludes delisted symbols and preserves each venue prefix. [Hyperliquid perpetuals API](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-all-perpetuals-metadata-universe-and-margin-tables)
+
 ## Fork adaptations - 2026-10-02
 
 The [fork review](FORK_REVIEW.md) records all observed heads and dispositions. Ideas from [thysmans/hypergrok-iterated](https://github.com/thysmans/hypergrok-iterated), [jawndiego/hypergrok-trading-desk](https://github.com/jawndiego/hypergrok-trading-desk) and [shadowslayerai/hypergrok-trading-desk](https://github.com/shadowslayerai/hypergrok-trading-desk) were adapted into original prose; no third-party code, hooks or skill bodies were copied. Existing MIT notices remain intact.

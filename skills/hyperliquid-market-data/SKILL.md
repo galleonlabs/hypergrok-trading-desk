@@ -3,7 +3,7 @@ name: hyperliquid-market-data
 description: Read live Hyperliquid market data from the desk computer with curl or the Python SDK - mid, mark and oracle prices, order book depth, funding (current, predicted, historical), open interest, volume, candles, perp and spot metadata, margin tiers, and how to save datasets for the strategy lab. Read-only, no key. Use for any market brief, depth read, funding question or data pull.
 license: MIT
 metadata:
-  version: "1.2.3"
+  version: "1.3.0"
   author: Galleon Labs
   category: hyperliquid
   network-default: mainnet-for-reads
@@ -36,6 +36,8 @@ python3 scripts/opening_bell.py --coin kPEPE --json
 python3 scripts/opening_bell.py --coin xyz:TSLA --json
 python3 scripts/opening_bell.py --dex xyz --coin TSLA --testnet --json
 ```
+
+Use `python3 scripts/opening_bell.py --find TSLA --json` to search active perp symbols across venues with one public metadata read. Multiple results are distinct markets. Preserve the venue prefix and let the user choose when venue matters.
 
 A HIP-3 snapshot requests `metaAndAssetCtxs` with the explicit DEX and `l2Book` with the canonical prefixed coin from that universe. It retains the metadata's spelling and reports `coin`, `dex`, precision and leverage metadata; unknown, ambiguous or delisted markets fail before the book request. Metadata fields absent from the response are `null`, never invented. `--testnet` selects the official testnet origin; an explicit different `--base-url` is labelled `custom` and included in the source. Read-only discovery does not enable HIP-3 execution or transfer collateral; the desk's opt-in and ticket rules still apply.
 

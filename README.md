@@ -20,10 +20,12 @@ HyperGrok turns your AI agents into a Hyperliquid trading desk. Seven roles take
 ## Try it now, no keys
 
 ```bash
-git clone --depth 1 --branch v1.9.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.10.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
+
+To find the venue for a ticker, run `python3 scripts/opening_bell.py --find TSLA`. Use any returned symbol with `--coin` to read that specific market.
 
 For an agent or shell pipeline, add `--json`. Run `python3 scripts/opening_bell.py --schema` to inspect the output fields and exit codes offline.
 
@@ -39,7 +41,7 @@ Recorded on 17 November 2026 at 12:09 UTC. Run it yourself for current figures.
 
 **Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** Or paste this into any Bot:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.10.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.10.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 The Desk Lead rings the Opening Bell, installs the skills, builds the team and returns a receipt of what it verified. Setup is read-only. The desk starts in research mode; add a testnet API wallet to practise with play money, and a mainnet one when you decide to trade. [Setup runbook](SETUP.md) · [template verification](docs/GROK_BOT_TEMPLATE.md)
 
@@ -71,7 +73,7 @@ npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-des
 As an npm resource package:
 
 ```bash
-npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.9.1
+npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.10.0
 python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
 ```
 

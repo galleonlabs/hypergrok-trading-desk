@@ -12,13 +12,13 @@
       "source": {
         "source": "url",
         "url": "https://github.com/galleonlabs/hypergrok-trading-desk.git",
-        "ref": "v1.9.0"
+        "ref": "v1.9.1"
       },
       "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
       "keywords": ["hypergrok", "hyperliquid", "trading desk", "grok bot"],
-      "version": "1.9.0",
+      "version": "1.9.1",
       "author": {
-        "name": "Galleon Labs"
+        "name": "Andrew Wilkinson"
       },
       "tags": ["trading", "hyperliquid", "agents"]
     }

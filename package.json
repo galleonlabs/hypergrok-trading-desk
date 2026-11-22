@@ -1,12 +1,14 @@
 {
   "name": "hypergrok-trading-desk",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "HyperGrok instructions, seventeen skills, seven role profiles and read-only Python tools for a user-approved Hyperliquid trading desk.",
   "license": "MIT",
   "author": {
-    "name": "Galleon Labs",
-    "url": "https://galleonlabs.io"
+    "name": "Andrew Wilkinson",
+    "url": "https://github.com/ADWilkinson"
   },
+  "contributors": [{"name": "Galleon Labs", "url": "https://github.com/galleonlabs"}],
+  "funding": "https://github.com/sponsors/ADWilkinson",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/galleonlabs/hypergrok-trading-desk.git"

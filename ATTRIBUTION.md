@@ -1,6 +1,6 @@
 # Reuse and attribution
 
-HyperGrok Trading Desk is created by **Andrew Wilkinson and Galleon Labs** and released under the [MIT license](LICENSE).
+HyperGrok Trading Desk is created by [Andrew Wilkinson](https://github.com/ADWilkinson) and [Galleon Labs](https://github.com/galleonlabs) and released under the [MIT license](LICENSE).
 
 ## What MIT requires
 

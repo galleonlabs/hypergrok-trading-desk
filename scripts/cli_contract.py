@@ -53,6 +53,11 @@ def network_settings(args, parser):
         valid = False
     if not valid:
         parser.error("base-url must be an HTTP(S) origin without credentials, path, query or fragment")
+    # Host and scheme are case-insensitive; the default HTTPS port is implicit.
+    if url.scheme == "https" and url.port in (None, 443):
+        for official in (MAINNET, TESTNET):
+            if url.hostname == urlsplit(official).hostname:
+                return official, network_label(official)
     return base, network_label(base)
 
 

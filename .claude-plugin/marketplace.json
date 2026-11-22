@@ -6,16 +6,16 @@
   },
   "metadata": {
     "description": "Hyperliquid trading desk roles and skills for Claude Code",
-    "version": "1.9.0"
+    "version": "1.9.1"
   },
   "plugins": [
     {
       "name": "hypergrok",
       "source": "./",
       "description": "Turn your agent into a 7-role Hyperliquid trading desk: research, risk, execution and review.",
-      "version": "1.9.0",
+      "version": "1.9.1",
       "author": {
-        "name": "Galleon Labs"
+        "name": "Andrew Wilkinson"
       },
       "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
       "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",

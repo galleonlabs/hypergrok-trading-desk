@@ -133,6 +133,15 @@ def main():
         assert any(check["name"] == "public API" and check["status"] == "SKIP" for check in doctor["checks"])
         assert not requests, "Offline doctor must not access any API"
         checked += 1
+        for origin, expected_network in (
+            ("HTTPS://API.HYPERLIQUID.XYZ:443/", "mainnet"),
+            ("https://API.HYPERLIQUID-TESTNET.XYZ:443", "testnet"),
+            ("https://api.hyperliquid.xyz:444", "custom"),
+            ("http://api.hyperliquid.xyz", "custom"),
+        ):
+            report = command("desk_doctor", "--offline", "--json", "--base-url", origin)
+            assert report["network"] == expected_network
+            checked += 1
         mandate_schema = command("standing_mandate", "--schema")
         assert mandate_schema["mode"] == "read-only" and mandate_schema["network_access"] == "none"
         checked += 1

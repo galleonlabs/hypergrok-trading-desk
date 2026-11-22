@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.9.1 - 2026-11-22
+
++ Identify official mainnet and testnet public API origins consistently when a caller uses uppercase hostnames or an explicit HTTPS port 443.
++ Show how to inspect the CLI schema and install just market research. Link the plugin and npm package to Andrew Wilkinson, and expose GitHub Sponsors through the repository and npm.
 
 + Update the public Grok Bot template to 1.9.0 in place on the same link, https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr, with its exported bootstrap independently read back and matched to the release.
 

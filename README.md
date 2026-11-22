@@ -20,10 +20,12 @@ HyperGrok turns your AI agents into a Hyperliquid trading desk. Seven roles take
 ## Try it now, no keys
 
 ```bash
-git clone --depth 1 --branch v1.9.0 https://github.com/galleonlabs/hypergrok-trading-desk.git
+git clone --depth 1 --branch v1.9.1 https://github.com/galleonlabs/hypergrok-trading-desk.git
 cd hypergrok-trading-desk
 python3 scripts/opening_bell.py --coin ETH
 ```
+
+For an agent or shell pipeline, add `--json`. Run `python3 scripts/opening_bell.py --schema` to inspect the output fields and exit codes offline.
 
 A live ETH snapshot from Hyperliquid's public `/info` endpoint: price, funding, open interest, spread and depth. No wallet, account or key; only Python 3's standard library.
 
@@ -35,9 +37,9 @@ Recorded on 17 November 2026 at 12:09 UTC. Run it yourself for current figures.
 
 ## Start
 
-**Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** Or paste this into any Bot:
+**Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** The shared template currently installs 1.9.0. For the latest release, paste this into any Bot:
 
-> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
+> Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
 The Desk Lead rings the Opening Bell, installs the skills, builds the team and returns a receipt of what it verified. Setup is read-only. The desk starts in research mode; add a testnet API wallet to practise with play money, and a mainnet one when you decide to trade. [Setup runbook](SETUP.md) · [template verification](docs/GROK_BOT_TEMPLATE.md)
 
@@ -56,6 +58,8 @@ After installing, load `desk-operating-model` first. Skills alone do not enforce
 <details>
 <summary><strong>Skills-only and npm installs</strong></summary>
 
+To inspect the seventeen portable skills before choosing any, append `--list` to the command below. To install just public market research, append `--skill hyperliquid-market-data`.
+
 As portable skills:
 
 ```
@@ -65,7 +69,7 @@ npm exec --package=skills@1.5.23 -- skills add galleonlabs/hypergrok-trading-des
 As an npm resource package:
 
 ```bash
-npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.9.0
+npm install --save-exact --ignore-scripts hypergrok-trading-desk@1.9.1
 python3 node_modules/hypergrok-trading-desk/scripts/desk_doctor.py --offline
 ```
 
@@ -175,6 +179,6 @@ There is no HyperGrok token and there will not be one. There is no `hypergrok` c
 
 ## License and credit
 
-[MIT](LICENSE). Created by [Andrew Wilkinson](https://andrewwilkinson.io) and [Galleon Labs](https://github.com/galleonlabs). Keep the copyright and permission notice when you reuse it; [ATTRIBUTION.md](ATTRIBUTION.md) has a ready-to-copy credit line. A [star](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and optional.
+[MIT](LICENSE). Created by [Andrew Wilkinson](https://andrewwilkinson.io) and [Galleon Labs](https://github.com/galleonlabs). Find Andrew on [GitHub](https://github.com/ADWilkinson) or [X](https://x.com/andrewwilkinson), or [sponsor his open-source work](https://github.com/sponsors/ADWilkinson). Keep the copyright and permission notice when you reuse it; [ATTRIBUTION.md](ATTRIBUTION.md) has a ready-to-copy credit line. A [star](https://github.com/galleonlabs/hypergrok-trading-desk) is appreciated and optional.
 
 Also from Galleon Labs: [Boomkin](https://github.com/galleonlabs/boomkin#get-started), a Hermes DeFi profile with modular skill packs, and [crypto-defi-skills](https://github.com/galleonlabs/crypto-defi-skills#install-only-what-you-need), individual DeFi workflows for an existing agent.

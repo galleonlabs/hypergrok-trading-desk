@@ -1,9 +1,9 @@
 {
   "name": "hypergrok",
   "description": "Hyperliquid trading desk roles and skills.",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "author": {
-    "name": "Galleon Labs"
+    "name": "Andrew Wilkinson"
   },
   "homepage": "https://github.com/galleonlabs/hypergrok-trading-desk",
   "repository": "https://github.com/galleonlabs/hypergrok-trading-desk",

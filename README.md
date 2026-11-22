@@ -37,7 +37,7 @@ Recorded on 17 November 2026 at 12:09 UTC. Run it yourself for current figures.
 
 ## Start
 
-**Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** The shared template currently installs 1.9.0. For the latest release, paste this into any Bot:
+**Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** Or paste this into any Bot:
 
 > Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.9.1/SETUP.md for the complete runbook, and finish with its evidence receipt.
 
@@ -52,6 +52,8 @@ The Desk Lead rings the Opening Bell, installs the skills, builds the team and r
 | Codex | [Codex marketplace](docs/hyperliquid-codex.md) | Skills, with roles run as labelled passes |
 | Gemini CLI | [Extension](docs/hyperliquid-gemini-cli.md) | Skills and `GEMINI.md`, with roles run as labelled passes |
 | Grok Build | [Pinned release](docs/hyperliquid-grok-build.md) | Skills and agent directories; rule loading is unverified |
+
+In Claude Code 2.1.275 or later, install directly with `/plugin install hypergrok --marketplace galleonlabs/hypergrok-trading-desk`.
 
 After installing, load `desk-operating-model` first. Skills alone do not enforce exchange permissions: verify your runtime's own approval control covers exchange writes before you provision a key.
 

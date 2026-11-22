@@ -104,6 +104,12 @@ def documented_install_id_typo(root):
     return "docs/hyperliquid-claude-code.md", "/plugin install"
 
 
+def documented_one_step_wrong_marketplace(root):
+    replace(root, "README.md", "/plugin install hypergrok --marketplace galleonlabs/hypergrok-trading-desk",
+            "/plugin install hypergrok --marketplace other/repo")
+    return "README.md", "--marketplace other/repo"
+
+
 def marketplace_drops_documented_plugin(root):
     """Drift the other way: the docs still install a plugin the marketplace stopped declaring."""
     edit(root, ".claude-plugin/marketplace.json", lambda d: d.update(plugins=[]))
@@ -328,6 +334,7 @@ FIXTURES = [
     wrong_name,
     documented_marketplace_typo,
     documented_install_id_typo,
+    documented_one_step_wrong_marketplace,
     marketplace_drops_documented_plugin,
     documented_skills_sh_plugin_slug,
     documented_skills_add_typo,

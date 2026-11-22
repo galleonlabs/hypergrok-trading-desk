@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
++ Update the public Grok Bot template in place to 1.9.1 and verify its exported bootstrap.
++ Add the tested one-command Claude Code install to the README.
+
 ## 1.9.1 - 2026-11-22
 
 + Identify official mainnet and testnet public API origins consistently when a caller uses uppercase hostnames or an explicit HTTPS port 443.

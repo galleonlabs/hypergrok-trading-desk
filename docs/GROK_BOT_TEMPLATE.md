@@ -2,7 +2,9 @@
 
 `template/grok-bot.json` is the release contract for the public **HyperGrok Desk Lead** template. It records the exact public profile, source release, avatar, exported bootstrap skill and complete reviewed release inventory. `templateSkillNames` lists the skills carried by the share; `skills` contains all seventeen files and hashes that setup must install and verify.
 
-**Release state - 2026-11-17:** The [public template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) now carries 1.9.0, updated in place on the same link. Its complete exported bootstrap was independently read back in the native template view and matched the reviewed source.
+**Release state - 2026-11-22:** The publishing Bot updated the [existing share](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) from tagged commit `5cf2adde19ac3cd6514ea7f58bf7c2d24edb0f27`. Before publication, its Context panel showed the 1.9.1 description and one bootstrap skill. Independent native readback exactly matched the tagged Markdown body (9,657 UTF-8 bytes, SHA-256 `a6456898286e7351d539337e6df55bdf07fb7790331681593537d91d1a1badcb`). The app confirmed publication and returned the same public URL. The anonymous preview then passed the release-description, Add action and matching deep-link checks. A fresh seven-Bot import was outside this publishing check.
+
+**Prior release - 2026-11-17:** The [public template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) now carries 1.9.0, updated in place on the same link. Its complete exported bootstrap was independently read back in the native template view and matched the reviewed source.
 
 **Prior release - 2026-11-16:** The 1.8.0 template was published on that link. Its complete exported bootstrap was independently read back in the native template view and matched the reviewed source. The earlier 1.7.1 and 1.7.0 shares keep installing their own releases. Earlier receipts below apply only to their named releases.
 

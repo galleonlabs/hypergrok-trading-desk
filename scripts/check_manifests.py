@@ -48,7 +48,7 @@ DESK_RULE = "rules/hypergrok-team.mdc"
 APPROVAL_PARAGRAPH_START = "Analysis is not approval."
 GROK_INSTALL_RE = re.compile(r"\bgrok plugin install\s+([^\s`]+)")
 MARKETPLACE_ADD_RE = re.compile(r"/plugin marketplace add\s+([^\s`]+)")
-PLUGIN_INSTALL_RE = re.compile(r"/plugin install\s+([^\s`]+)")
+PLUGIN_INSTALL_RE = re.compile(r"/plugin install\s+([^\s`]+)(?:[ \t]+--marketplace[ \t]+([^\s`]+))?")
 GEMINI_INSTALL_RE = re.compile(r"\bgemini extensions install\s+([^\s`]+)([^\n`]*)")
 CODEX_MARKETPLACE_ADD_RE = re.compile(r"\bcodex plugin marketplace add\s+([^\s`]+)([^\n`]*)")
 CODEX_PLUGIN_ADD_RE = re.compile(r"\bcodex plugin add\s+([^\s`]+)")
@@ -329,8 +329,11 @@ def check_documented_install(root, marketplace, skill_names, errors):
                 errors.append(
                     f"{rel}: '/plugin marketplace add {arg}' should add '{shorthand}'"
                 )
-        for arg in PLUGIN_INSTALL_RE.findall(text):
-            if arg not in install_ids:
+        for arg, source in PLUGIN_INSTALL_RE.findall(text):
+            if source and source != shorthand:
+                errors.append(f"{rel}: '/plugin install {arg} --marketplace {source}' should use '{shorthand}'")
+            install_id = f"{arg}@{market_name}" if source else arg
+            if install_id not in install_ids:
                 errors.append(
                     f"{rel}: '/plugin install {arg}' is not declared by "
                     f"{MARKETPLACE_MANIFEST} (expected one of {sorted(install_ids)})"

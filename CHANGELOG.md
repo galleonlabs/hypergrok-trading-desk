@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
++ Publish and verify the 1.10.0 Grok Bot template on its existing public share.
+
 ## 1.10.0 - 2026-11-22
 
 + Search active perpetual markets across Hyperliquid venues with `opening_bell.py --find TEXT`. Returns canonical symbols in one public request, supports JSON and keeps book reads tied to an explicitly selected market.

@@ -39,9 +39,11 @@ Recorded on 17 November 2026 at 12:09 UTC. Run it yourself for current figures.
 
 ## Start
 
-**Grok Bot.** Add the [HyperGrok Desk Lead template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) and send **Start the desk.** Or paste this into any Bot:
+**Grok Bot.** Paste this into your Bot to start from the reviewed release:
 
 > Set up the HyperGrok trading desk from https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.10.0/skills/hypergrok-bootstrap/SKILL.md. Follow the bootstrap skill, use https://github.com/galleonlabs/hypergrok-trading-desk/blob/v1.10.0/SETUP.md for the complete runbook, and finish with its evidence receipt.
+
+The [shared template](https://x.ai/bot/NNOcKGP7qdJe8o6OmUMpr) returned 404 on 26 November. The prompt above reads the tagged instructions directly from GitHub.
 
 The Desk Lead rings the Opening Bell, installs the skills, builds the team and returns a receipt of what it verified. Setup is read-only. The desk starts in research mode; add a testnet API wallet to practise with play money, and a mainnet one when you decide to trade. [Setup runbook](SETUP.md) · [template verification](docs/GROK_BOT_TEMPLATE.md)
 
